@@ -52,6 +52,10 @@ const packages = discover("packages");
 const examples = discover("examples");
 const published = packages.filter((p) => !p.pkg.private);
 
+
+/** Packages that port third-party Apache-2.0 code (laya-mlx / Laya / HF ModernBERT) keep Apache-2.0; original code is MIT. */
+const APACHE_DERIVED = new Set(["langdetect-lite", "laya-cli", "laya-core", "laya-presets", "laya-router", "laya", "modernbert"]);
+
 test("every TypeScript package has the tsconfig.json + tsconfig.typecheck.json pair", () => {
   const missing = packages
     .filter((p) => !PLATFORM_PACKAGES.has(p.dir))
@@ -85,6 +89,7 @@ test("every committed jsr.json matches what sync-jsr-configs.mjs generates", () 
 
 test("every package has README.md and CHANGELOG.md; published ones ship LICENSE (and NOTICE when listed)", () => {
   const rootLicense = readFileSync(join(ROOT, "LICENSE"), "utf8");
+  const apacheLicense = readFileSync(join(ROOT, "LICENSE-APACHE-2.0"), "utf8");
   const rootNotice = readFileSync(join(ROOT, "NOTICE"), "utf8");
   for (const { dir, pkg } of packages) {
     for (const f of ["README.md", "CHANGELOG.md"]) assert.ok(existsSync(join(ROOT, dir, f)), `${dir}/${f} missing`);
@@ -92,13 +97,17 @@ test("every package has README.md and CHANGELOG.md; published ones ship LICENSE 
     assert.ok(existsSync(join(ROOT, dir, "LICENSE")), `${dir}/LICENSE missing (npm ships it automatically)`);
     assert.ok(pkg.files?.includes("CHANGELOG.md"), `${dir}: add CHANGELOG.md to "files"`);
     if (PLATFORM_PACKAGES.has(dir)) continue;
-    assert.equal(readFileSync(join(ROOT, dir, "LICENSE"), "utf8"), rootLicense, `${dir}/LICENSE differs from the root LICENSE`);
-    if (pkg.files?.includes("NOTICE")) {
+    const apache = pkg.license === "Apache-2.0";
+    assert.equal(
+      readFileSync(join(ROOT, dir, "LICENSE"), "utf8"),
+      apache ? apacheLicense : rootLicense,
+      `${dir}/LICENSE must be the root ${apache ? "LICENSE-APACHE-2.0" : "LICENSE (MIT)"} text`,
+    );
+    if (apache) {
+      // Apache-2.0 packages port third-party Apache code: §4(d) NOTICE must ship.
+      assert.ok(pkg.files?.includes("NOTICE"), `${dir}: Apache-2.0 package must ship NOTICE`);
       assert.ok(existsSync(join(ROOT, dir, "NOTICE")), `${dir}: "files" lists NOTICE but the file is missing`);
       assert.equal(readFileSync(join(ROOT, dir, "NOTICE"), "utf8"), rootNotice, `${dir}/NOTICE differs from the root NOTICE`);
-      // Apache-2.0 §4(a): derived portions must ship with a copy of that license.
-      assert.ok(pkg.files?.includes("LICENSE-APACHE-2.0"), `${dir}: ships NOTICE, so "files" must list LICENSE-APACHE-2.0`);
-      assert.equal(readFileSync(join(ROOT, dir, "LICENSE-APACHE-2.0"), "utf8"), readFileSync(join(ROOT, "LICENSE-APACHE-2.0"), "utf8"), `${dir}/LICENSE-APACHE-2.0 differs from the root copy`);
     } else {
       assert.ok(!existsSync(join(ROOT, dir, "NOTICE")), `${dir}/NOTICE exists but "files" does not ship it`);
     }
@@ -130,7 +139,7 @@ test("published package metadata is complete and consistent", () => {
     assert.equal(pkg.repository?.url, "git+https://github.com/johnhenry/laya-js.git", `${where}: repository.url`);
     assert.ok(pkg.homepage, `${where}: homepage`);
     assert.equal(pkg.publishConfig?.access, "public", `${where}: publishConfig.access must be public (scoped packages default to private)`);
-    assert.equal(pkg.license, "MIT", `${where}: license`);
+    assert.equal(pkg.license, PLATFORM_PACKAGES.has(dir) || !APACHE_DERIVED.has(dir.split("/").pop()!) ? "MIT" : "Apache-2.0", `${where}: license (Apache-2.0 only for packages porting laya-mlx/Laya code)`);
     assert.ok(pkg.version === "0.0.0" || /^\d+\.\d+\.\d+/.test(pkg.version), `${where}: version`);
     if (!PLATFORM_PACKAGES.has(dir)) {
       assert.ok(pkg.files?.includes("dist"), `${where}: "files" must include dist`);

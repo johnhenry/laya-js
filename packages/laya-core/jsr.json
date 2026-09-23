@@ -1,7 +1,7 @@
 {
   "name": "@johnhenry/laya-core",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts"
@@ -15,7 +15,6 @@
       "src",
       "CHANGELOG.md",
       "NOTICE",
-      "LICENSE-APACHE-2.0",
       "README.md",
       "LICENSE"
     ]

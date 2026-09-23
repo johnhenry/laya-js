@@ -9,7 +9,7 @@
     "language-detection",
     "multilingual"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-router",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"
@@ -31,8 +31,7 @@
     "dist",
     "src",
     "CHANGELOG.md",
-    "NOTICE",
-    "LICENSE-APACHE-2.0"
+    "NOTICE"
   ],
   "sideEffects": false,
   "scripts": {

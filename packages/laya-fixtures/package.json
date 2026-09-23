@@ -7,7 +7,7 @@
     "laya",
     "fixtures"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-fixtures",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"

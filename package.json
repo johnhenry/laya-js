@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Laya typed decisions in JavaScript on native MLX and WebGPU, as a family of reusable packages",
-  "license": "MIT",
+  "license": "(MIT AND Apache-2.0)",
   "homepage": "https://github.com/johnhenry/laya-js",
   "repository": {
     "type": "git",
@@ -33,9 +33,9 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
+    "@johnhenry/math-plus-safetensors": "file:vendor/johnhenry-math-plus-safetensors-0.0.0.tgz",
     "@types/node": "^24.13.3",
-    "typescript": "^5.7.0",
-    "@johnhenry/math-plus-safetensors": "file:vendor/johnhenry-math-plus-safetensors-0.0.0.tgz"
+    "typescript": "^5.7.0"
   },
   "optionalDependencies": {
     "@johnhenry/backend-mlx-darwin-arm64": "file:packages/backend-mlx-darwin-arm64"

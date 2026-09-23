@@ -1,7 +1,7 @@
 {
   "name": "@johnhenry/modernbert",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "exports": "./src/index.ts",
   "imports": {
     "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.0"
@@ -11,7 +11,6 @@
       "src",
       "CHANGELOG.md",
       "NOTICE",
-      "LICENSE-APACHE-2.0",
       "README.md",
       "LICENSE"
     ]
