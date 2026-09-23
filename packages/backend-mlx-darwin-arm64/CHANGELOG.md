@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- **Built and published by GitHub Actions with an npm provenance attestation** (0.1.0 was built and published from a local machine). Same sources: MLX 0.32.2 wheel, mlx-c `d4afaec`.
+
+## 0.1.0
 
 First npm distribution of `@johnhenry/backend-mlx-darwin-arm64` (never published under any other name). Part of the initial laya-js release; see the [root README](https://github.com/johnhenry/laya-js#readme) for the family and its parity results.
 

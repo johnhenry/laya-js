@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/backend-mlx-darwin-arm64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Prebuilt MLX runtime for @johnhenry/backend-mlx on macOS/Apple Silicon: libmlxc, libmlx, libjaccl and mlx.metallib (Apple MLX 0.32.2, mlx-c v0.6)",
   "keywords": [
     "mlx",
