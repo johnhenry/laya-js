@@ -36,7 +36,7 @@ export interface OpCase {
 
 export interface TestApi {
   describe: (name: string, fn: () => void) => unknown;
-  it: (name: string, fn: () => unknown | Promise<unknown>) => unknown;
+  it: (name: string, fn: () => Promise<void>) => unknown;
 }
 
 export function decodeTensor(e: EncodedTensor): HostTensor {

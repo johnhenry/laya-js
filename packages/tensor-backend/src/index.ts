@@ -45,6 +45,10 @@ export interface Backend<T extends Tensor = Tensor> {
   supports(dtype: DType): boolean;
 
   // ---- transfer / lifetime ------------------------------------------------
+  /**
+   * Accepts every DType. A backend may widen to a supported storage dtype
+   * (e.g. f16 → f32 on the CPU reference); the returned `.dtype` reflects storage.
+   */
   fromHost(t: HostTensor): T;
   /** Materializes and copies to host. The only async op. */
   read(t: T): Promise<HostTensor>;
@@ -118,8 +122,9 @@ export interface Backend<T extends Tensor = Tensor> {
    */
   rope(x: T, base: number): T;
   /**
-   * Scaled dot-product attention. q/k/v [B, H, L, Dh]; mask bool,
-   * broadcastable to [B, H, Lq, Lk] (true = attend). Softmax in f32.
+   * Scaled dot-product attention. q/k/v [B, H, L, Dh]; mask must be *bool*
+   * (additive float masks are not part of the contract), broadcastable to
+   * [B, H, Lq, Lk] (true = attend). Softmax in f32.
    * Rows that are entirely masked are undefined behaviour; callers
    * must avoid them.
    */
