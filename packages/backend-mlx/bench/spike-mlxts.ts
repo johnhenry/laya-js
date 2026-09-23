@@ -1,3 +1,4 @@
+// Not a dependency any more: run `npm i --no-save @nielspeter/mlx-ts` first (macOS arm64 only).
 // Spike: @nielspeter/mlx-ts — import cost, per-op overhead, matmul.
 const t0 = performance.now();
 const mx: any = await import("@nielspeter/mlx-ts");

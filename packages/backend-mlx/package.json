@@ -59,9 +59,6 @@
     "@johnhenry/backend-mlx-darwin-arm64": "^0.0.0",
     "koffi": "^3.3.1"
   },
-  "devDependencies": {
-    "@nielspeter/mlx-ts": "^0.5.0"
-  },
   "publishConfig": {
     "access": "public",
     "provenance": true
