@@ -1,10 +1,10 @@
 {
   "name": "@johnhenry/backend-webgpu",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "exports": "./src/index.ts",
   "imports": {
-    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.0",
+    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.1",
     "@webgpu/types": "npm:@webgpu/types@^0.1.74",
     "webgpu": "npm:webgpu@^0.6.1"
   },

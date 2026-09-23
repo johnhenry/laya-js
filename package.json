@@ -21,19 +21,16 @@
     "test": "npm run test:manifest && npm run test --workspaces --if-present",
     "test:bun": "npm run test:bun --workspaces --if-present",
     "sync:jsr": "node scripts/sync-jsr-configs.mjs",
-    "vendor:math-plus": "bash scripts/vendor-math-plus.sh",
     "build:mlxc": "npm run build:mlxc -w @johnhenry/backend-mlx",
     "fixtures": "cd ../laya-mlx && uv run python scripts/dump_js_fixtures.py --out ../laya-js/packages/laya-fixtures/data",
     "changeset": "changeset",
     "release": "npm run build && npm run sync:jsr && changeset publish"
   },
   "overrides": {
-    "@johnhenry/backend-mlx-darwin-arm64": "$@johnhenry/backend-mlx-darwin-arm64",
-    "@johnhenry/math-plus-safetensors": "$@johnhenry/math-plus-safetensors"
+    "@johnhenry/backend-mlx-darwin-arm64": "$@johnhenry/backend-mlx-darwin-arm64"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
-    "@johnhenry/math-plus-safetensors": "file:vendor/johnhenry-math-plus-safetensors-0.0.0.tgz",
     "@types/node": "^24.13.3",
     "typescript": "^5.7.0"
   },

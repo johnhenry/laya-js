@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/pyjson",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Python-compatible json.dumps and round-half-even for JavaScript",
   "keywords": [
     "python",

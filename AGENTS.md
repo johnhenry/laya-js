@@ -84,14 +84,9 @@ f32/f16), `LAYA_REAL_CPU=1`, `LAYA_REAL_CPU_FULL=1`.
 
 ## Repo-specific gotchas
 
-- **`@johnhenry/math-plus-safetensors` is not on npm yet.** Packages declare
-  `^0.0.0` (what they will get from npm); the root `devDependencies` +
-  `overrides` (`"$@johnhenry/math-plus-safetensors"`) map it to the vendored
-  tarball in `vendor/`. `overrides` never publish, so consumers get the
-  registry package. Refresh from a math-plus checkout with
-  `npm run vendor:math-plus` (`MATH_PLUS_DIR=…`, `BUILD=1`), then
-  `npm install`. A relative `file:` path directly *in* `overrides` does not
-  work — npm resolves it against each dependent workspace.
+- **`@johnhenry/math-plus-safetensors`** comes from npm (published from
+  [math-plus](https://github.com/johnhenry/math-plus)); `laya` and
+  `modernbert` declare `^0.1.0`.
 - **`packages/backend-mlx-darwin-arm64` must stay out of `workspaces`**
   (root `"!packages/backend-mlx-darwin-arm64"`). npm hard-fails the whole
   install with `EBADPLATFORM` on Linux/Intel when an `os`/`cpu`-gated package
@@ -152,12 +147,7 @@ Before the first real publish, in order:
 
 1. Create `github.com/johnhenry/laya-js` and push (badges, `repository`,
    provenance and commit links in the CHANGELOGs all point there).
-2. Publish `@johnhenry/math-plus-safetensors` from math-plus
-   (`feat/f16-safetensors`). Then delete `vendor/`, the root
-   `devDependencies`/`overrides` entries for it, run `npm install`, and
-   run the full suite against the registry package. Note `^0.0.0` matches
-   only `0.0.0`: if math-plus publishes `0.0.1`+, bump the range in
-   `laya` and `modernbert`.
+2. ~~Publish `@johnhenry/math-plus-safetensors`~~ — done (0.1.0, 2026-09-23).
 3. Set a scope-capable `NPM_TOKEN` repo secret (granular tokens are
    per-package; a new scoped name 404s on PUT otherwise).
 4. On jsr.io: claim/confirm the `@johnhenry` scope, create the ten JSR

@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/tensor-backend",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Backend-agnostic tensor op interface and conformance suite for transformer inference (MLX, WebGPU, CPU)",
   "keywords": [
     "tensor",

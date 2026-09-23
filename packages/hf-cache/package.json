@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/hf-cache",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Resolve and cache Hugging Face Hub files: ~/.cache/huggingface layout on Node/Bun, Cache API/OPFS in browsers",
   "keywords": [
     "huggingface",

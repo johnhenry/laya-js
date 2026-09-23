@@ -1,4 +1,0 @@
-package: @johnhenry/math-plus-safetensors
-source:  git@github.com:johnhenry/math-plus.git @ 908115f3ed6778ecdcecc337f28761b441be9a64 (feat/f16-safetensors)
-dirty:   0 file(s)
-sha256:  5ee155335e1a25c6eaefdbdcfbe2022dfba24f3dea9d45019bdbe2352795e3cb  johnhenry-math-plus-safetensors-0.0.0.tgz

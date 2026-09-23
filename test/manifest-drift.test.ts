@@ -190,14 +190,12 @@ test("native platform packages stay out of npm workspaces (EBADPLATFORM) and mat
   const mlx = readJson("packages/backend-mlx/package.json");
   const plat = readJson("packages/backend-mlx-darwin-arm64/package.json");
   assert.equal(mlx.optionalDependencies?.[plat.name], `^${plat.version}`, "backend-mlx optionalDependencies must pin ^<platform package version>");
-  assert.equal(mlx.version, plat.version, "backend-mlx and its platform package are versioned together");
+  // The platform package is versioned on its own: it only changes when the native binaries do.
 });
 
-test("the vendored math-plus-safetensors tarball backs the root devDependency + override", () => {
-  const spec = (root as Pkg & { devDependencies: Record<string, string> }).devDependencies["@johnhenry/math-plus-safetensors"];
-  if (!spec) return; // math-plus published: override removed, nothing to check
-  const file = spec.replace(/^file:/, "");
-  assert.ok(existsSync(join(ROOT, file)), `${file} missing -- run npm run vendor:math-plus`);
-  const overrides = (root as { overrides?: Record<string, string> }).overrides ?? {};
-  assert.equal(overrides["@johnhenry/math-plus-safetensors"], "$@johnhenry/math-plus-safetensors", "root overrides must point workspace ranges at the vendored tarball");
+test("math-plus-safetensors comes from the registry (no vendored copy or override left behind)", () => {
+  const r = root as Pkg & { devDependencies?: Record<string, string>; overrides?: Record<string, string> };
+  assert.equal(r.devDependencies?.["@johnhenry/math-plus-safetensors"], undefined, "root must not pin a vendored math-plus-safetensors");
+  assert.equal(r.overrides?.["@johnhenry/math-plus-safetensors"], undefined, "root must not override math-plus-safetensors");
+  assert.ok(!existsSync(join(ROOT, "vendor")), "vendor/ should be gone");
 });
