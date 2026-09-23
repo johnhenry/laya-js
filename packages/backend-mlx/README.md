@@ -137,7 +137,7 @@ detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
 ## Performance
 
 **Preliminary** (Apple M2, macOS 27; the development machine, which the
-binding-decision doc mislabels as an M3 Max), on a machine shared with other
+binding-decision doc originally mislabelled as an M3 Max), on a machine shared with other
 jobs, so expect about ±30% run-to-run noise. A separate benchmark document
 will supersede these numbers. The scripts and their Python
 twins are in `bench/`. The analysis is in

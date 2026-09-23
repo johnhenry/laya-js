@@ -172,9 +172,9 @@ whole answer object deep-equals Python's, including 4-decimal rounding.
 
 | checkpoint | MLX f32 | MLX f16 | WebGPU f32 | WebGPU f16 |
 |---|---|---|---|---|
-| English (`aac6fef/laya-mlx`, ModernBERT-large 421M) | 63/63 argmax, 63/63 exact | 63/63, 63/63 | 63/63, 62/63 (max \|Δ\| 1.0e-4) | 63/63, 14/63 (3.2e-3) |
-| Multilingual (`aac6fef/laya-multilingual-mlx`, mmBERT-base 322M) | 63/63, 63/63 | 63/63, 63/63 | 63/63, 63/63 | 63/63, 27/63 (1.1e-3) |
-| Typed decisions (`aac6fef/laya-typed-decisions-mlx`) | 63/63, 63/63 | 63/63, 63/63 | 63/63, 63/63 | 63/63, 8/63 (3.8e-3) |
+| English (`aac6fef/laya-mlx`, ModernBERT-large 421M) | 63/63 argmax, 63/63 exact | 63/63, 63/63 | 63/63, 62/63 (max \|Δ\| 1.0e-4) | 63/63, 13/63 (5.0e-3) |
+| Multilingual (`aac6fef/laya-multilingual-mlx`, mmBERT-base 322M) | 63/63, 63/63 | 63/63, 63/63 | 63/63, 63/63 | 63/63, 26/63 (1.3e-3) |
+| Typed decisions (`aac6fef/laya-typed-decisions-mlx`) | 63/63, 63/63 | 63/63, 63/63 | 63/63, 62/63 (1.0e-4) | 63/63, 16/63 (1.3e-3) |
 
 All 12 configurations agree with Python on every one of the 63 answers
 (756/756). The CPU reference also gives 63/63 argmax on all three
@@ -182,14 +182,14 @@ checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 `LAYA_REAL=1 npm test -w @johnhenry/laya` (details in the
 [laya README](./packages/laya/README.md#parity)).
 
-**Speed — Apple M2, preliminary.** Measured on a shared development
-machine (±30% noise); a separate benchmark document will supersede these.
+**Speed on an Apple M2 (fanless).** English checkpoint, f16, median forward-pass time with a cold GPU. The full grid, the thermal caveat and Snake numbers are in [docs/RESULTS.md](./docs/RESULTS.md).
 
-| One short English question (33 tokens, B = 1) | MLX | WebGPU |
-|---|---:|---:|
-| Forward pass, f16, median | 23.0 ms | 25.9 ms |
-| Forward pass, f32, median | 34.6 ms | 43.1 ms |
-| End-to-end `predict` (`laya bench`), f16 | ≈ 38 ms | ≈ 250 ms (end-to-end WebGPU path being optimized) |
+| tokens (B = 1) | 33 | 93 | 256 | 512 |
+|---|---:|---:|---:|---:|
+| MLX (JS) | 22.4 ms | 39.5 ms | 80.0 ms | 150.6 ms |
+| WebGPU (Node/Dawn) | 25.1 ms | 57.4 ms | 139.7 ms | 278.9 ms |
+
+Python laya-mlx `predict()` at 93 tokens on the same machine: 46.2 ms P50. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.5–1.9× MLX at longer inputs; the gap is GEMM throughput, since WGSL can't reach Apple's matrix units at full speed.
 
 MLX op dispatch costs 0.80 µs (Node/koffi) and 0.55 µs (Bun/`bun:ffi`) per
 op, against 0.40 µs in Python; GPU time is identical because it is the same

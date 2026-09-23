@@ -11,7 +11,7 @@ The preferred library is one we build ourselves:
 `scripts/build-mlxc.sh` compiles mlx-c against the `mlx` 0.32.2 Python
 wheel in about 10 s, which matches laya-mlx exactly.
 
-Machine: M3 Max, macOS 27 (Darwin 27.0), Node 24.9.0, Bun 1.2.17,
+Machine: Apple M2 (10-core GPU, fanless — thermally throttles under sustained load; see docs/RESULTS.md), macOS 27 (Darwin 27.0), Node 24.9.0, Bun 1.2.17,
 Python MLX 0.32.2. Date: 2026-09-22.
 
 ## Candidates
