@@ -26,6 +26,10 @@
     "@johnhenry/hf-cache": "^0.0.0",
     "@johnhenry/math-plus-safetensors": "file:../../../@johnhenry/math-plus.worktrees/f16-safetensors/packages/safetensors"
   },
+  "devDependencies": {
+    "@johnhenry/backend-cpu": "^0.0.0",
+    "@johnhenry/laya-fixtures": "^0.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/johnhenry/laya-js.git",
