@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Laya Playground</title>
+    <meta name="description" content="Typed decisions (choice, score, yes/no) with Laya on WebGPU, entirely in your browser." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23090f13'/%3E%3Cpath d='M9 22V10h3v9.5h8V22z' fill='%2362f5b5'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">L</span>
+        <div>
+          <h1>Laya Playground</h1>
+          <p class="sub">Typed decisions on WebGPU — weights and inference stay in this tab.</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="gpu-pill" class="pill" role="status">Checking WebGPU…</span>
+        <button id="theme" class="icon-btn" type="button" aria-label="Theme: system">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9A7 7 0 0 1 12 3z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="unsupported" class="banner" role="alert" hidden></div>
+
+    <main id="main" class="layout">
+      <div class="col">
+        <section class="panel" aria-labelledby="model-h">
+          <div class="panel-head">
+            <h2 id="model-h"><span class="step">1</span> Model</h2>
+            <span id="model-state" class="muted small">Not loaded</span>
+          </div>
+          <fieldset class="checkpoints">
+            <legend class="sr-only">Checkpoint</legend>
+            <div id="checkpoints" class="cards"></div>
+          </fieldset>
+          <div class="row">
+            <button id="load" class="btn primary" type="button">Load model</button>
+            <label class="check small"><input id="f32" type="checkbox" /> f32 (slower, exact)</label>
+          </div>
+          <div id="progress-wrap" class="progress-wrap" hidden>
+            <progress id="progress" max="1" value="0" aria-describedby="progress-text"></progress>
+            <p id="progress-text" class="small muted mono" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="state-h">
+          <div class="panel-head">
+            <h2 id="state-h"><span class="step">2</span> State</h2>
+            <label class="small muted" for="preset">Preset</label>
+            <select id="preset"></select>
+          </div>
+          <div class="seg" role="radiogroup" aria-label="State format">
+            <label><input type="radio" name="state-mode" value="text" checked /> <span>Text</span></label>
+            <label><input type="radio" name="state-mode" value="json" /> <span>JSON</span></label>
+          </div>
+          <label for="state" class="sr-only">State</label>
+          <textarea id="state" rows="5" spellcheck="false" placeholder="The situation to decide about: a message, an email, a JSON record…"></textarea>
+          <p id="state-error" class="error small" role="alert" hidden></p>
+        </section>
+
+        <section class="panel" aria-labelledby="q-h">
+          <div class="panel-head">
+            <h2 id="q-h"><span class="step">3</span> Questions</h2>
+            <button id="json-toggle" class="btn ghost small" type="button" aria-pressed="false">Edit as JSON</button>
+          </div>
+          <div id="questions" class="questions"></div>
+          <div id="questions-json-wrap" hidden>
+            <label for="questions-json" class="sr-only">Questions JSON</label>
+            <textarea id="questions-json" rows="14" spellcheck="false" class="mono"></textarea>
+            <p id="questions-error" class="error small" role="alert" hidden></p>
+          </div>
+          <div class="add-row" id="add-row">
+            <span class="small muted">Add</span>
+            <button class="btn ghost small" type="button" data-add="choice">+ Choice</button>
+            <button class="btn ghost small" type="button" data-add="score">+ Score</button>
+            <button class="btn ghost small" type="button" data-add="noul">+ Yes / no</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="panel results" aria-labelledby="r-h">
+          <div class="panel-head">
+            <h2 id="r-h"><span class="step">4</span> Results</h2>
+            <button id="run" class="btn primary" type="button" disabled>
+              Run <kbd>⌘↵</kbd>
+            </button>
+          </div>
+          <dl id="metrics" class="metrics">
+            <div><dt>Latency</dt><dd id="m-latency">—</dd></div>
+            <div><dt>Input tokens</dt><dd id="m-tokens">—</dd></div>
+            <div><dt>Questions</dt><dd id="m-questions">—</dd></div>
+            <div><dt>Engine</dt><dd id="m-engine">—</dd></div>
+          </dl>
+          <div id="answers" class="answers" aria-live="polite">
+            <p class="empty">Load a model, then run the questions against the state.</p>
+          </div>
+          <details id="raw-wrap" class="raw" hidden>
+            <summary>Raw result JSON</summary>
+            <pre id="raw" class="mono"></pre>
+          </details>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot small muted">
+      <span>@johnhenry/laya · WebGPU backend · weights from huggingface.co, cached with the Cache API.</span>
+      <button id="clear-cache" class="linklike" type="button">Clear cached weights</button>
+    </footer>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

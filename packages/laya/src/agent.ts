@@ -154,7 +154,7 @@ class Agent<T extends Tensor> implements LayaAgent {
     this.model = loadDecisionModel(parts.backend, {
       encoderConfig: enc,
       agentConfig: parts.agentConfig,
-      weights: bunWebGpuWorkaround(parts.backend, toWeightGetter(parts.weights)),
+      weights: toWeightGetter(parts.weights),
       dtype: this.dtype,
     });
     parts.backend.flush?.();
@@ -233,21 +233,6 @@ class Agent<T extends Tensor> implements LayaAgent {
     this.model.dispose();
     if (this.ownsBackend) this.backend.destroy?.();
   }
-}
-
-/**
- * Workaround for backend-webgpu under Bun: Dawn's `queue.writeBuffer` there
- * ignores a TypedArray's byteOffset, so weight views into a shared buffer
- * (safetensors `readMany` chunks, aligned `readSafetensors` views) would
- * upload the wrong bytes. Such views are copied (one tensor at a time).
- */
-function bunWebGpuWorkaround(backend: Backend, get: WeightGetter): WeightGetter {
-  if (backend.name !== "webgpu" || !(globalThis as { Bun?: unknown }).Bun) return get;
-  return (name) => {
-    const h = get(name);
-    if (!h || h.data.byteOffset === 0) return h;
-    return { ...h, data: h.data.slice() as typeof h.data };
-  };
 }
 
 function isParsed(c: Record<string, unknown> | ModernBertConfig): c is ModernBertConfig {

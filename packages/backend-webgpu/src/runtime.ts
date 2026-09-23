@@ -167,7 +167,9 @@ export class Runtime {
       padded.set(view);
       view = padded;
     }
-    this.device.queue.writeBuffer(buffer, 0, view as Uint8Array<ArrayBuffer>);
+    // Pass the ArrayBuffer with an explicit byte offset: the Bun/Dawn binding
+    // ignores a TypedArray view's byteOffset and would upload the wrong bytes.
+    this.device.queue.writeBuffer(buffer, 0, view.buffer as ArrayBuffer, view.byteOffset, view.byteLength);
   }
 
   // ---- pipelines -----------------------------------------------------------

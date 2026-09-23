@@ -224,4 +224,15 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     assert.deepEqual(r.shape, [3, 2]);
     assert.equal(bk.rt.stats.dispatches, before);
   });
+
+  t.it("fromHost uploads TypedArray views with a non-zero byteOffset (Bun/Dawn regression)", async () => {
+    const bk = await get();
+    const backing = Float32Array.from([9, 9, 1, 2, 3, 4, 9]);
+    const view = new Float32Array(backing.buffer, 8, 4);
+    const x = bk.fromHost({ dtype: "f32", shape: [4], data: view });
+    close(await rd(bk, x), [1, 2, 3, 4], 0, 0, "offset view");
+    const h = new Float16Array([7, 7, 7, 0.5, 1.5, 2.5]).subarray(3);
+    const y = bk.fromHost({ dtype: "f16", shape: [3], data: h });
+    close(await rd(bk, bk.cast(y, "f32")), [0.5, 1.5, 2.5], 0, 0, "f16 offset view");
+  });
 });

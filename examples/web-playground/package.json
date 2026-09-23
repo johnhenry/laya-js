@@ -1,0 +1,23 @@
+{
+  "name": "@johnhenry/example-web-playground",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Laya typed decisions in the browser on WebGPU: checkpoint picker, cached download, state editor, question builder, probability bars",
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun scripts/build.ts && node scripts/serve.ts dist --port 5173",
+    "start": "node scripts/serve.ts dist --port 5173",
+    "watch": "bun scripts/build.ts --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@johnhenry/laya": "^0.0.0",
+    "@johnhenry/laya-presets": "^0.0.0",
+    "@johnhenry/backend-webgpu": "^0.0.0"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74"
+  },
+  "license": "Apache-2.0"
+}
