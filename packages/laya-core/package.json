@@ -8,6 +8,11 @@
       "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "source": "./src/node.ts",
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "files": [
@@ -37,5 +42,8 @@
     "access": "public",
     "provenance": true
   },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-core"
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-core",
+  "devDependencies": {
+    "@johnhenry/laya-fixtures": "^0.0.0"
+  }
 }

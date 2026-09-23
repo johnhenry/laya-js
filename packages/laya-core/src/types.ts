@@ -27,6 +27,14 @@ export interface InternalQuestion {
   t: QuestionType;
   ins: string;
   crit: Record<string, Json> | Json[] | { true?: Json; false?: Json } | null;
+  /**
+   * Choice labels in Python order. Set when criteria came as a list: a JS object
+   * reorders integer-like keys ("10" before "a"), a Python dict does not.
+   * When absent, `Object.keys(crit)` is the label order.
+   */
+  labels?: string[];
+  /** Question id (the key in `questions`), set by `prepare`; used by `formatResults`. */
+  id?: string;
 }
 
 /** Minimal tokenizer surface (add_special_tokens is always false). */

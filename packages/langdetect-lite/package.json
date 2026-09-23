@@ -33,5 +33,11 @@
     "access": "public",
     "provenance": true
   },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/langdetect-lite"
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/langdetect-lite",
+  "dependencies": {
+    "@johnhenry/pyjson": "^0.0.0"
+  },
+  "devDependencies": {
+    "@johnhenry/laya-fixtures": "^0.0.0"
+  }
 }
