@@ -10,6 +10,18 @@
       "default": "./dist/index.js"
     }
   },
+  "imports": {
+    "#io": {
+      "browser": {
+        "source": "./src/io-browser.ts",
+        "types": "./dist/io-browser.d.ts",
+        "default": "./dist/io-browser.js"
+      },
+      "source": "./src/io-node.ts",
+      "types": "./dist/io-node.d.ts",
+      "default": "./dist/io-node.js"
+    }
+  },
   "files": [
     "dist"
   ],
@@ -20,14 +32,29 @@
     "test:bun": "bun --conditions=source test test/"
   },
   "dependencies": {
-    "@johnhenry/laya-core": "^0.0.0",
-    "@johnhenry/modernbert": "^0.0.0",
-    "@johnhenry/tensor-backend": "^0.0.0",
+    "@johnhenry/backend-cpu": "^0.0.0",
     "@johnhenry/hf-cache": "^0.0.0",
-    "@johnhenry/math-plus-safetensors": "file:../../../@johnhenry/math-plus.worktrees/f16-safetensors/packages/safetensors"
+    "@johnhenry/laya-core": "^0.0.0",
+    "@johnhenry/math-plus-safetensors": "file:../../../@johnhenry/math-plus.worktrees/f16-safetensors/packages/safetensors",
+    "@johnhenry/modernbert": "^0.0.0",
+    "@johnhenry/pyjson": "^0.0.0",
+    "@johnhenry/tensor-backend": "^0.0.0"
+  },
+  "peerDependencies": {
+    "@johnhenry/backend-mlx": "^0.0.0",
+    "@johnhenry/backend-webgpu": "^0.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@johnhenry/backend-mlx": {
+      "optional": true
+    },
+    "@johnhenry/backend-webgpu": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@johnhenry/backend-cpu": "^0.0.0",
+    "@johnhenry/backend-mlx": "^0.0.0",
+    "@johnhenry/backend-webgpu": "^0.0.0",
     "@johnhenry/laya-fixtures": "^0.0.0"
   },
   "repository": {

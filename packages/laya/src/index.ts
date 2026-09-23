@@ -1,2 +1,33 @@
-// TODO: implemented in Phase 1/2 — see root AGENTS.md
-export {};
+/**
+ * @johnhenry/laya — Laya typed decisions (choice / score / noul) on native
+ * MLX, WebGPU or the CPU reference. Port of laya-mlx `Agent` / `load`.
+ */
+export { load, type LoadOptions } from "./load.ts";
+export { createAgent, validateConfig, type AgentOptions, type AgentParts, type Dtype, type EmbeddingTokenizer, type LayaAgent } from "./agent.ts";
+export {
+  predictShortlist,
+  shortlistChoice,
+  DEFAULT_SHORTLIST_K,
+  type EmbedFn,
+  type Predictor,
+  type ShortlistMeta,
+  type ShortlistOptions,
+} from "./shortlist.ts";
+export { readWeights, consumingWeights, readAllTensors, sanitizeName, type ConsumingWeights } from "./weights.ts";
+export { loadDecisionModel, DecisionModel, type DecisionForwardOptions, type DecisionWeights, type ForwardInputs, type HeadLayerWeights, type LoadDecisionModelOptions } from "./model.ts";
+export { CHECKPOINT_FILES, REQUIRED_FILES, type BackendName, type BackendRequest, type Checkpoint, type ProgressInfo } from "./common.ts";
+export { createBackend, readCheckpoint, RUNTIME } from "#io";
+export type {
+  AgentConfig,
+  Answer,
+  Batch,
+  BatchOutputs,
+  InternalQuestion,
+  LayaTokenizer,
+  PredictResult,
+  PreparedItem,
+  Question,
+  Questions,
+  State,
+} from "@johnhenry/laya-core";
+export type { Backend } from "@johnhenry/tensor-backend";

@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "description": "laya predict / laya bench command line",
   "type": "module",
+  "bin": {
+    "laya": "./bin/laya.js"
+  },
   "exports": {
     ".": {
       "source": "./src/index.ts",
@@ -11,7 +14,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -21,7 +25,23 @@
   },
   "dependencies": {
     "@johnhenry/laya": "^0.0.0",
-    "@johnhenry/laya-router": "^0.0.0"
+    "@johnhenry/laya-router": "^0.0.0",
+    "@johnhenry/pyjson": "^0.0.0"
+  },
+  "peerDependencies": {
+    "@johnhenry/backend-mlx": "^0.0.0",
+    "@johnhenry/backend-webgpu": "^0.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@johnhenry/backend-mlx": {
+      "optional": true
+    },
+    "@johnhenry/backend-webgpu": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@johnhenry/laya-fixtures": "^0.0.0"
   },
   "repository": {
     "type": "git",

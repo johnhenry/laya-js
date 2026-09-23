@@ -8,6 +8,7 @@
 import type { Backend, DType, HostTensor, Tensor } from "@johnhenry/tensor-backend";
 import { toF32 } from "@johnhenry/tensor-backend";
 import {
+  attentionMasks,
   loadModernBert,
   parseModernBertConfig,
   toWeightGetter,
@@ -65,6 +66,25 @@ export interface DecisionForwardOptions<T> {
   readonly onStage?: (name: string, t: T) => boolean | void;
 }
 
+/** Device-side inputs of one batch (see `DecisionModel.uploadBatch`). */
+export interface ForwardInputs<T> {
+  /** i32 [B, L] */
+  readonly inputIds: T;
+  /** bool [B, 1, 1, L] and [B, 1, L, L] (modernbert `attentionMasks`) */
+  readonly fullMask: T;
+  readonly slidingMask: T;
+  /** bool [B, 1, 1, L] decision-head key-padding mask */
+  readonly headMask: T;
+  /** i32 [B] */
+  readonly qtype: T;
+  /** i32 [B, M], clamped to >= 0 */
+  readonly markerPos: T;
+  /** bool [B, M] */
+  readonly markerMask: T;
+  /** f32 [B]: max(#markers, 2) per row */
+  readonly k: T;
+}
+
 export class DecisionModel<T extends Tensor = Tensor> {
   readonly backend: Backend<T>;
   readonly encoder: ModernBert<T>;
@@ -103,60 +123,86 @@ export class DecisionModel<T extends Tensor = Tensor> {
   }
 
   /**
-   * Runs one collated batch; returns backend tensors logits f32 [B, M]
-   * (masked slots = -1e4) and act f32 [B, nAct]. Caller disposes both.
+   * Host → device upload of one collated batch: token ids, both encoder
+   * attention masks (`attentionMasks`), the head key-padding mask, clamped
+   * marker positions, marker mask, qtype and per-row option counts
+   * k = max(#markers, 2). Caller disposes (or runs inside a scope).
    */
-  forwardTensors(batch: Batch, opts: DecisionForwardOptions<T> = {}): { logits: T; act: T } {
-    const b = this.backend, w = this.weights;
+  uploadBatch(batch: Batch): ForwardInputs<T> {
+    const b = this.backend;
     const { size: B, length: L, markerCount: M } = batch;
-    const D = this.hiddenSize;
     if (M < 2) throw new RangeError("DecisionModel: markerCount must be >= 2 (collate pads to two slots)");
+    const hm = attentionMasks(batch.attentionMask, B, L, this.encoder.config.localAttention);
+    const pos = new Int32Array(B * M);
+    for (let i = 0; i < pos.length; i++) pos[i] = Math.max(batch.markerPos[i]!, 0);
+    const k = new Float32Array(B);
+    for (let r = 0; r < B; r++) {
+      let n = 0;
+      for (let m = 0; m < M; m++) n += batch.markerMask[r * M + m] ? 1 : 0;
+      k[r] = Math.max(n, 2);
+    }
+    return {
+      inputIds: b.fromHost({ dtype: "i32", shape: [B, L], data: batch.inputIds }),
+      fullMask: b.fromHost(hm.full),
+      slidingMask: b.fromHost(hm.sliding),
+      headMask: b.fromHost({ dtype: "bool", shape: [B, 1, 1, L], data: batch.attentionMask }),
+      qtype: b.fromHost({ dtype: "i32", shape: [B], data: batch.qtype }),
+      markerPos: b.fromHost({ dtype: "i32", shape: [B, M], data: pos }),
+      markerMask: b.fromHost({ dtype: "bool", shape: [B, M], data: batch.markerMask }),
+      k: b.fromHost({ dtype: "f32", shape: [B], data: k }),
+    };
+  }
+
+  /**
+   * The whole decision forward pass as a pure function of device tensors
+   * (what `compile` traces). Returns logits f32 [B, M] (masked slots = -1e4)
+   * and act f32 [B, nAct]; intermediates not claimed through `onStage` are freed.
+   */
+  forwardCore(inp: ForwardInputs<T>, opts: DecisionForwardOptions<T> = {}): { logits: T; act: T } {
+    const b = this.backend, w = this.weights, enc = this.encoder;
+    const [B, L] = inp.inputIds.shape as [number, number];
+    const M = inp.markerPos.shape[1]!;
+    const D = this.hiddenSize;
     const kept: T[] = [];
-    const emit = (name: string, t: T): void => {
-      if (opts.onStage?.(name, t) === true) kept.push(t);
+    const emit = (name: string, t: T): boolean => {
+      const own = opts.onStage?.(name, t) === true;
+      if (own) kept.push(t);
+      return own;
     };
     const f32 = (shape: number[], data: ArrayLike<number>): HostTensor => ({ dtype: "f32", shape, data: Float32Array.from(data) });
     const out = b.scope(() => {
-      const enc = this.encoder.forward(batch.inputIds, batch.attentionMask, B, L, {
-        onStage: opts.onStage
-          ? (name, t) => {
-              const own = opts.onStage!(name === "embeddings" ? name : `encoder.${name}`, t) === true;
-              if (own) kept.push(t); // must also survive this scope
-              return own;
-            }
-          : undefined,
-      });
-      const qtype = b.fromHost({ dtype: "i32", shape: [B], data: batch.qtype });
-      let h = b.add(enc, b.reshape(b.embedding(w.typeEmb, qtype), [B, 1, D]));
+      // ModernBERT encoder (same stage order and names as ModernBert.forward, prefixed "encoder.")
+      const masks = { full_attention: inp.fullMask, sliding_attention: inp.slidingMask };
+      let x = enc.embeddings(inp.inputIds);
+      let owned = emit("embeddings", x);
+      for (let i = 0; i < enc.config.numHiddenLayers; i++) {
+        const next = enc.layer(i, x, masks[enc.config.layerTypes[i]!]);
+        if (!owned) b.dispose(x);
+        x = next;
+        owned = emit(`encoder.layers.${i}`, x);
+      }
+      const encOut = enc.finalNorm(x);
+      if (!owned) b.dispose(x);
+      emit("encoder.final_norm", encOut);
+      let h = b.add(encOut, b.reshape(b.embedding(w.typeEmb, inp.qtype), [B, 1, D]));
       emit("type_emb_added", h);
-      const headMask = b.fromHost({ dtype: "bool", shape: [B, 1, 1, L], data: batch.attentionMask });
       for (let j = 0; j < w.head.length; j++) {
-        h = this.headLayer(j, h, headMask);
+        h = this.headLayer(j, h, inp.headMask);
         emit(`head.layers.${j}`, h);
       }
       // markers = h[arange(B)[:, None], maximum(marker_pos, 0)]
-      const pos = new Int32Array(B * M);
-      for (let i = 0; i < pos.length; i++) pos[i] = Math.max(batch.markerPos[i]!, 0);
-      const markers = b.gatherRows(h, b.fromHost({ dtype: "i32", shape: [B, M], data: pos }));
+      const markers = b.gatherRows(h, inp.markerPos);
       const s = w.scorer;
       const scored = b.linear(b.gelu(b.linear(b.layerNorm(markers, s.norm.weight, s.norm.bias, HEAD_EPS), s.w1, s.b1)), s.w2, s.b2);
-      const markerMask = b.fromHost({ dtype: "bool", shape: [B, M], data: batch.markerMask });
-      const logits = b.where(markerMask, b.cast(b.reshape(scored, [B, M]), "f32"), b.fromHost(f32([1], [-1e4])));
+      const logits = b.where(inp.markerMask, b.cast(b.reshape(scored, [B, M]), "f32"), b.fromHost(f32([1], [-1e4])));
       // action features [top1, top1 - top2, entropy / log(k), k / 255], k = max(#markers, 2)
       const p = b.softmax(logits, -1);
-      const k = new Float32Array(B);
-      for (let r = 0; r < B; r++) {
-        let n = 0;
-        for (let m = 0; m < M; m++) n += batch.markerMask[r * M + m] ? 1 : 0;
-        k[r] = Math.max(n, 2);
-      }
-      const kT = b.fromHost({ dtype: "f32", shape: [B], data: k });
       const plogp = b.mul(p, b.log(b.maximum(p, b.fromHost(f32([1], [1e-9])))));
-      const entropy = b.div(b.scale(b.sum(plogp, -1), -1), b.log(kT));
+      const entropy = b.div(b.scale(b.sum(plogp, -1), -1), b.log(inp.k));
       const top = b.slice(b.sort(p, -1), [0, M - 2], [B, M]);
       const top2 = b.slice(top, [0, 0], [B, 1]);
       const top1 = b.slice(top, [0, 1], [B, 2]);
-      const kScaled = b.div(b.reshape(kT, [B, 1]), b.fromHost(f32([1], [255])));
+      const kScaled = b.div(b.reshape(inp.k, [B, 1]), b.fromHost(f32([1], [255])));
       const features = b.concat([top1, b.sub(top1, top2), b.reshape(entropy, [B, 1]), kScaled], -1);
       const cls = b.cast(b.reshape(b.slice(h, [0, 0, 0], [B, 1, D]), [B, D]), "f32");
       const pooled = b.cast(b.concat([cls, features], -1), this.dtype);
@@ -167,9 +213,47 @@ export class DecisionModel<T extends Tensor = Tensor> {
     return { logits: out[0]!, act: out[1]! };
   }
 
-  /** Runs one collated batch and reads the outputs back (f32). */
-  async forward(batch: Batch, opts: DecisionForwardOptions<T> = {}): Promise<BatchOutputs> {
-    const { logits, act } = this.forwardTensors(batch, opts);
+  /**
+   * Runs one collated batch; returns backend tensors logits f32 [B, M]
+   * (masked slots = -1e4) and act f32 [B, nAct]. Caller disposes both.
+   */
+  forwardTensors(batch: Batch, opts: DecisionForwardOptions<T> = {}): { logits: T; act: T } {
+    const b = this.backend;
+    const inp = this.uploadBatch(batch);
+    try {
+      return this.forwardCore(inp, opts);
+    } finally {
+      for (const t of Object.values(inp) as T[]) b.dispose(t);
+    }
+  }
+
+  /**
+   * A `forwardTensors` equivalent through `backend.compile` (MLX: traced once
+   * per input shape signature, like Python `mx.compile(model)`); returns
+   * null when the backend has no `compile`. No stage observation.
+   */
+  compiled(): ((batch: Batch) => { logits: T; act: T }) | null {
+    const b = this.backend;
+    if (!b.compile) return null;
+    const fn = b.compile((...ts: T[]): T[] => {
+      const [inputIds, fullMask, slidingMask, headMask, qtype, markerPos, markerMask, k] = ts as [T, T, T, T, T, T, T, T];
+      const r = this.forwardCore({ inputIds, fullMask, slidingMask, headMask, qtype, markerPos, markerMask, k });
+      return [r.logits, r.act];
+    });
+    return (batch) => {
+      const inp = this.uploadBatch(batch);
+      try {
+        const [logits, act] = fn(inp.inputIds, inp.fullMask, inp.slidingMask, inp.headMask, inp.qtype, inp.markerPos, inp.markerMask, inp.k);
+        return { logits: logits!, act: act! };
+      } finally {
+        for (const t of Object.values(inp) as T[]) b.dispose(t);
+      }
+    };
+  }
+
+  /** Reads one `forwardTensors` result back to the host (f32) and frees it. */
+  async readOutputs(r: { logits: T; act: T }): Promise<BatchOutputs> {
+    const { logits, act } = r;
     try {
       this.backend.flush?.(logits, act);
       const [l, a] = await Promise.all([this.backend.read(logits), this.backend.read(act)]);
@@ -178,6 +262,11 @@ export class DecisionModel<T extends Tensor = Tensor> {
       this.backend.dispose(logits);
       this.backend.dispose(act);
     }
+  }
+
+  /** Runs one collated batch and reads the outputs back (f32). */
+  async forward(batch: Batch, opts: DecisionForwardOptions<T> = {}): Promise<BatchOutputs> {
+    return this.readOutputs(this.forwardTensors(batch, opts));
   }
 
   /** Frees all weights (encoder included). */

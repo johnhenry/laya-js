@@ -1,6 +1,6 @@
 /**
- * Opt-in parity on the three published checkpoints (fp16 weights → f32 CPU):
- *   LAYA_REAL=1 [LAYA_REAL_MODELS=english,multilingual,typed-decisions] npm test -w @johnhenry/laya
+ * Opt-in DecisionModel parity on the three published checkpoints (fp16 weights → f32 CPU):
+ *   LAYA_REAL_CPU_FULL=1 [LAYA_REAL_MODELS=english,multilingual,typed-decisions] npm test -w @johnhenry/laya
  * Needs the local HF snapshots recorded in the fixtures (`model_dir`). Slow:
  * 7-19 minutes per checkpoint on one Apple M2 core (see README).
  */
@@ -21,7 +21,7 @@ import { loadDecisionModel } from "../src/model.ts";
 import { collateItems, errStats } from "./helpers.ts";
 
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
-const enabled = env.LAYA_REAL === "1";
+const enabled = env.LAYA_REAL_CPU_FULL === "1";
 const selected = (env.LAYA_REAL_MODELS ?? MODELS.join(",")).split(",");
 /** Bun's default per-test timeout is 5 s; node:test has none. */
 const slow = (name: string, fn: () => Promise<void>) =>
@@ -50,7 +50,7 @@ for (const m of MODELS) {
   let fixture: RealFixture | undefined;
   if (enabled && selected.includes(m)) fixture = await loadReal(m as ModelName);
   if (!fixture || !existsSync(`${fixture.model_dir}/model.safetensors`)) {
-    test.skip(`${name} [${fixture ? `checkpoint not in the HF cache: ${fixture.repo}` : "opt-in: LAYA_REAL=1"}]`, () => {});
+    test.skip(`${name} [${fixture ? `checkpoint not in the HF cache: ${fixture.repo}` : "opt-in: LAYA_REAL_CPU_FULL=1 (7-19 min per checkpoint)"}]`, () => {});
     continue;
   }
   const fx = fixture;
