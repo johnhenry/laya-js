@@ -1,0 +1,36 @@
+{
+  "name": "@johnhenry/laya-fixtures",
+  "version": "0.0.0",
+  "description": "Golden fixtures generated from Python laya-mlx (private)",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./data/*": "./data/*"
+  },
+  "files": [
+    "dist",
+    "data"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
+    "test:bun": "bun --conditions=source test test/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/laya-fixtures"
+  },
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-fixtures"
+}

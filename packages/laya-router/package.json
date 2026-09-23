@@ -1,0 +1,41 @@
+{
+  "name": "@johnhenry/laya-router",
+  "version": "0.0.0",
+  "description": "Language/task routing across Laya checkpoints",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
+    "test:bun": "bun --conditions=source test test/"
+  },
+  "dependencies": {
+    "@johnhenry/laya": "^0.0.0",
+    "@johnhenry/langdetect-lite": "^0.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/laya-router"
+  },
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-router"
+}

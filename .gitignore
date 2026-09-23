@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+# large, regenerable fixtures (tiny ones are committed)
+packages/laya-fixtures/data/large/
+.todos/

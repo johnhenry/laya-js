@@ -1,0 +1,44 @@
+{
+  "name": "@johnhenry/laya",
+  "version": "0.0.0",
+  "description": "Laya typed decisions in JavaScript on MLX, WebGPU or CPU",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
+    "test:bun": "bun --conditions=source test test/"
+  },
+  "dependencies": {
+    "@johnhenry/laya-core": "^0.0.0",
+    "@johnhenry/modernbert": "^0.0.0",
+    "@johnhenry/tensor-backend": "^0.0.0",
+    "@johnhenry/hf-cache": "^0.0.0",
+    "@johnhenry/math-plus-safetensors": "file:../../../@johnhenry/math-plus.worktrees/f16-safetensors/packages/safetensors"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/laya"
+  },
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya"
+}

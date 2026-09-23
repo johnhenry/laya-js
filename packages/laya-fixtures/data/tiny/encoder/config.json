@@ -1,0 +1,10 @@
+{
+  "model_type": "modernbert",
+  "vocab_size": 128,
+  "hidden_size": 64,
+  "intermediate_size": 96,
+  "num_hidden_layers": 4,
+  "num_attention_heads": 2,
+  "local_attention": 16,
+  "max_position_embeddings": 256
+}

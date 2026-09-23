@@ -1,0 +1,40 @@
+{
+  "name": "@johnhenry/laya-core",
+  "version": "0.0.0",
+  "description": "Tensor-free Laya typed-decision logic: prompts, collation, calibration, result formatting",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
+    "test:bun": "bun --conditions=source test test/"
+  },
+  "dependencies": {
+    "@johnhenry/pyjson": "^0.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/laya-core"
+  },
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-core"
+}

@@ -1,0 +1,28 @@
+{
+  "name": "laya-js",
+  "private": true,
+  "type": "module",
+  "description": "Laya typed decisions in JavaScript on native MLX and WebGPU, as a family of reusable packages",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:bun": "npm run test:bun --workspaces --if-present",
+    "fixtures": "cd ../laya-mlx && uv run python scripts/dump_js_fixtures.py --out ../laya-js/packages/laya-fixtures/data",
+    "changeset": "changeset",
+    "release": "npm run build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.0",
+    "@types/node": "^24.13.3",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "license": "Apache-2.0"
+}
