@@ -22,9 +22,9 @@
     "fixtures": "head -n 41 ../../../laya-mlx/benchmarks/results/snake-showcase.jsonl > test/fixtures/snake-showcase.head.jsonl && cd ../../../laya-mlx && uv run --extra demo python ../laya-js/examples/snake-terminal/scripts/dump-snake-prompts.py benchmarks/results/snake-showcase.jsonl ../laya-js/examples/snake-terminal/test/fixtures/snake-prompts.json 40"
   },
   "dependencies": {
-    "@johnhenry/laya": "^0.1.1",
-    "@johnhenry/laya-core": "^0.1.0",
-    "@johnhenry/hf-cache": "^0.1.1"
+    "@johnhenry/laya": "^0.1.2",
+    "@johnhenry/laya-core": "^0.1.1",
+    "@johnhenry/hf-cache": "^0.1.2"
   },
   "license": "Apache-2.0",
   "engines": {
@@ -32,6 +32,6 @@
     "bun": ">=1.2.0"
   },
   "devDependencies": {
-    "@johnhenry/backend-webgpu": "^0.1.1"
+    "@johnhenry/backend-webgpu": "^0.1.2"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/laya-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "laya predict / laya bench command line",
   "keywords": [
     "laya",
@@ -50,9 +50,9 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/laya": "^0.1.1",
-    "@johnhenry/laya-router": "^0.1.1",
-    "@johnhenry/pyjson": "^0.1.1"
+    "@johnhenry/laya": "^0.1.2",
+    "@johnhenry/laya-router": "^0.1.2",
+    "@johnhenry/pyjson": "^0.1.2"
   },
   "peerDependencies": {
     "@johnhenry/backend-mlx": "^0.0.0 || ^0.1.0",

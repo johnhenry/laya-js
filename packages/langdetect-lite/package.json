@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/langdetect-lite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dependency-free script and Latin-language detection (port of laya-mlx lang.py)",
   "keywords": [
     "language-detection",
@@ -46,7 +46,7 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/pyjson": "^0.1.0"
+    "@johnhenry/pyjson": "^0.1.2"
   },
   "devDependencies": {
     "@johnhenry/laya-fixtures": "^0.0.0"

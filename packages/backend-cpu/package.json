@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/backend-cpu",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pure-TypeScript f32 reference backend for @johnhenry/tensor-backend",
   "keywords": [
     "tensor",
@@ -45,7 +45,7 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/tensor-backend": "^0.1.1"
+    "@johnhenry/tensor-backend": "^0.1.2"
   },
   "publishConfig": {
     "access": "public",
