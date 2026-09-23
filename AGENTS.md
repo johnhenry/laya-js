@@ -138,29 +138,22 @@ loudly if any of that is missing.
 
 ## Releases
 
-Nothing is published yet. Mechanism: Changesets (as math-plus), plus a
-macOS job for the native platform package. `.github/workflows/release.yml`
-is **manual-only** (`workflow_dispatch`, `dry_run` defaults to true) until
-the first release is done.
+Published from GitHub Actions with npm provenance (`.github/workflows/release.yml`,
+manual `workflow_dispatch`, `dry_run` defaults to true).
 
-Before the first real publish, in order:
+1. Add changesets as usual (`npx changeset`).
+2. Apply them **locally**: `npx changeset version`, then `npm run sync:jsr`,
+   `npm install`, commit and push. (This repo does not let GitHub Actions open
+   pull requests, so the Changesets "Version Packages" PR can't be created by CI.)
+3. Run the workflow with `dry_run: false`. With no changesets pending it
+   publishes every version not yet on npm, with provenance.
+4. The native platform package `@johnhenry/backend-mlx-darwin-arm64` is outside
+   workspaces: bump its version by hand (and `backend-mlx`'s `^` range) only
+   when the binaries change. The `native` job rebuilds it on macOS and
+   publishes it with provenance if that version is new.
 
-1. Create `github.com/johnhenry/laya-js` and push (badges, `repository`,
-   provenance and commit links in the CHANGELOGs all point there).
-2. ~~Publish `@johnhenry/math-plus-safetensors`~~ — done (0.1.0, 2026-09-23).
-3. Set a scope-capable `NPM_TOKEN` repo secret (granular tokens are
-   per-package; a new scoped name 404s on PUT otherwise).
-4. On jsr.io: claim/confirm the `@johnhenry` scope, create the ten JSR
-   packages, and link this repo as their trusted publisher.
-5. Run `release.yml` with `dry_run: true`, read the tarball lists, then
-   `changeset version` (the pending `.changeset/initial-release.md` bumps
-   all 13 workspace packages to 0.1.0; bump
-   `backend-mlx-darwin-arm64` to 0.1.0 by hand, and drop the hand-written
-   `## 0.1.0 (Unreleased)` headings Changesets duplicates), commit, and
-   run `release.yml` with `dry_run: false`.
-6. After the platform package is on npm, run `npm install` once so the
-   lockfile records it (until then its optional edge 404s harmlessly).
-7. Switch `release.yml` to the family trigger (`release: published` +
-   `push: tags: ["v*"]` + `workflow_dispatch`) and add the
-   `Full documentation:` line to the READMEs once an
-   opensource.johnhenry.me section exists.
+Secrets: `NPM_TOKEN` (a short-lived granular token, set 2026-09-23; replace it
+when it expires). Better: configure npm trusted publishing (`npm trust github
+<pkg> --file release.yml --repo johnhenry/laya-js --allow-publish`, run by a
+2FA-enabled account; a bypass-2FA token can't) and drop the secret.
+JSR: not published yet (packages must be created on jsr.io first).
