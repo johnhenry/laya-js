@@ -5,6 +5,8 @@
   },
   "include": [
     "src",
-    "test"
+    "test",
+    "bench",
+    "demo"
   ]
 }

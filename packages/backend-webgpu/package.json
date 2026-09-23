@@ -17,7 +17,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
-    "test:bun": "bun --conditions=source test test/"
+    "test:bun": "bun --conditions=source test test/",
+    "demo:build": "bun build demo/main.ts --outdir demo/dist --target browser --conditions source",
+    "bench": "node --conditions=source bench/gemm.ts",
+    "test:deno": "deno test -A --conditions=source --node-modules-dir=manual test/"
   },
   "dependencies": {
     "@johnhenry/tensor-backend": "^0.0.0",

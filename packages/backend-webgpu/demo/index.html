@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>backend-webgpu smoke</title>
+<style>
+  :root { color-scheme: light dark; --ok: #1a7f37; --bad: #cf222e; }
+  body { font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 16px; max-width: 960px; }
+  h1 { font-size: 18px; }
+  .pass { color: var(--ok); } .fail { color: var(--bad); }
+  pre { white-space: pre-wrap; }
+  button { font: inherit; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<h1>@johnhenry/backend-webgpu — browser smoke test</h1>
+<p>Runs the tensor-backend conformance cases (f32, and f16 when <code>shader-f16</code> is available), then a GEMM benchmark.
+Serve the <code>packages/</code> directory so <code>../../tensor-backend/fixtures/ops.json</code> resolves.</p>
+<p><button id="rerun">Run again</button></p>
+<pre id="log"></pre>
+<script type="module" src="./dist/main.js"></script>
+</body>
+</html>
