@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/laya-presets",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Ready-made Laya question sets and email cleaning",
   "keywords": [
     "laya",
@@ -44,7 +44,7 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/laya-core": "^0.0.0"
+    "@johnhenry/laya-core": "^0.1.0"
   },
   "devDependencies": {
     "@johnhenry/laya-fixtures": "^0.0.0"

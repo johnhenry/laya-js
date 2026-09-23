@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/laya-router",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Language/task routing across Laya checkpoints",
   "keywords": [
     "laya",
@@ -45,10 +45,10 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/langdetect-lite": "^0.0.0",
-    "@johnhenry/laya": "^0.0.0",
-    "@johnhenry/laya-core": "^0.0.0",
-    "@johnhenry/pyjson": "^0.0.0"
+    "@johnhenry/langdetect-lite": "^0.1.0",
+    "@johnhenry/laya": "^0.1.0",
+    "@johnhenry/laya-core": "^0.1.0",
+    "@johnhenry/pyjson": "^0.1.0"
   },
   "publishConfig": {
     "access": "public",

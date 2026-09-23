@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@johnhenry/laya": "^0.0.0",
-    "@johnhenry/laya-core": "^0.0.0"
+    "@johnhenry/laya": "^0.1.0",
+    "@johnhenry/laya-core": "^0.1.0"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74"

@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/backend-webgpu",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "WebGPU (WGSL, f16) backend for @johnhenry/tensor-backend in browsers and Node/Bun via Dawn",
   "type": "module",
   "exports": {
@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "@webgpu/types": "^0.1.74",
-    "@johnhenry/tensor-backend": "^0.0.0",
+    "@johnhenry/tensor-backend": "^0.1.0",
     "webgpu": "^0.6.1"
   },
   "repository": {

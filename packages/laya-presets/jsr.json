@@ -1,10 +1,10 @@
 {
   "name": "@johnhenry/laya-presets",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "Apache-2.0",
   "exports": "./src/index.ts",
   "imports": {
-    "@johnhenry/laya-core": "jsr:@johnhenry/laya-core@^0.0.0"
+    "@johnhenry/laya-core": "jsr:@johnhenry/laya-core@^0.1.0"
   },
   "publish": {
     "include": [
