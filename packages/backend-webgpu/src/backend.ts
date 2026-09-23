@@ -9,6 +9,7 @@ import {
   gemmKernel,
   gemmDirectKernel,
   gemmSkinnyKernel,
+  gemmSgKernel,
   grid,
   layerNormKernel,
   meanPoolKernel,
@@ -56,6 +57,13 @@ export interface WebGpuBackendOptions {
   maxPooledBytes?: number;
   /** Override the GEMM tile configuration (benchmarking). */
   gemm?: GemmConfig;
+  /**
+   * Before awaiting a readback, sleep for most of the GPU time the same
+   * amount of work took last time, instead of letting the runtime poll
+   * (Dawn-node polls in a busy loop). Default: true for Node/Bun (Dawn),
+   * false for navigator.gpu.
+   */
+  sleepWhileWaiting?: boolean;
 }
 
 const numel = (s: readonly number[]) => s.reduce((a, b) => a * b, 1);
@@ -116,6 +124,8 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   readonly name = "webgpu";
   readonly rt: Runtime;
   readonly hasF16: boolean;
+  /** f32 8×8×8 subgroup matrices usable (Dawn chromium-experimental-subgroup-matrix, subgroup size 32). */
+  readonly hasSubgroupMatrix: boolean;
   gemmConfig: GemmConfig;
   private scopes: Set<WebGpuTensor>[] = [];
   private ropeTables = new Map<string, Storage>();
@@ -125,13 +135,15 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   readonly adapterInfo: AdapterSummary;
   private readonly ownsDevice: boolean;
 
-  constructor(device: GPUDevice, adapterInfo: AdapterSummary, opts: WebGpuBackendOptions & { f16: boolean; ownsDevice: boolean }) {
+  constructor(device: GPUDevice, adapterInfo: AdapterSummary, opts: WebGpuBackendOptions & { f16: boolean; ownsDevice: boolean; subgroupMatrix?: boolean }) {
     this.device = device;
     this.adapterInfo = adapterInfo;
     this.hasF16 = opts.f16;
+    this.hasSubgroupMatrix = opts.subgroupMatrix ?? false;
     this.ownsDevice = opts.ownsDevice;
     this.rt = new Runtime(device, opts.maxBatch ?? 128, opts.maxPooledBytes ?? 2 ** 30);
     this.gemmConfig = opts.gemm ?? GEMM_DEFAULT;
+    this.rt.sleepWhileWaiting = opts.sleepWhileWaiting ?? adapterInfo.source !== "navigator.gpu";
   }
 
   supports(dtype: DType): boolean {
@@ -332,10 +344,27 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     const n = numel(shape);
     if (!n) return;
     const ik = this.kind(x.dtype), ok = this.kind(out.dtype);
-    const src = () => copyKernel(ik, ok);
-    this.run(src().key, src, [x.storage.buffer, out.storage.buffer], {
-      n, io: inOffset, oo: outOffset, sh: pad8(shape, 1), ist: pad8(inStrides, 0), ost: pad8(outStrides, 0),
-    }, this.flatGroups(n));
+    // Collapse: drop unit axes, merge axes that are contiguous in both views.
+    const sh: number[] = [], is: number[] = [], os: number[] = [];
+    for (let d = shape.length - 1; d >= 0; d--) {
+      if (shape[d] === 1) continue;
+      if (sh.length && inStrides[d] === is[0]! * sh[0]! && outStrides[d] === os[0]! * sh[0]!) {
+        sh[0] = sh[0]! * shape[d]!;
+      } else {
+        sh.unshift(shape[d]!);
+        is.unshift(inStrides[d]!);
+        os.unshift(outStrides[d]!);
+      }
+    }
+    if (!sh.length) sh.push(1), is.push(1), os.push(1);
+    const R = sh.length;
+    const V = is[R - 1] === 1 && os[R - 1] === 1 && sh[R - 1]! % 4 === 0 ? 4 : 1;
+    if (V === 4) sh[R - 1] = sh[R - 1]! / 4;
+    const groups = n / V;
+    const src = () => copyKernel(ik, ok, R, V);
+    this.run(`copy:${keyOf(ik, ok)}:${R}:${V}`, src, [x.storage.buffer, out.storage.buffer], {
+      n: groups, io: inOffset, oo: outOffset, sh: pad8(sh, 1), ist: pad8(is.map((v, i) => (i === R - 1 ? v * V : v)), 0), ost: pad8(os.map((v, i) => (i === R - 1 ? v * V : v)), 0),
+    }, this.flatGroups(groups));
   }
 
   private copyContig(x: WebGpuTensor, dtype: DType = x.dtype): WebGpuTensor {
@@ -596,6 +625,16 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
         [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
         { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
         [Math.ceil(N / (sk.WX * sk.TN)), 1, 1]);
+      return out;
+    }
+    const sg = this.hasSubgroupMatrix && transB && vecA && vecB && batch === 1
+      ? this.gemmConfig.sg?.find((c) => M > c.minM && M <= (c.maxM ?? Infinity))
+      : undefined;
+    if (sg) {
+      this.run(`gemmsg:${keyOf(ak, bk, biask, ok, sg)}`, () => gemmSgKernel(ak, bk, biask, ok, sg),
+        [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+        { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
+        [Math.ceil(N / sg.BN), Math.ceil(M / sg.BM), 1]);
       return out;
     }
     const dc = this.gemmConfig.direct;

@@ -3,6 +3,7 @@
  * Adapter/device acquisition for browsers (navigator.gpu), Deno
  * (navigator.gpu) and Node/Bun (the `webgpu` package: Dawn).
  */
+import { loadDawn } from "#dawn";
 
 export interface AdapterSummary {
   vendor: string;
@@ -15,24 +16,22 @@ export interface AdapterSummary {
   limits: Record<string, number>;
 }
 
-let nodeGpu: Promise<GPU | null> | undefined;
+const nodeGpus = new Map<string, Promise<GPU | null>>();
 
-/** Returns a `GPU` object for this runtime, or null when WebGPU is unavailable. */
-export function getGpu(): Promise<GPU | null> {
+/**
+ * Returns a `GPU` object for this runtime, or null when WebGPU is unavailable.
+ * `unsafe` (Node/Bun only) creates the Dawn instance with the
+ * `allow_unsafe_apis` toggle, which exposes experimental features such as
+ * `chromium-experimental-subgroup-matrix`; browsers decide that themselves.
+ */
+export function getGpu(opts: { unsafe?: boolean } = {}): Promise<GPU | null> {
   const nav = (globalThis as { navigator?: { gpu?: GPU } }).navigator;
   if (nav?.gpu) return Promise.resolve(nav.gpu);
-  return (nodeGpu ??= (async () => {
-    try {
-      // Variable specifier: keeps browser bundlers from resolving the Node addon.
-      const spec = "webgpu";
-      const mod = (await import(/* @vite-ignore */ spec)) as { create(o: string[]): GPU; globals: object };
-      const g = globalThis as Record<string, unknown>;
-      if (g.GPUBufferUsage === undefined) Object.assign(g, mod.globals);
-      return mod.create([]);
-    } catch {
-      return null;
-    }
-  })());
+  const flags = opts.unsafe ? ["enable-dawn-features=allow_unsafe_apis"] : [];
+  const key = flags.join(" ");
+  let p = nodeGpus.get(key);
+  if (!p) nodeGpus.set(key, (p = loadDawn(flags)));
+  return p;
 }
 
 function gpuSource(): string {
@@ -40,8 +39,8 @@ function gpuSource(): string {
   return nav?.gpu ? "navigator.gpu" : "webgpu (Dawn)";
 }
 
-export async function requestAdapter(powerPreference: GPUPowerPreference = "high-performance"): Promise<GPUAdapter | null> {
-  const gpu = await getGpu();
+export async function requestAdapter(powerPreference: GPUPowerPreference = "high-performance", unsafe = false): Promise<GPUAdapter | null> {
+  const gpu = await getGpu({ unsafe });
   if (!gpu) return null;
   try {
     return await gpu.requestAdapter({ powerPreference });

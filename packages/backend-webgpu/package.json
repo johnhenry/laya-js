@@ -10,11 +10,25 @@
       "default": "./dist/index.js"
     }
   },
+  "imports": {
+    "#dawn": {
+      "browser": {
+        "source": "./src/dawn-browser.ts",
+        "types": "./dist/dawn-browser.d.ts",
+        "default": "./dist/dawn-browser.js"
+      },
+      "source": "./src/dawn-node.ts",
+      "types": "./dist/dawn-node.d.ts",
+      "default": "./dist/dawn-node.js"
+    }
+  },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/",
@@ -23,6 +37,7 @@
     "test:deno": "deno test -A --conditions=source --node-modules-dir=manual test/"
   },
   "dependencies": {
+    "@webgpu/types": "^0.1.74",
     "@johnhenry/tensor-backend": "^0.0.0",
     "webgpu": "^0.6.1"
   },
@@ -34,11 +49,26 @@
   "license": "Apache-2.0",
   "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-webgpu"
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-webgpu",
+  "keywords": [
+    "webgpu",
+    "wgsl",
+    "gpu",
+    "f16",
+    "tensor",
+    "transformer",
+    "inference",
+    "dawn",
+    "browser"
+  ],
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  }
 }

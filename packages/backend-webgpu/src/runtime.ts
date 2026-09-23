@@ -30,6 +30,10 @@ export interface KernelSource {
   /** WGSL body (entry point `main`); header (enable, struct, bindings) is generated. */
   body: string;
   f16: boolean;
+  /** Extra WGSL `enable` extensions (e.g. "chromium_experimental_subgroup_matrix"). */
+  enables?: readonly string[];
+  /** Extra global directives, e.g. "diagnostic(off, ...)". */
+  directives?: readonly string[];
 }
 
 export interface CompiledKernel {
@@ -87,7 +91,12 @@ export class Runtime {
   private pass: GPUComputePassEncoder | null = null;
   private pendingDispatches = 0;
   private epoch = 0;
-  private uniformChunks: { buffer: GPUBuffer; data: Uint8Array; used: number }[] = [];
+  private uniformChunks: { buffer: GPUBuffer; data: Uint8Array; view: DataView; used: number }[] = [];
+  /** Bind groups by (layout, buffers, uniform chunk); the uniform offset is dynamic. */
+  private bindGroups = new Map<string, GPUBindGroup>();
+  private bufferIds = new WeakMap<GPUBuffer, number>();
+  private nextBufferId = 1;
+  private layoutIds = new Map<GPUBindGroupLayout, number>();
   private uniformIdx = 0;
   private deferredDestroy: GPUBuffer[] = [];
   private firstError: string | null = null;
@@ -96,6 +105,18 @@ export class Runtime {
 
   readonly maxBatch: number;
   readonly maxPooledBytes: number;
+  /**
+   * Sleep (setTimeout) for most of the expected GPU time before awaiting a
+   * readback. Dawn-node resolves mapAsync by polling, which keeps a CPU core
+   * busy for the whole wait (100% under Bun); on thermally limited machines
+   * that power comes out of the GPU's budget.
+   */
+  sleepWhileWaiting = false;
+  /** Dispatches enqueued since the last readback, and the last observed wait (ms) per count. */
+  private sinceRead = 0;
+  private waitMs = new Map<number, number>();
+  /** The in-progress pre-read sleep: concurrent reads wait on it too before polling. */
+  private sleeping: Promise<void> | null = null;
 
   constructor(device: GPUDevice, maxBatch: number, maxPooledBytes: number) {
     this.device = device;
@@ -154,6 +175,7 @@ export class Runtime {
     this.flush();
     for (const list of this.pool.values()) for (const b of list) b.buffer.destroy();
     this.pool.clear();
+    this.bindGroups.clear();
     this.stats.pooledBytes = 0;
     for (const list of this.stagingPool.values()) for (const b of list) b.destroy();
     this.stagingPool.clear();
@@ -187,9 +209,10 @@ export class Runtime {
         visibility: STAGE_COMPUTE,
         buffer: { type: b.access === "read" ? "read-only-storage" : "storage" },
       }));
-      if (src.params.length) entries.push({ binding: src.bindings.length, visibility: STAGE_COMPUTE, buffer: { type: "uniform" } });
+      if (src.params.length) entries.push({ binding: src.bindings.length, visibility: STAGE_COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } });
       layout = this.device.createBindGroupLayout({ entries });
       this.layouts.set(sig, layout);
+      this.layoutIds.set(layout, this.layoutIds.size + 1);
     }
     const module = this.device.createShaderModule({ code, label: key });
     const pipeline = this.device.createComputePipeline({
@@ -207,21 +230,29 @@ export class Runtime {
 
   // ---- dispatch --------------------------------------------------------------
 
+  private bufferId(b: GPUBuffer): number {
+    let id = this.bufferIds.get(b);
+    if (id === undefined) this.bufferIds.set(b, (id = this.nextBufferId++));
+    return id;
+  }
+
   private uniform(bytes: number): { buffer: GPUBuffer; offset: number; data: DataView } {
     const size = 1 << 16;
     let chunk = this.uniformChunks[this.uniformIdx];
     if (chunk && chunk.used + bytes > size) chunk = this.uniformChunks[++this.uniformIdx];
     if (!chunk) {
+      const data = new Uint8Array(size);
       chunk = {
         buffer: this.device.createBuffer({ size, usage: USAGE_UNIFORM | USAGE_COPY_DST }),
-        data: new Uint8Array(size),
+        data,
+        view: new DataView(data.buffer),
         used: 0,
       };
       this.uniformChunks[this.uniformIdx] = chunk;
     }
     const offset = chunk.used;
     chunk.used = offset + Math.ceil(bytes / this.uniformAlign) * this.uniformAlign;
-    return { buffer: chunk.buffer, offset, data: new DataView(chunk.data.buffer, offset, bytes) };
+    return { buffer: chunk.buffer, offset, data: chunk.view };
   }
 
   dispatch(
@@ -231,13 +262,26 @@ export class Runtime {
     groups: readonly [number, number?, number?],
   ): void {
     if (buffers.length !== k.nBindings) throw new Error(`dispatch: ${buffers.length} buffers for ${k.nBindings} bindings`);
-    const entries: GPUBindGroupEntry[] = buffers.map((buffer, i) => ({ binding: i, resource: { buffer } }));
+    let key = String(this.layoutIds.get(k.layout));
+    for (const buf of buffers) key += "," + this.bufferId(buf);
+    let offsets: number[] | undefined;
+    let ubuf: GPUBuffer | undefined;
     if (k.params.length) {
       const u = this.uniform(k.paramBytes);
-      packParams(u.data, k.fields, params);
-      entries.push({ binding: buffers.length, resource: { buffer: u.buffer, offset: u.offset, size: k.paramBytes } });
+      packParams(u.data, u.offset, k.fields, params);
+      ubuf = u.buffer;
+      offsets = [u.offset];
+      key += ":" + this.bufferId(u.buffer) + ":" + k.paramBytes;
     }
-    const bindGroup = this.device.createBindGroup({ layout: k.layout, entries });
+    let bindGroup = this.bindGroups.get(key);
+    if (!bindGroup) {
+      const entries: GPUBindGroupEntry[] = buffers.map((buffer, i) => ({ binding: i, resource: { buffer } }));
+      if (ubuf) entries.push({ binding: buffers.length, resource: { buffer: ubuf, offset: 0, size: k.paramBytes } });
+      bindGroup = this.device.createBindGroup({ layout: k.layout, entries });
+      // Keys embed buffer ids that are never reused, so stale entries only cost memory.
+      if (this.bindGroups.size >= 4096) this.bindGroups.clear();
+      this.bindGroups.set(key, bindGroup);
+    }
     const prof = this.profiler;
     if (prof) {
       // Profiling: one pass per dispatch, bracketed by timestamps.
@@ -245,7 +289,7 @@ export class Runtime {
       const i = prof.keys.length;
       const pass = this.encoder.beginComputePass({ timestampWrites: { querySet: prof.querySet, beginningOfPassWriteIndex: 2 * i, endOfPassWriteIndex: 2 * i + 1 } });
       pass.setPipeline(k.pipeline);
-      pass.setBindGroup(0, bindGroup);
+      pass.setBindGroup(0, bindGroup, offsets);
       pass.dispatchWorkgroups(groups[0], groups[1] ?? 1, groups[2] ?? 1);
       pass.end();
       prof.keys.push(k.key);
@@ -255,10 +299,11 @@ export class Runtime {
         this.pass = this.encoder.beginComputePass();
       }
       this.pass.setPipeline(k.pipeline);
-      this.pass.setBindGroup(0, bindGroup);
+      this.pass.setBindGroup(0, bindGroup, offsets);
       this.pass.dispatchWorkgroups(groups[0], groups[1] ?? 1, groups[2] ?? 1);
     }
     this.pendingDispatches++;
+    this.sinceRead++;
     this.stats.dispatches++;
     if (this.pendingDispatches >= this.maxBatch) this.flush();
   }
@@ -304,8 +349,24 @@ export class Runtime {
     const staging =
       this.stagingPool.get(size)?.pop() ?? this.device.createBuffer({ size, usage: USAGE_MAP_READ | USAGE_COPY_DST });
     const copyBytes = (bytes + 3) & ~3;
+    const t0 = performance.now();
+    const work = this.sinceRead;
+    this.sinceRead = 0;
     this.flush((enc) => enc.copyBufferToBuffer(src, srcOffset, staging, 0, copyBytes));
+    const est = work ? this.waitMs.get(work) : undefined;
+    // Sleep ~80% of the last wait for the same amount of work; poll only for the rest.
+    // Self-correcting: an overestimate shrinks by 20% per read.
+    if (this.sleepWhileWaiting && est !== undefined && est > 3) {
+      const p = new Promise<void>((r) => setTimeout(r, est * 0.8 - (performance.now() - t0)));
+      this.sleeping = p;
+      await p;
+      if (this.sleeping === p) this.sleeping = null;
+    } else if (this.sleeping) await this.sleeping;
     await staging.mapAsync(MAP_READ, 0, copyBytes);
+    if (work) {
+      if (this.waitMs.size > 256) this.waitMs.clear();
+      this.waitMs.set(work, performance.now() - t0);
+    }
     const out = staging.getMappedRange(0, copyBytes).slice(0, bytes);
     staging.unmap();
     let list = this.stagingPool.get(size);
@@ -388,8 +449,9 @@ function orderedParams(params: ParamSpec): (readonly [string, ParamType])[] {
   return [...params.filter((p) => p[1] === "vec8"), ...params.filter((p) => p[1] !== "vec8")];
 }
 
-function packParams(dv: DataView, fields: CompiledKernel["fields"], values: Record<string, number | readonly number[]>): void {
-  for (const [name, t, o] of fields) {
+function packParams(dv: DataView, base: number, fields: CompiledKernel["fields"], values: Record<string, number | readonly number[]>): void {
+  for (const [name, t, fo] of fields) {
+    const o = base + fo;
     const v = values[name];
     if (v === undefined) throw new Error(`missing kernel param ${name}`);
     if (t === "vec8") {
@@ -404,6 +466,8 @@ function packParams(dv: DataView, fields: CompiledKernel["fields"], values: Reco
 function assemble(src: KernelSource): { code: string; paramBytes: number } {
   const lines: string[] = [];
   if (src.f16) lines.push("enable f16;");
+  for (const e of src.enables ?? []) lines.push(`enable ${e};`);
+  for (const d of src.directives ?? []) lines.push(`${d};`);
   const ordered = orderedParams(src.params);
   const { bytes } = paramLayout(src.params);
   if (ordered.length) {

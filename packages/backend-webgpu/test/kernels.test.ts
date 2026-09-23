@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { toF32 } from "@johnhenry/tensor-backend";
-import { createWebGpuBackend, isWebGpuAvailable, type WebGpuBackend, type WebGpuTensor } from "../src/index.ts";
+import { createWebGpuBackend, isWebGpuAvailable, type GemmConfig, type WebGpuBackend, type WebGpuTensor } from "../src/index.ts";
 import { harness, isBun } from "./harness.ts";
 
 // @ts-ignore -- bun types are not installed
@@ -106,6 +106,53 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
       assert.equal(y16.dtype, "f16");
       close(await rd(bk, y16), want, 2e-2, 2e-2, `linear f16 ${M}x${N}x${K}`);
     }
+  });
+
+  t.it("linear: subgroup-matrix kernels (when available) vs direct, partial tiles, K % 8 != 0", async () => {
+    const bk = await get();
+    const saved = bk.gemmConfig;
+    try {
+      for (const [M, N, K] of [[93, 200, 256], [300, 130, 268], [65, 64, 64]] as const) {
+        const x = rnd((M + 1) * K), w = rnd(N * K, 0.05), bias = rnd(N);
+        const want = refLinear(x.subarray(K), w, bias, M, N, K);
+        const X = bk.slice(up(bk, [M + 1, K], x), [1, 0], [M + 1, K]); // offset view
+        const W = up(bk, [N, K], w), Bi = up(bk, [N], bias);
+        const cfgs: [string, GemmConfig][] = [
+          ["default", saved],
+          ["direct", { ...saved, sg: null, skinny: [] }],
+          ["sg 32x64", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 2, WN: 2 }] }],
+          ["sg 96x64x16", { ...saved, skinny: [], sg: [{ minM: 0, BM: 96, BN: 64, BK: 16, WM: 2, WN: 2 }] }],
+        ];
+        for (const [name, cfg] of cfgs) {
+          bk.gemmConfig = cfg;
+          close(await rd(bk, bk.linear(X, W, Bi)), want, 1e-4, 1e-4, `linear ${name} f32 ${M}x${N}x${K}`);
+          close(await rd(bk, bk.linear(bk.cast(X, "f16"), bk.cast(W, "f16"), bk.cast(Bi, "f16"))), want, 2e-2, 2e-2, `linear ${name} f16 ${M}x${N}x${K}`);
+        }
+      }
+    } finally {
+      bk.gemmConfig = saved;
+    }
+  });
+
+  t.it("strided copies: collapsed 5-D transpose (vector and scalar inner loops), concat", async () => {
+    const bk = await get();
+    for (const hd of [8, 6]) {
+      const [B, L, nh] = [2, 5, 3];
+      const x = rnd(B * L * 3 * nh * hd);
+      const X = up(bk, [B, L, 3, nh, hd], x);
+      const perm = [2, 0, 3, 1, 4];
+      const shape = perm.map((p) => [B, L, 3, nh, hd][p]!);
+      const want = new Float32Array(x.length);
+      let o = 0;
+      for (let a = 0; a < 3; a++) for (let b0 = 0; b0 < B; b0++) for (let h = 0; h < nh; h++) for (let l = 0; l < L; l++) for (let d = 0; d < hd; d++)
+        want[o++] = x[(((b0 * L + l) * 3 + a) * nh + h) * hd + d]!;
+      const y = bk.transpose(X, perm);
+      assert.deepEqual([...y.shape], shape);
+      close(await rd(bk, y), want, 0, 0, `transpose f32 hd=${hd}`);
+      close(await rd(bk, bk.transpose(bk.cast(X, "f16"), perm)), want, 2e-3, 2e-3, `transpose f16 hd=${hd}`);
+    }
+    const a = rnd(6), c = rnd(9);
+    close(await rd(bk, bk.concat([up(bk, [2, 3], a), up(bk, [3, 3], c)], 0)), Float32Array.from([...a, ...c]), 0, 0, "concat axis 0");
   });
 
   t.it("linear on a sliced (offset) view", async () => {

@@ -137,23 +137,29 @@ export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind
 // ---------------------------------------------------------------------------
 // Strided copy (transpose / slice / concat / split / non-contiguous cast).
 
-export function copyKernel(inp: Kind, out: Kind): KernelSource {
+/**
+ * Strided copy specialized on the (collapsed) rank R ≤ 8 and on V elements
+ * per thread (V = 4 when the innermost axis is unit-stride on both sides and
+ * everything is 4-aligned; the shape's innermost extent is then given in V-groups).
+ */
+export function copyKernel(inp: Kind, out: Kind, R = 8, V = 1): KernelSource {
   const WG = 256;
   const c: CType = inp.st === "i32" && out.st === "i32" ? "i32" : "f32";
+  let dec = "";
+  for (let d = 7; d >= 8 - R; d--) {
+    const q = `${Math.floor(d / 4)}u][${d % 4}u`;
+    dec += d > 8 - R
+      ? `  { let dim = P.sh[${q}]; let cd = r % dim; r = r / dim; io += cd * P.ist[${q}]; oo += cd * P.ost[${q}]; }\n`
+      : `  io += r * P.ist[${q}]; oo += r * P.ost[${q}];\n`;
+  }
+  let mv = "";
+  for (let v = 0; v < V; v++) mv += `  outp[oo + ${v}u] = ${st(out, ld(inp, `inp[io + ${v}u]`, c), c)};\n`;
   const body = `const WG = ${WG}u;\n${HELPERS}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
   if (i >= P.n) { return; }
   var r = i; var io = P.io; var oo = P.oo;
-  for (var d = 7i; d >= 0i; d--) {
-    let du = u32(d);
-    let dim = P.sh[du / 4u][du % 4u];
-    let cd = r % dim; r = r / dim;
-    io += cd * P.ist[du / 4u][du % 4u];
-    oo += cd * P.ost[du / 4u][du % 4u];
-  }
-  outp[oo] = ${st(out, ld(inp, "inp[io]", c), c)};
-}`;
+${dec}${mv}}`;
   return {
-    key: `copy:${kindKey(inp)}:${kindKey(out)}`,
+    key: `copy:${kindKey(inp)}:${kindKey(out)}:${R}:${V}`,
     bindings: [
       { name: "inp", elem: inp.st, access: "read" },
       { name: "outp", elem: out.st, access: "read_write" },
@@ -340,6 +346,12 @@ export interface GemmConfig {
   direct: DirectGemmConfig | null;
   /** Skinny-Linear configs, each used for M ≤ maxM (first match wins; empty disables). */
   skinny: (SkinnyGemmConfig & { maxM: number })[];
+  /**
+   * Subgroup-matrix Linear configs (only on devices with f32 8×8×8 subgroup
+   * matrices and subgroup size 32): the first with minM < M ≤ maxM wins;
+   * null/absent/empty disables.
+   */
+  sg?: (SgGemmConfig & { minM: number; maxM?: number })[] | null;
 }
 /** Tuned on Apple M2 (10-core GPU) via Dawn/Metal: see bench/gemm.ts. */
 export const GEMM_DEFAULT: GemmConfig = {
@@ -349,6 +361,8 @@ export const GEMM_DEFAULT: GemmConfig = {
     { maxM: 40, WX: 16, TN: 4, WY: 4, KS: 4, KP4: 0 },
     { maxM: 64, WX: 8, TN: 4, WY: 8, KS: 4, KP4: 0 },
   ],
+  // 2 subgroups, each a 32×32 block (4×4 fragments): best or tied for M = 65…1488 on M2.
+  sg: [{ minM: 64, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2 }],
 };
 
 export function gemmKernel(
@@ -841,7 +855,7 @@ var<workgroup> red: array<f32, ${WG}>;
 var<workgroup> Ms: array<f32, ${BQ}>;
 var<workgroup> Ls: array<f32, ${BQ}>;
 var<workgroup> Al: array<f32, ${BQ}>;
-@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+${mask ? "var<workgroup> kRange: array<atomic<u32>, 2>;\nvar<workgroup> kLo: u32;\nvar<workgroup> kHi: u32;\n" : ""}@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
   let q0g = wid.x * ${BQ}u; let h = wid.y; let b = wid.z;
   let bh = b * P.H + h;
   let qBase = P.oq / 4u + bh * P.Lq * ${D4}u;
@@ -858,7 +872,25 @@ ${mask ? "  let mBase = P.om + b * P.msb + h * P.msh;\n" : ""}  let sr = (lid / 
   }
   if (lid < ${BQ}u) { Ms[lid] = NEG; Ls[lid] = 0.0; }
 ${decl}
-  for (var kt = 0u; kt < P.Lk; kt += ${BKV}u) {
+${mask ? `  // Key-tile range with any visible key for this query block (sliding-window
+  // and padding masks): fully masked tiles contribute nothing, so skip them.
+  if (lid == 0u) { atomicStore(&kRange[0], 0xffffffffu); atomicStore(&kRange[1], 0u); }
+  workgroupBarrier();
+  {
+    var lo = 0xffffffffu; var hi = 0u;
+    let nq = min(${BQ}u, P.Lq - q0g);
+    for (var j = lid; j < P.Lk; j += ${WG}u) {
+      var vis = false;
+      for (var qi = 0u; qi < nq; qi++) { vis = vis || Mk[mBase + (q0g + qi) * P.msq + j * P.msk] != 0u; if (P.msq == 0u) { break; } }
+      if (vis) { lo = min(lo, j); hi = max(hi, j + 1u); }
+    }
+    if (hi > 0u) { atomicMin(&kRange[0], lo); atomicMax(&kRange[1], hi); }
+  }
+  workgroupBarrier();
+  if (lid == 0u) { kLo = (atomicLoad(&kRange[0]) / ${BKV}u) * ${BKV}u; kHi = atomicLoad(&kRange[1]); }
+  let ktLo = workgroupUniformLoad(&kLo);
+  let ktHi = workgroupUniformLoad(&kHi);
+  for (var kt = ktLo; kt < ktHi; kt += ${BKV}u) {` : `  for (var kt = 0u; kt < P.Lk; kt += ${BKV}u) {`}
     for (var t = lid; t < ${BKV * D4}u; t += ${WG}u) {
       let kj = t / ${D4}u; let d = t % ${D4}u;
       var kx = vec4<f32>(0.0); var vx = vec4<f32>(0.0);
@@ -1095,5 +1127,107 @@ export function sortSlowKernel(out: Kind): KernelSource {
     params: [["rows", "u32"], ["n", "u32"]],
     body,
     f16: needsF16(out),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Linear through subgroup matrices (Dawn `chromium-experimental-subgroup-matrix`,
+// Metal simdgroup_matrix on Apple). f32 8×8×8 fragments: operands are converted
+// to f32 while staging tiles in workgroup memory, so accumulation stays f32
+// (like MLX's f16 GEMM). Subgroup size must be 32.
+
+export interface SgGemmConfig {
+  /** Workgroup tile (multiples of 8·SM, 8·SN). */
+  BM: number;
+  BN: number;
+  BK: number;
+  /** Subgroups per workgroup along M and N. */
+  WM: number;
+  WN: number;
+}
+
+export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SgGemmConfig): KernelSource {
+  const { BM, BN, BK, WM, WN } = cfg;
+  const SG = 32, WG = WM * WN * SG;
+  const FM = BM / WM / 8, FN = BN / WN / 8; // fragments per subgroup
+  if (FM % 1 || FN % 1 || BK % 8) throw new Error("gemmSg: bad tile config");
+  const BKP = BK + 4; // padded row stride (floats) of the staged tiles
+  const bindings: BindingSpec[] = [
+    { name: "A", elem: `vec4<${a.st}>`, access: "read" },
+    { name: "B", elem: `vec4<${b.st}>`, access: "read" },
+  ];
+  if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
+  bindings.push({ name: "C", elem: out.st, access: "read_write" });
+  const f4 = (k: Kind, e: string) => (k.st === "f32" ? e : `vec4<f32>(${e})`);
+  const K4 = BK / 4;
+  // Cooperative tile loads, software-pipelined: the next K panel is fetched into
+  // registers (vec4 per thread) while the subgroups multiply the current one.
+  const BOFF = BM * BKP;
+  const NA = Math.ceil((BM * K4) / WG), NB = Math.ceil((BN * K4) / WG);
+  // guard for the last partial round when rows·BK/4 isn't a multiple of WG
+  const guard = (rows: number, v: number) => ((v + 1) * WG > rows * K4 ? `if (lid + ${v * WG}u < ${rows * K4}u) ` : "");
+  const regs = (p: string, n: number) => Array.from({ length: n }, (_, v) => `  var ${p}${v} = vec4<f32>(0.0);\n`).join("");
+  const fetch = (p: string, n: number, name: string, kind: Kind, base: string, lim: string, gbase: string, rows: number) =>
+    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let gr = ${base} + t / ${K4}u; let kk = k0n / 4u + t % ${K4}u;
+      ${p}${v} = vec4<f32>(0.0);
+      if (gr < ${lim} && kk < K4) { ${p}${v} = ${f4(kind, `${name}[${gbase} + gr * K4 + kk]`)}; } }\n`).join("");
+  const stash = (p: string, n: number, S: number, rows: number) =>
+    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S}u + (t / ${K4}u) * ${BKP}u + (t % ${K4}u) * 4u;
+      Sh[o] = ${p}${v}.x; Sh[o + 1u] = ${p}${v}.y; Sh[o + 2u] = ${p}${v}.z; Sh[o + 3u] = ${p}${v}.w; }\n`).join("");
+  let decl = "";
+  for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) decl += `  var c${i}_${j}: subgroup_matrix_result<f32, 8, 8>;\n`;
+  let mma = "";
+  for (let i = 0; i < FM; i++)
+    mma += `      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>, row_major>(&Sh, (sm + ${i * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
+  for (let j = 0; j < FN; j++)
+    mma += `      let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>, col_major>(&Sh, ${BOFF}u + (sn + ${j * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
+  for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) mma += `      c${i}_${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}_${j});\n`;
+  // Epilogue: each subgroup spills one 8×8 fragment at a time into its own
+  // 64-float scratch; its 32 lanes then add the bias and store 2 values each.
+  const SCR = (BM + BN) * BKP;
+  const bv = bias ? ` + ${ld(bias, "bias[P.obias + col]", "f32")}` : "";
+  let stores = "";
+  for (let i = 0; i < FM; i++)
+    for (let j = 0; j < FN; j++)
+      stores += `  subgroupMatrixStore<row_major>(&Sh, scr, c${i}_${j}, 8u);
+  workgroupBarrier();
+  for (var e = lane; e < 64u; e += 32u) {
+    let row = r0 + sm + ${i * 8}u + e / 8u; let col = c0 + sn + ${j * 8}u + e % 8u;
+    if (row < P.M && col < P.N) { C[row * P.N + col] = ${st(out, `Sh[scr + e]${bv}`, "f32")}; }
+  }
+  workgroupBarrier();\n`;
+  const body = `${out.bf16 ? HELPERS : ""}
+// A tile at 0, B tile at ${BOFF}, per-subgroup 8×8 output scratch at ${SCR}.
+var<workgroup> Sh: array<f32, ${SCR + (WG / SG) * 64}>;
+@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let K4 = P.K / 4u;
+  let r0 = wid.y * ${BM}u; let c0 = wid.x * ${BN}u;
+  let aBase = P.oa / 4u; let bBase = P.ob / 4u;
+  let sg = lid / ${SG}u;
+  let sm = (sg / ${WN}u) * ${BM / WM}u; let sn = (sg % ${WN}u) * ${BN / WN}u;
+  let lane = lid % ${SG}u; let scr = ${SCR}u + sg * 64u;
+${decl}
+${regs("pa", NA)}${regs("pb", NB)}  {
+    let k0n = 0u;
+${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}  }
+  for (var k0 = 0u; k0 < P.K; k0 += ${BK}u) {
+${stash("pa", NA, 0, BM)}${stash("pb", NB, BOFF, BN)}    workgroupBarrier();
+    let k0n = k0 + ${BK}u;
+    if (k0n < P.K) {
+${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}    }
+${Array.from({ length: BK / 8 }, (_, q) => `    {\n      let kk = ${q * 8}u;\n${mma}    }\n`).join("")}
+    workgroupBarrier();
+  }
+${stores}}`;
+  return {
+    key: `gemmsg:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${BM}x${BN}x${BK}/${WM}x${WN}`,
+    bindings,
+    params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
+    body,
+    f16: needsF16(a, b, out, ...(bias ? [bias] : [])),
+    enables: ["chromium_experimental_subgroup_matrix"],
+    // Offsets differ per subgroup (derived from local_invocation_index), which is fine:
+    // each subgroup executes the matrix ops in subgroup-uniform control flow.
+    directives: ["diagnostic(off, chromium.subgroup_matrix_uniformity)"],
   };
 }

@@ -1,0 +1,19 @@
+{
+  "name": "@johnhenry/backend-webgpu",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "exports": "./src/index.ts",
+  "imports": {
+    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.0.0",
+    "@webgpu/types": "npm:@webgpu/types@^0.1.74",
+    "webgpu": "npm:webgpu@^0.6.1"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "CHANGELOG.md",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}
