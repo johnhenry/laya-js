@@ -88,4 +88,4 @@ Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed d
 
 ## License
 
-Apache-2.0.
+MIT.

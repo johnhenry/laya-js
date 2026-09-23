@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Laya typed decisions in JavaScript on native MLX and WebGPU, as a family of reusable packages",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/johnhenry/laya-js",
   "repository": {
     "type": "git",

@@ -10,7 +10,7 @@
     "webgpu",
     "benchmark"
   ],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-cli",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"
@@ -36,7 +36,8 @@
     "src",
     "bin",
     "CHANGELOG.md",
-    "NOTICE"
+    "NOTICE",
+    "LICENSE-APACHE-2.0"
   ],
   "sideEffects": false,
   "scripts": {

@@ -1,7 +1,7 @@
 {
   "name": "@johnhenry/backend-cpu",
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "exports": "./src/index.ts",
   "imports": {
     "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.0"

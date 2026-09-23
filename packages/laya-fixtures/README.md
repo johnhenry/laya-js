@@ -27,4 +27,4 @@ Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**. The oracle f
 
 ## License
 
-Apache-2.0.
+MIT.

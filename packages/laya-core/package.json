@@ -10,7 +10,7 @@
     "calibration",
     "isomorphic"
   ],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-core",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"
@@ -37,7 +37,8 @@
     "dist",
     "src",
     "CHANGELOG.md",
-    "NOTICE"
+    "NOTICE",
+    "LICENSE-APACHE-2.0"
   ],
   "sideEffects": false,
   "scripts": {

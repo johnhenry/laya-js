@@ -191,5 +191,5 @@ Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed d
 
 ## License
 
-Apache-2.0. MLX and mlx-c are MIT, © Apple Inc.; their notices ship in the
+MIT. MLX and mlx-c are MIT, © Apple Inc.; their notices ship in the
 platform package (`NOTICE`, `lib/licenses/`).

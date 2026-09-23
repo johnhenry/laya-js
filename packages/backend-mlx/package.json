@@ -15,7 +15,7 @@
     "bun",
     "koffi"
   ],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"

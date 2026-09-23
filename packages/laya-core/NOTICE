@@ -1,8 +1,15 @@
 laya-js
-Copyright 2026 John Henry
+Copyright (c) 2026 John Henry
+Licensed under the MIT License (see LICENSE).
 
-This product ports logic from laya-mlx (https://github.com/mizorewww/laya-mlx),
-an Apache-2.0 MLX port of Laya by Convai Innovations
-(https://github.com/NandhaKishorM/laya), also Apache-2.0.
+Portions of this package are derived from third-party works licensed under
+the Apache License, Version 2.0 (a copy is in LICENSE-APACHE-2.0):
+
+- laya-mlx (https://github.com/mizorewww/laya-mlx), an MLX port of Laya.
+  Ported to TypeScript: prompt construction, calibration, result formatting,
+  routing, language detection, presets, the decision-head architecture.
+- Laya by Convai Innovations (https://github.com/NandhaKishorM/laya).
+
+Those portions were modified (rewritten in TypeScript for JavaScript runtimes).
 Model weights are not distributed with this code; they are downloaded from
 Hugging Face under their own licenses.

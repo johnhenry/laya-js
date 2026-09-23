@@ -12,7 +12,7 @@
     "browser",
     "opfs"
   ],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/hf-cache",
   "bugs": {
     "url": "https://github.com/johnhenry/laya-js/issues"

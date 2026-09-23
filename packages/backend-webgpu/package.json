@@ -46,7 +46,7 @@
     "url": "git+https://github.com/johnhenry/laya-js.git",
     "directory": "packages/backend-webgpu"
   },
-  "license": "Apache-2.0",
+  "license": "MIT",
   "sideEffects": false,
   "engines": {
     "node": ">=24.0.0",

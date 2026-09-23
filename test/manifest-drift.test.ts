@@ -96,6 +96,9 @@ test("every package has README.md and CHANGELOG.md; published ones ship LICENSE 
     if (pkg.files?.includes("NOTICE")) {
       assert.ok(existsSync(join(ROOT, dir, "NOTICE")), `${dir}: "files" lists NOTICE but the file is missing`);
       assert.equal(readFileSync(join(ROOT, dir, "NOTICE"), "utf8"), rootNotice, `${dir}/NOTICE differs from the root NOTICE`);
+      // Apache-2.0 §4(a): derived portions must ship with a copy of that license.
+      assert.ok(pkg.files?.includes("LICENSE-APACHE-2.0"), `${dir}: ships NOTICE, so "files" must list LICENSE-APACHE-2.0`);
+      assert.equal(readFileSync(join(ROOT, dir, "LICENSE-APACHE-2.0"), "utf8"), readFileSync(join(ROOT, "LICENSE-APACHE-2.0"), "utf8"), `${dir}/LICENSE-APACHE-2.0 differs from the root copy`);
     } else {
       assert.ok(!existsSync(join(ROOT, dir, "NOTICE")), `${dir}/NOTICE exists but "files" does not ship it`);
     }
@@ -127,7 +130,7 @@ test("published package metadata is complete and consistent", () => {
     assert.equal(pkg.repository?.url, "git+https://github.com/johnhenry/laya-js.git", `${where}: repository.url`);
     assert.ok(pkg.homepage, `${where}: homepage`);
     assert.equal(pkg.publishConfig?.access, "public", `${where}: publishConfig.access must be public (scoped packages default to private)`);
-    assert.equal(pkg.license, PLATFORM_PACKAGES.has(dir) ? "MIT" : "Apache-2.0", `${where}: license`);
+    assert.equal(pkg.license, "MIT", `${where}: license`);
     assert.ok(pkg.version === "0.0.0" || /^\d+\.\d+\.\d+/.test(pkg.version), `${where}: version`);
     if (!PLATFORM_PACKAGES.has(dir)) {
       assert.ok(pkg.files?.includes("dist"), `${where}: "files" must include dist`);

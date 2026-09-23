@@ -275,5 +275,5 @@ own tensor library.
 
 ## License
 
-Apache-2.0 (see [LICENSE](LICENSE) and [NOTICE](NOTICE)).
+MIT (see [LICENSE](LICENSE)). Portions ported from laya-mlx and Laya are Apache-2.0: see [NOTICE](NOTICE) and [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0).
 `@johnhenry/backend-mlx-darwin-arm64` is MIT: it contains Apple's MLX binaries.
