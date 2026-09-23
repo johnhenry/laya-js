@@ -2,6 +2,26 @@
   "name": "@johnhenry/hf-cache",
   "version": "0.0.0",
   "description": "Resolve and cache Hugging Face Hub files: ~/.cache/huggingface layout on Node/Bun, Cache API/OPFS in browsers",
+  "keywords": [
+    "huggingface",
+    "hugging-face",
+    "hub",
+    "cache",
+    "download",
+    "models",
+    "browser",
+    "opfs"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/hf-cache",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/hf-cache"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -26,30 +46,23 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/hf-cache"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/hf-cache",
-  "dependencies": {
-    "@huggingface/hub": "^2.17.5"
   }
 }

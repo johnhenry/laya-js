@@ -1,10 +1,22 @@
 # @johnhenry/backend-cpu
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fbackend-cpu.svg)](https://www.npmjs.com/package/@johnhenry/backend-cpu)
+
 Pure-TypeScript f32 reference backend for
 [`@johnhenry/tensor-backend`](../tensor-backend). No native code, no WASM,
 no dependencies beyond the contract package: it runs anywhere JavaScript
 runs and is the numerical oracle the MLX and WebGPU backends are compared
 against.
+
+## Install
+
+```bash
+npm install @johnhenry/backend-cpu
+bun add @johnhenry/backend-cpu
+deno add jsr:@johnhenry/backend-cpu
+```
+
+Runs anywhere JavaScript runs: Node ≥ 24, Bun ≥ 1.2, Deno and browsers. No native code.
 
 ```ts
 import { createCpuBackend } from "@johnhenry/backend-cpu";
@@ -66,3 +78,14 @@ published checkpoints. Good for tests, parity checks and small models; use
 `npm test` (typecheck + node:test) and `npm run test:bun` run the shared
 conformance suite (`@johnhenry/tensor-backend/conformance`, MLX-generated
 cases) plus backend-specific tests.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Implements [`@johnhenry/tensor-backend`](https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend) and is the numerical reference the MLX and WebGPU backends are tested against.
+- [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya) depends on it as the always-available fallback.
+
+## License
+
+Apache-2.0.

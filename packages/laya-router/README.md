@@ -1,8 +1,20 @@
 # @johnhenry/laya-router
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Flaya-router.svg)](https://www.npmjs.com/package/@johnhenry/laya-router)
+
 Language and task routing across the three Laya checkpoints. This is a port of
 laya-mlx `router.py`: the same routing decisions and reasons, the same
 precedence and the same LRU residency, made async-safe.
+
+## Install
+
+```bash
+npm install @johnhenry/laya-router
+bun add @johnhenry/laya-router
+deno add jsr:@johnhenry/laya-router
+```
+
+Routing decisions (`route`) run anywhere; `predict`/`preload` load checkpoints through `@johnhenry/laya`, so they need its runtime (Node ≥ 24, Bun ≥ 1.2, or a browser with WebGPU/CPU).
 
 ```ts
 import { Router } from "@johnhenry/laya-router";
@@ -70,3 +82,13 @@ in use, and deferred disposal. Language detection is tested in
 - `DEFAULT_MODELS` points at the upstream PyTorch-trained bundle.
   `@johnhenry/laya` reads it through the upstream-name mapping, but only the
   `MLX_MODELS` repos were verified in this repository.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Loads checkpoints lazily with [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya)'s `load()` and routes with [`@johnhenry/langdetect-lite`](https://github.com/johnhenry/laya-js/tree/main/packages/langdetect-lite); [`@johnhenry/laya-cli`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-cli) exposes it as `laya predict --route`.
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

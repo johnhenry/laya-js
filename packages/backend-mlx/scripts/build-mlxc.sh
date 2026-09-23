@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Builds libmlxc.dylib (mlx-c) against the MLX 0.32.2 binaries from the
 # `mlx` / `mlx-metal` Python wheel and assembles a relocatable bundle in
-# prebuilds/darwin-arm64/:
+# $MLXC_OUT (default: prebuilds/darwin-arm64/ in this package):
 #   libmlxc.dylib  libmlx.dylib  libjaccl.dylib  mlx.metallib
+#   VERSION  SHA256SUMS  licenses/{MLX,mlx-c}.LICENSE
+# The same bundle is what @johnhenry/backend-mlx-darwin-arm64 ships in lib/
+# (`npm run build:native` there sets MLXC_OUT to its lib/ directory).
 # Only mlx-c's thin C++ wrapper is compiled (~10 s); MLX itself and its
 # Metal kernels are Apple's prebuilt wheel binaries.
 #
@@ -11,9 +14,10 @@
 #               Default: ask python3 (`python3 -c 'import mlx.core'`).
 #   MLXC_REF    mlx-c git ref (default: d4afaec, "Support MLX v0.32.2").
 #   SDKROOT     macOS SDK to link against (default: first SDK that links).
+#   MLXC_OUT    output directory (default: prebuilds/darwin-arm64).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-out="$here/prebuilds/darwin-arm64"
+out="${MLXC_OUT:-$here/prebuilds/darwin-arm64}"
 ref="${MLXC_REF:-d4afaec5cc5c9ffbe58f37fdc038b2faaedc6e70}"
 [[ "$(uname -s)/$(uname -m)" == "Darwin/arm64" ]] || { echo "macOS/arm64 only" >&2; exit 1; }
 command -v cmake >/dev/null || { echo "cmake is required (brew install cmake)" >&2; exit 1; }
@@ -58,4 +62,10 @@ install_name_tool -id @rpath/libmlxc.dylib "$out/libmlxc.dylib"
 install_name_tool -add_rpath @loader_path "$out/libmlx.dylib" 2>/dev/null || true
 codesign --force -s - "$out"/*.dylib >/dev/null 2>&1
 echo "mlx-c $ref + MLX $ver" > "$out/VERSION"
+# Apple's MIT notices travel with the binaries (MLX from the wheel, mlx-c from the checkout).
+mkdir -p "$out/licenses"
+cp "$work/src/LICENSE" "$out/licenses/mlx-c.LICENSE"
+lic="$(ls "$mlx"/../mlx-*.dist-info/licenses/LICENSE "$mlx"/../mlx-*.dist-info/LICENSE 2>/dev/null | head -1 || true)"
+if [[ -n "$lic" ]]; then cp "$lic" "$out/licenses/MLX.LICENSE"; else curl -fsSL "https://raw.githubusercontent.com/ml-explore/mlx/v$ver/LICENSE" -o "$out/licenses/MLX.LICENSE"; fi
+(cd "$out" && shasum -a 256 libmlxc.dylib libmlx.dylib libjaccl.dylib mlx.metallib > SHA256SUMS)
 echo "built $out:"; ls -la "$out"

@@ -1,9 +1,27 @@
 # @johnhenry/laya
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Flaya.svg)](https://www.npmjs.com/package/@johnhenry/laya)
+
 Laya typed decisions (choice / score / noul) in JavaScript: load a Laya
 checkpoint and answer questions about a state, on **native MLX** (Node/Bun on
 Apple Silicon), **WebGPU** (browsers; Node/Bun via Dawn) or the pure-TS **CPU**
 reference. Port of laya-mlx `Agent` / `load` (`agent.py`, `shortlist.py`).
+
+## Install
+
+```bash
+npm install @johnhenry/laya
+bun add @johnhenry/laya
+```
+
+Node ≥ 24 and Bun ≥ 1.2 (filesystem + Hugging Face disk cache, MLX, WebGPU via Dawn, CPU) and browsers (Cache API, WebGPU, CPU) through the `browser` condition. The CPU backend is included; add a GPU backend:
+
+```bash
+npm install @johnhenry/backend-mlx      # macOS on Apple Silicon (Node/Bun)
+npm install @johnhenry/backend-webgpu   # browsers, and Node/Bun via Dawn
+```
+
+Both are optional peer dependencies, loaded with a dynamic `import()` only when selected.
 
 ```ts
 import { load } from "@johnhenry/laya";
@@ -170,7 +188,6 @@ results. Measured on an Apple M2 (Node 24.9, macOS 27):
   \* ran concurrently with multilingual. Act logits reach |x| ≈ 4000, so
   their error is best read relatively.
 
-
 ## Limitations
 
 - `embed` does not run texts that tokenize to nothing; it returns the zero
@@ -191,3 +208,15 @@ results. Measured on an Apple M2 (Node 24.9, macOS 27):
   laya-core). Pass a list to keep your order.
 - WebGPU is much slower than MLX on an Apple M2: one short question takes
   about 250 ms, against 38 ms on MLX (see `@johnhenry/laya-cli` bench).
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- The tensor-free half lives in [`@johnhenry/laya-core`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-core); the encoder in [`@johnhenry/modernbert`](https://github.com/johnhenry/laya-js/tree/main/packages/modernbert); weights are read with [`@johnhenry/math-plus-safetensors`](https://github.com/johnhenry/math-plus/tree/main/packages/safetensors); files come from [`@johnhenry/hf-cache`](https://github.com/johnhenry/laya-js/tree/main/packages/hf-cache).
+- Backends: [`@johnhenry/backend-mlx`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx), [`@johnhenry/backend-webgpu`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-webgpu), [`@johnhenry/backend-cpu`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-cpu) (all implementing [`@johnhenry/tensor-backend`](https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend)).
+- On top: [`@johnhenry/laya-router`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-router), [`@johnhenry/laya-presets`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-presets), [`@johnhenry/laya-cli`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-cli).
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

@@ -2,6 +2,24 @@
   "name": "@johnhenry/backend-cpu",
   "version": "0.0.0",
   "description": "Pure-TypeScript f32 reference backend for @johnhenry/tensor-backend",
+  "keywords": [
+    "tensor",
+    "cpu",
+    "reference",
+    "transformer",
+    "inference",
+    "typescript"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-cpu",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/backend-cpu"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -11,30 +29,26 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  },
   "dependencies": {
     "@johnhenry/tensor-backend": "^0.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/backend-cpu"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=24.0.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-cpu"
+  }
 }

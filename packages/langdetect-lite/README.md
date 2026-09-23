@@ -1,8 +1,20 @@
 # @johnhenry/langdetect-lite
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Flangdetect-lite.svg)](https://www.npmjs.com/package/@johnhenry/langdetect-lite)
+
 Script and Latin-language detection with no model and no data files: a faithful port of
 laya-mlx `laya_mlx/lang.py` (from [Laya](https://github.com/NandhaKishorM/laya), Apache-2.0).
 It answers one routing question: *can an English-only checkpoint read this text?*
+
+## Install
+
+```bash
+npm install @johnhenry/langdetect-lite
+bun add @johnhenry/langdetect-lite
+deno add jsr:@johnhenry/langdetect-lite
+```
+
+Zero runtime dependencies beyond `@johnhenry/pyjson`; Node ≥ 24, Bun ≥ 1.2, Deno and browsers.
 
 ```js
 import { analyse, isEnglish, detectScript, guessLatinLanguage } from "@johnhenry/langdetect-lite";
@@ -51,3 +63,14 @@ as in Python).
   can disagree on characters added in different Unicode versions.
 - A state object's leaf order follows JavaScript key order (integer-like keys first), which
   only matters for the 4000-character truncation.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- [`@johnhenry/laya-router`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-router) calls `analyse()` to choose between the English and multilingual checkpoints.
+- Uses [`@johnhenry/pyjson`](https://github.com/johnhenry/laya-js/tree/main/packages/pyjson) for Python-identical number formatting in its reasons.
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

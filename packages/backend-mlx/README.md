@@ -1,5 +1,7 @@
 # @johnhenry/backend-mlx
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fbackend-mlx.svg)](https://www.npmjs.com/package/@johnhenry/backend-mlx)
+
 Native Apple Silicon backend for
 [`@johnhenry/tensor-backend`](../tensor-backend). It calls Apple's
 [mlx-c](https://github.com/ml-explore/mlx-c), the C API over
@@ -19,32 +21,48 @@ mlx.dispose(y);
 mlx.dispose(x);
 ```
 
-## Install requirements
+## Install
+
+```bash
+npm install @johnhenry/backend-mlx
+bun add @johnhenry/backend-mlx
+```
 
 - **macOS on Apple Silicon** (darwin/arm64) with Metal. Tested on macOS 27
-  with an M3 Max, Node 24.9 and Bun 1.2.17. On any other platform,
-  `createMlxBackend` throws and this package's tests skip.
-- **Node:** `koffi` 3.x must be installed. Bun needs nothing extra.
-- **libmlxc.dylib**, which sits next to `libmlx.dylib` and `mlx.metallib`.
-  The first path that exists wins:
-  1. `createMlxBackend({ libPath })`
-  2. `$LAYA_MLXC_LIB`
-  3. `prebuilds/darwin-arm64/` in this package. `npm run build:mlxc -w
-     @johnhenry/backend-mlx` builds this bundle in about 10 s. It compiles
-     mlx-c (commit `d4afaec`, "Support MLX v0.32.2") against the `mlx`
-     0.32.2 Python wheel, the same MLX that laya-mlx uses. This needs
-     `cmake`, a working macOS SDK and `pip install mlx==0.32.2` (or
-     `MLX_PY_DIR=…/site-packages/mlx`). The script finds an SDK that links.
-     Some Command Line Tools SDKs ship `.tbd` stubs that the linker rejects;
-     you can override the choice with `SDKROOT`.
-  4. `@nielspeter/mlx-ts-darwin-arm64` (npm). This uses MLX 0.32.1 with the
-     older mlx-c ABI.
-  5. Homebrew: `brew install mlx-c`.
+  (Apple M2), Node 24.9 and Bun 1.2.17. On any other platform the
+  package still installs, `createMlxBackend` throws, and its tests skip.
+- **Native libraries come with the install.** npm adds the optional
+  dependency [`@johnhenry/backend-mlx-darwin-arm64`](../backend-mlx-darwin-arm64)
+  on darwin/arm64 only (64 MB download, 207 MB unpacked: `libmlxc.dylib`,
+  Apple's `libmlx.dylib`, `libjaccl.dylib` and `mlx.metallib` from MLX
+  0.32.2, the same MLX that Python laya-mlx uses). `npm install
+  --omit=optional` skips it; then use one of the other sources below.
+- **Node** loads the libraries through [`koffi`](https://koffi.dev), also an
+  optional dependency (a prebuilt N-API addon; no compiler, no install
+  script). **Bun** uses the built-in `bun:ffi`. Deno is not supported yet.
 
-  `libCandidates()` lists every path that was tried, and `backend.info`
-  reports which library loaded and which ABI it has. At load time the
-  backend detects the two mlx-c ABIs that differ in the signatures it uses
-  (sdpa `force_fused`, compile-cache API).
+`libmlxc.dylib` is resolved at runtime, first match wins:
+
+1. `createMlxBackend({ libPath })`.
+2. `$LAYA_MLXC_PATH`: the dylib, or a directory containing it
+   (`$LAYA_MLXC_LIB` is a legacy alias). If it is set and the path does not
+   exist, `createMlxBackend` throws instead of falling back.
+3. The platform package `@johnhenry/backend-mlx-darwin-arm64` (`lib/`).
+4. A local build in this package, `prebuilds/darwin-arm64/`:
+   `npm run build:mlxc -w @johnhenry/backend-mlx` compiles mlx-c (commit
+   `d4afaec`, "Support MLX v0.32.2") against the `mlx` 0.32.2 Python wheel in
+   about 10 s. It needs `cmake`, a macOS SDK that links (the script probes;
+   override with `SDKROOT`) and `pip install mlx==0.32.2` (or
+   `MLX_PY_DIR=…/site-packages/mlx`). `scripts/build-mlxc.sh` ships in the
+   tarball.
+5. `@nielspeter/mlx-ts-darwin-arm64` (npm; MLX 0.32.1 with the older mlx-c
+   ABI).
+6. Homebrew: `brew install mlx-c`.
+
+`libCandidates()` lists every path that was tried, and `backend.info`
+reports which library loaded and which ABI it has. At load time the backend
+detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
+`force_fused`, compile-cache API).
 
 ## API
 
@@ -60,7 +78,8 @@ mlx.dispose(x);
   `flush`, `destroy`, `geglu`, `meanPool` and `compile`. Extras:
   `readSync(t)`, `memory()` (MLX active and peak bytes), `liveTensors()`
   and `info`.
-- `libCandidates()`, `resolveLib()` and `mlxPlatformSupported()`.
+- `libCandidates()`, `resolveLib()`, `mlxPlatformSupported()` and
+  `PLATFORM_PACKAGE` (the platform package's npm name).
 
 ## Behaviour
 
@@ -117,8 +136,10 @@ mlx.dispose(x);
 
 ## Performance
 
-Measurements are from an M3 Max on macOS 27, on a machine shared with other
-jobs, so expect about ±30% run-to-run noise. The scripts and their Python
+**Preliminary** (Apple M2, macOS 27; the development machine, which the
+binding-decision doc mislabels as an M3 Max), on a machine shared with other
+jobs, so expect about ±30% run-to-run noise. A separate benchmark document
+will supersede these numbers. The scripts and their Python
 twins are in `bench/`. The analysis is in
 [`docs/mlx-binding-decision.md`](../../docs/mlx-binding-decision.md).
 
@@ -143,8 +164,12 @@ is GPU time in the same libmlx that Python uses.
 ## Limitations
 
 - macOS/arm64 only.
-- A native library bundle is required, and this package ships none yet
-  (see Install).
+- The prebuilt bundle exists for darwin/arm64 only (there is no MLX for
+  other platforms). It pins MLX 0.32.2; a different MLX needs a local build
+  or `$LAYA_MLXC_PATH`.
+- mlx-c is 0.x and its C signatures change. About 60 symbols are bound by
+  hand and two ABI variants are detected; an unknown Homebrew mlx-c could
+  misalign arguments. Prefer the platform package.
 - There is no zero-copy weight upload (one copy per tensor).
 - `compile` is the identity on `device: "cpu"`, so the CPU device also has
   no fused GELU.
@@ -155,3 +180,16 @@ is GPU time in the same libmlx that Python uses.
   settled when it is returned.
 - Deno is untested: there is no `Deno.dlopen` adapter, although mlx-ts shows
   that one works.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Implements [`@johnhenry/tensor-backend`](https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend); the native libraries come from [`@johnhenry/backend-mlx-darwin-arm64`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx-darwin-arm64).
+- [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya) selects it first under `backend: "auto"` on Apple Silicon (optional peer dependency).
+- Parallel to [`@johnhenry/backend-webgpu`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-webgpu) (portable GPU) and [`@johnhenry/backend-cpu`](https://github.com/johnhenry/laya-js/tree/main/packages/backend-cpu) (reference).
+
+## License
+
+Apache-2.0. MLX and mlx-c are MIT, © Apple Inc.; their notices ship in the
+platform package (`NOTICE`, `lib/licenses/`).

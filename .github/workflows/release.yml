@@ -1,0 +1,173 @@
+name: Release
+
+# Skeleton mirroring math-plus's Changesets-driven release.yml, with three
+# deliberate deviations:
+#
+#   1. Trigger: workflow_dispatch ONLY (no push-to-main, no release event).
+#      Nothing has been published yet; the first publish is a human decision
+#      made in the Actions UI after the manual steps in AGENTS.md "Releases"
+#      (npm scope token, JSR trusted publishing, math-plus published first).
+#      When the first release is done, switch to the family standard
+#      (`on: release: types: [published]` + `push: tags: ["v*"]` +
+#      workflow_dispatch) or math-plus's push-to-main Changesets flow.
+#   2. A macOS job publishes the native platform package
+#      @johnhenry/backend-mlx-darwin-arm64 BEFORE the Changesets publish.
+#      It is outside npm workspaces (EBADPLATFORM), so `changeset publish`
+#      never sees it; its version is bumped by hand together with
+#      @johnhenry/backend-mlx (test/manifest-drift.test.ts enforces equality).
+#   3. `dry_run` input (default true): every publish step runs with
+#      --dry-run unless it is explicitly turned off.
+#
+# Retrying: every publish is guarded by an `npm view <pkg>@<version>`
+# pre-flight (npm) or is a no-op for existing versions (JSR), so "Re-run
+# failed jobs" is always safe.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (pack and report, publish nothing)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # version-bump commits and tags
+  pull-requests: write # the "Version Packages" PR
+  id-token: write # npm provenance attestation + JSR OIDC trusted publishing
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: macos-15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "mlx==0.32.2"
+
+      - name: Build + verify the native bundle
+        working-directory: packages/backend-mlx-darwin-arm64
+        run: npm run build:native && npm run verify
+
+      - name: Publish @johnhenry/backend-mlx-darwin-arm64 (idempotent)
+        working-directory: packages/backend-mlx-darwin-arm64
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          name=$(node -p "require('./package.json').name"); version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version is already on npm -- skipping"; exit 0
+          fi
+          if [ "$DRY_RUN" = "true" ]; then npm publish --dry-run --access public; else npm publish --provenance --access public; fi
+
+  release:
+    needs: native
+    runs-on: ubuntu-latest
+    # Secrets can't be referenced in `if:` directly, so surface it as env and
+    # gate the publish step on it -- the workflow stays green (and inert) until
+    # the token is configured, rather than failing with ENEEDAUTH.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # changesets needs history to diff against the base branch
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - run: npm ci
+
+      - name: Verify before publishing
+        run: |
+          node scripts/sync-jsr-configs.mjs --check
+          npm run typecheck
+          npm run build
+          npm test
+
+      - name: Dry run -- what would be published
+        if: inputs.dry_run
+        run: |
+          for dir in packages/*/; do
+            node -e "const p=require('./$dir/package.json'); process.exit(p.private || p.os ? 1 : 0)" || continue
+            (cd "$dir" && npm publish --dry-run --access public 2>&1 | grep -E "name:|version:|package size|total files")
+          done
+
+      - name: No NPM_TOKEN -- skipping release
+        if: ${{ !inputs.dry_run && env.NPM_TOKEN == '' }}
+        run: echo "::notice title=Release skipped::NPM_TOKEN is not configured, so nothing was versioned or published."
+
+      - name: Create version PR or publish
+        if: ${{ !inputs.dry_run && env.NPM_TOKEN != '' }}
+        uses: changesets/action@v1
+        with:
+          publish: npm run release
+          title: "chore: version packages"
+          commit: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+
+  jsr-release:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # JSR OIDC trusted publishing -- no token/secret needed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      # jsr.json is generated FROM package.json, never hand-edited.
+      - name: Sync jsr.json versions from package.json
+        run: node scripts/sync-jsr-configs.mjs
+
+      # Multi-pass until convergence (math-plus lesson: the alphabetical glob
+      # is not dependency-ordered). Packages kept off JSR have no jsr.json
+      # (see JSR_EXCLUDED in scripts/sync-jsr-configs.mjs). No-op until the
+      # @johnhenry scope on jsr.io trusts this repo for each package.
+      - name: Publish every JSR package
+        continue-on-error: true
+        run: |
+          for pass in 1 2 3; do
+            echo "== JSR publish pass $pass =="
+            failures=0
+            for f in packages/*/jsr.json; do
+              dir=$(dirname "$f")
+              echo "::group::jsr publish -- $dir (pass $pass)"
+              (cd "$dir" && npx --yes jsr publish --allow-slow-types --allow-dirty) || failures=$((failures+1))
+              echo "::endgroup::"
+            done
+            if [ "$failures" -eq 0 ]; then break; fi
+            echo "::warning title=JSR pass $pass::$failures package(s) not published this pass"
+          done

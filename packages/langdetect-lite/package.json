@@ -2,6 +2,24 @@
   "name": "@johnhenry/langdetect-lite",
   "version": "0.0.0",
   "description": "Dependency-free script and Latin-language detection (port of laya-mlx lang.py)",
+  "keywords": [
+    "language-detection",
+    "langdetect",
+    "script-detection",
+    "i18n",
+    "nlp",
+    "zero-dependency"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/langdetect-lite",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/langdetect-lite"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -11,33 +29,30 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md",
+    "NOTICE"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/langdetect-lite"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
   },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/langdetect-lite",
   "dependencies": {
     "@johnhenry/pyjson": "^0.0.0"
   },
   "devDependencies": {
     "@johnhenry/laya-fixtures": "^0.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

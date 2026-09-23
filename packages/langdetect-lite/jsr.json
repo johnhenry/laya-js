@@ -1,0 +1,18 @@
+{
+  "name": "@johnhenry/langdetect-lite",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "exports": "./src/index.ts",
+  "imports": {
+    "@johnhenry/pyjson": "jsr:@johnhenry/pyjson@^0.0.0"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "CHANGELOG.md",
+      "NOTICE",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}

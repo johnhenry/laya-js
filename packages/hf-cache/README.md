@@ -1,5 +1,7 @@
 # @johnhenry/hf-cache
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fhf-cache.svg)](https://www.npmjs.com/package/@johnhenry/hf-cache)
+
 Resolve and cache Hugging Face Hub files from JS.
 
 - **Node/Bun/Deno:** exactly the `huggingface_hub` cache layout
@@ -13,6 +15,16 @@ Resolve and cache Hugging Face Hub files from JS.
 
 No dependencies: plain `fetch` against `https://huggingface.co/{repo}/resolve/{revision}/{file}`
 and `/api/models/{repo}/revision/{revision}`.
+
+## Install
+
+```bash
+npm install @johnhenry/hf-cache
+bun add @johnhenry/hf-cache
+deno add jsr:@johnhenry/hf-cache
+```
+
+Node ≥ 24, Bun ≥ 1.2 and Deno use the `huggingface_hub` disk cache; browsers get the Cache API build through the `browser` export condition. No dependencies.
 
 ```js
 import { resolveFile, snapshot, fetchFile } from "@johnhenry/hf-cache";
@@ -119,3 +131,14 @@ CacheStorage, e.g. in tests or workers).
   `hf download` stored (skipped when the Hub is unreachable).
 - `browser.test.ts` runs the Cache API store against an in-memory
   CacheStorage.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya)'s `load()` resolves checkpoints through it (disk cache on Node/Bun, Cache API in browsers).
+- `resolveFile` returns a path (Node) and `fetchFile` a Blob; [`@johnhenry/math-plus-safetensors`](https://github.com/johnhenry/math-plus/tree/main/packages/safetensors)'s `openSafetensors` reads either lazily (header first, tensors on demand).
+
+## License
+
+Apache-2.0.

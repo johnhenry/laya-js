@@ -1,0 +1,20 @@
+@johnhenry/backend-mlx-darwin-arm64
+Copyright 2026 John Henry
+
+This package redistributes, unmodified except for dynamic-linker metadata
+(install_name_tool rpath/id changes and an ad-hoc code signature), binaries
+from Apple's MLX and mlx-c projects, both MIT License, Copyright © 2023-2024
+Apple Inc.:
+
+  lib/libmlx.dylib, lib/libjaccl.dylib, lib/mlx.metallib
+      from the `mlx` / `mlx-metal` 0.32.2 Python wheels
+      https://github.com/ml-explore/mlx
+  lib/libmlxc.dylib
+      built from mlx-c commit d4afaec5cc5c9ffbe58f37fdc038b2faaedc6e70
+      ("Support MLX v0.32.2") against the wheel above
+      https://github.com/ml-explore/mlx-c
+
+The original license texts ship in lib/licenses/MLX.LICENSE and
+lib/licenses/mlx-c.LICENSE. lib/VERSION records the exact sources and
+lib/SHA256SUMS the file hashes. This is not an official Apple release and
+no endorsement is implied.

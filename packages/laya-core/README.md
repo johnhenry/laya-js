@@ -1,5 +1,7 @@
 # @johnhenry/laya-core
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Flaya-core.svg)](https://www.npmjs.com/package/@johnhenry/laya-core)
+
 Tensor-free Laya typed-decision logic: question validation, prompt construction,
 tokenization, collation, calibration and result formatting. It is the part of
 laya-mlx (`common.py`, `agent.py`, `prepared.py`, `tokenizer.py`) that does not touch a
@@ -8,6 +10,16 @@ tensor, ported so that a backend only has to run the encoder: given the same log
 
 Works in browsers (no `fs` in the main entry); `@johnhenry/laya-core/node` adds a
 filesystem loader.
+
+## Install
+
+```bash
+npm install @johnhenry/laya-core
+bun add @johnhenry/laya-core
+deno add jsr:@johnhenry/laya-core
+```
+
+Node ≥ 24, Bun ≥ 1.2, Deno and browsers (the main entry has no `node:` imports; `@johnhenry/laya-core/node` adds the filesystem loader).
 
 ```js
 import { prepare, collate, resolveTemperatures, formatResults, chunkItems } from "@johnhenry/laya-core";
@@ -95,3 +107,14 @@ change token ids. `loadTokenizer` applies these fixes, driven by `tokenizer.json
   results, not bit-identical ones.
 - `f32 exp`/`log` are `Math.fround(Math.exp(x))`; numpy uses the platform `expf`/`logf`.
   These agree except in astronomically rare double-rounding cases.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya) adds the tensor half (weights, encoder, heads) on any [`@johnhenry/tensor-backend`](https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend) backend and calls `prepare`/`collate`/`formatResults` from here.
+- [`@johnhenry/laya-presets`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-presets) builds question sets from its types; [`@johnhenry/pyjson`](https://github.com/johnhenry/laya-js/tree/main/packages/pyjson) makes prompts byte-identical to Python.
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

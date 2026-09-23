@@ -1,0 +1,14 @@
+{
+  "name": "@johnhenry/pyjson",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "exports": "./src/index.ts",
+  "publish": {
+    "include": [
+      "src",
+      "CHANGELOG.md",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}

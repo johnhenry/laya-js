@@ -7,5 +7,17 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": []
+  "ignore": [
+    "@johnhenry/laya-fixtures",
+    "@johnhenry/example-snake-terminal",
+    "@johnhenry/example-snake-web",
+    "@johnhenry/example-web-playground"
+  ],
+  "privatePackages": {
+    "version": false,
+    "tag": false
+  },
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  }
 }

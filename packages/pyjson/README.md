@@ -1,10 +1,22 @@
 # @johnhenry/pyjson
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fpyjson.svg)](https://www.npmjs.com/package/@johnhenry/pyjson)
+
 Byte-identical CPython `json.dumps`, `repr(float)`, `"%g"` and `round()` for JavaScript.
 Zero dependencies; works in browsers, Node, Bun and Deno.
 
 Use it when a JavaScript port must produce exactly the strings or numbers a Python
 program would, e.g. prompts that embed `json.dumps(...)` output before tokenization.
+
+## Install
+
+```bash
+npm install @johnhenry/pyjson
+bun add @johnhenry/pyjson
+deno add jsr:@johnhenry/pyjson
+```
+
+Zero dependencies: Node ≥ 24, Bun ≥ 1.2, Deno and browsers.
 
 ```js
 import { dumps, loads, pyFloat, pyRound, pyFloatRepr, pyFormatG } from "@johnhenry/pyjson";
@@ -59,3 +71,13 @@ CPython on 20,000 random values during development).
 - No `indent`, `default=` or `skipkeys` options.
 - `loads` is a strict JSON parser plus the `NaN`/`Infinity`/`-Infinity` tokens; it does not
   accept Python's other extensions.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Used by [`@johnhenry/laya-core`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-core), [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya), [`@johnhenry/laya-router`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-router) and [`@johnhenry/laya-cli`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-cli) wherever output must match Python byte for byte.
+
+## License
+
+Apache-2.0.

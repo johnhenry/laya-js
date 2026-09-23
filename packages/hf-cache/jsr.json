@@ -1,0 +1,18 @@
+{
+  "name": "@johnhenry/hf-cache",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts",
+    "./node": "./src/index.ts"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "CHANGELOG.md",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}

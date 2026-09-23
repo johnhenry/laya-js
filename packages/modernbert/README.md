@@ -1,10 +1,22 @@
 # @johnhenry/modernbert
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fmodernbert.svg)](https://www.npmjs.com/package/@johnhenry/modernbert)
+
 ModernBERT / mmBERT encoder on any
 [`@johnhenry/tensor-backend`](../tensor-backend) backend (CPU reference,
 native MLX, WebGPU), loading safetensors checkpoints. A port of the encoder
 in laya-mlx `laya_mlx/model.py` (which follows Hugging Face ModernBERT);
 it uses only backend ops, so every backend gets it for free.
+
+## Install
+
+```bash
+npm install @johnhenry/modernbert
+bun add @johnhenry/modernbert
+deno add jsr:@johnhenry/modernbert
+```
+
+Backend-agnostic: runs wherever the backend you pass runs (Node ≥ 24, Bun ≥ 1.2, Deno, browsers). To read checkpoints as in the example, also install `@johnhenry/math-plus-safetensors` (not a dependency: `safetensorsWeights` accepts any reader with the same structural shape).
 
 ```ts
 import { readFile } from "node:fs/promises";
@@ -73,3 +85,14 @@ absolute (checked once with Python-tokenized ids; see Limitations).
 - No tokenizer here: callers pass ids. The `embeddings` fixture test in
   `@johnhenry/laya` is skipped until a JS tokenizer exists.
 - Sliding-window layers use a dense `[B,1,L,L]` bool mask (B·L² bytes).
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Runs on any [`@johnhenry/tensor-backend`](https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend) backend; [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya) builds its decision heads on top of it.
+- Weights come from [`@johnhenry/math-plus-safetensors`](https://github.com/johnhenry/math-plus/tree/main/packages/safetensors) (structural `SafetensorsFile` type, so any reader with the same shape works).
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

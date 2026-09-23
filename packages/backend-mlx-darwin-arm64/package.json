@@ -1,0 +1,65 @@
+{
+  "name": "@johnhenry/backend-mlx-darwin-arm64",
+  "version": "0.0.0",
+  "description": "Prebuilt MLX runtime for @johnhenry/backend-mlx on macOS/Apple Silicon: libmlxc, libmlx, libjaccl and mlx.metallib (Apple MLX 0.32.2, mlx-c v0.6)",
+  "keywords": [
+    "mlx",
+    "mlx-c",
+    "apple-silicon",
+    "metal",
+    "prebuilt",
+    "native"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx-darwin-arm64",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/backend-mlx-darwin-arm64"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib/libmlxc.dylib",
+    "lib/libmlx.dylib",
+    "lib/libjaccl.dylib",
+    "lib/mlx.metallib",
+    "lib/VERSION",
+    "lib/SHA256SUMS",
+    "lib/licenses",
+    "scripts/verify-bundle.mjs",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:native": "MLXC_OUT=\"$PWD/lib\" bash ../backend-mlx/scripts/build-mlxc.sh",
+    "verify": "node scripts/verify-bundle.mjs",
+    "prepack": "node scripts/verify-bundle.mjs"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

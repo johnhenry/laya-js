@@ -2,7 +2,7 @@
   "name": "@johnhenry/example-snake-terminal",
   "version": "0.0.0",
   "private": true,
-  "description": "Snake driven by real Laya predictions in the terminal (Node/Bun; MLX, WebGPU or CPU) \u2014 port of the laya-mlx Snake demo",
+  "description": "Snake driven by real Laya predictions in the terminal (Node/Bun; MLX, WebGPU or CPU) — port of the laya-mlx Snake demo",
   "type": "module",
   "exports": {
     "./core": "./src/core/index.ts"
@@ -28,7 +28,8 @@
   },
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
   },
   "devDependencies": {
     "@johnhenry/backend-webgpu": "^0.0.0"

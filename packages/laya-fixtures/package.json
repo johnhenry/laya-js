@@ -1,9 +1,23 @@
 {
   "name": "@johnhenry/laya-fixtures",
   "version": "0.0.0",
-  "description": "Golden fixtures generated from Python laya-mlx (private)",
-  "type": "module",
   "private": true,
+  "description": "Golden fixtures generated from Python laya-mlx (private)",
+  "keywords": [
+    "laya",
+    "fixtures"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-fixtures",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/laya-fixtures"
+  },
+  "type": "module",
   "exports": {
     ".": {
       "source": "./src/index.ts",
@@ -16,21 +30,15 @@
     "dist",
     "data"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/laya-fixtures"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/laya-fixtures"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  }
 }

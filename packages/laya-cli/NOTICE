@@ -1,0 +1,8 @@
+laya-js
+Copyright 2026 John Henry
+
+This product ports logic from laya-mlx (https://github.com/mizorewww/laya-mlx),
+an Apache-2.0 MLX port of Laya by Convai Innovations
+(https://github.com/NandhaKishorM/laya), also Apache-2.0.
+Model weights are not distributed with this code; they are downloaded from
+Hugging Face under their own licenses.

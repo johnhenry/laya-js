@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede an in-flight run when new commits land on the same ref -- the
+# whole family shares this block so a rapid push sequence never queues N
+# redundant runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything except native MLX, on Linux. MLX suites skip (no darwin/arm64);
+  # WebGPU suites run only if Dawn finds an adapter on the runner, and skip
+  # cleanly otherwise. The "skips are expected" step below makes that visible
+  # instead of silently green.
+  pure:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines.node >=24.0.0 -- test the floor version directly rather
+        # than a matrix of now-unsupported older majors.
+        node-version: [24]
+        # engines.bun >=1.2.0
+        bun-version: ["1.2"]
+        runtime: [node, bun]
+    name: ${{ matrix.runtime }} (node ${{ matrix.node-version }}, bun ${{ matrix.bun-version }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      # Bun is needed by both legs: the examples' bundles are built with `bun build`.
+      - name: Set up Bun ${{ matrix.bun-version }}
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+
+      - run: npm ci
+
+      - name: jsr.json files are in sync with package.json
+        run: node scripts/sync-jsr-configs.mjs --check
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: Tests (Node)
+        if: matrix.runtime == 'node'
+        run: npm test 2>&1 | tee test.log
+
+      - name: Tests (Bun)
+        if: matrix.runtime == 'bun'
+        run: npm run test:bun 2>&1 | tee test.log
+
+      - name: Report skipped suites (MLX is expected to skip on Linux)
+        if: always()
+        run: |
+          grep -E "^# (skip|skipped|todo) [1-9]|^ *[0-9]+ skip" test.log || echo "no skipped tests"
+
+  # Native MLX on Apple Silicon: builds libmlxc with scripts/build-mlxc.sh
+  # (mlx-c against the MLX 0.32.2 wheel), assembles the
+  # @johnhenry/backend-mlx-darwin-arm64 bundle, and runs the backend-mlx
+  # conformance suite plus the tiny-checkpoint laya parity on Node and Bun.
+  # Slow and allowed to be: it is not a required check. GitHub's hosted
+  # macOS arm64 runners are VMs; if Metal is unavailable there the MLX
+  # tests fail at device creation -- check the first run's log before
+  # trusting this job, and move it to a self-hosted Apple Silicon runner if so.
+  mlx-macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the MLX wheel the bundle is built against
+        run: pip install "mlx==0.32.2"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Build the native bundle (mlx-c + MLX 0.32.2) into the platform package
+        working-directory: packages/backend-mlx-darwin-arm64
+        run: npm run build:native && npm run verify
+
+      - name: backend-mlx tests (Node, then Bun) against the bundle -- must not skip
+        env:
+          LAYA_MLXC_PATH: ${{ github.workspace }}/packages/backend-mlx-darwin-arm64/lib
+        run: |
+          npm test -w @johnhenry/backend-mlx 2>&1 | tee mlx-node.log
+          npm run test:bun -w @johnhenry/backend-mlx 2>&1 | tee mlx-bun.log
+          if grep -E "^# skipped [1-9]|^ *[1-9][0-9]* skip" mlx-node.log mlx-bun.log; then
+            echo "::error::MLX suites skipped on the macOS runner"; exit 1
+          fi
+
+      - name: laya parity on MLX (tiny checkpoint)
+        env:
+          LAYA_MLXC_PATH: ${{ github.workspace }}/packages/backend-mlx-darwin-arm64/lib
+        run: npm test -w @johnhenry/laya
+
+      - name: Pack the platform package (prepack re-verifies SHA256SUMS)
+        working-directory: packages/backend-mlx-darwin-arm64
+        run: npm pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-mlx-darwin-arm64
+          path: packages/backend-mlx-darwin-arm64/*.tgz
+          if-no-files-found: error
+          retention-days: 7

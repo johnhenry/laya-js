@@ -1,7 +1,19 @@
 # @johnhenry/laya-presets
 
+[![npm version](https://img.shields.io/npm/v/%40johnhenry%2Flaya-presets.svg)](https://www.npmjs.com/package/@johnhenry/laya-presets)
+
 Ready-made Laya question sets and email cleaning: a port of laya-mlx
 `presets.py` and `email.py`, with the exact question text.
+
+## Install
+
+```bash
+npm install @johnhenry/laya-presets
+bun add @johnhenry/laya-presets
+deno add jsr:@johnhenry/laya-presets
+```
+
+Pure data and string functions: Node ≥ 24, Bun ≥ 1.2, Deno and browsers.
 
 ```ts
 import { emailQuestions, emailState } from "@johnhenry/laya-presets";
@@ -38,3 +50,13 @@ const result = await agent.predict(state, emailQuestions());
   on a few control characters (U+001C–U+001F count as whitespace in Python but
   not in JS).
 - `maxChars` and the 40-character signature limit count code points, as Python does.
+
+## Family
+
+Part of **[laya-js](https://github.com/johnhenry/laya-js#readme)**, Laya typed decisions in JavaScript on MLX, WebGPU and CPU — see its [package map](https://github.com/johnhenry/laya-js#which-package-do-i-want) and [results](https://github.com/johnhenry/laya-js#results).
+
+- Produces question objects for [`@johnhenry/laya`](https://github.com/johnhenry/laya-js/tree/main/packages/laya)'s `predict()` and [`@johnhenry/laya-router`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-router); types come from [`@johnhenry/laya-core`](https://github.com/johnhenry/laya-js/tree/main/packages/laya-core).
+
+## License
+
+Apache-2.0. Ports logic from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0); see [NOTICE](NOTICE).

@@ -2,6 +2,25 @@
   "name": "@johnhenry/tensor-backend",
   "version": "0.0.0",
   "description": "Backend-agnostic tensor op interface and conformance suite for transformer inference (MLX, WebGPU, CPU)",
+  "keywords": [
+    "tensor",
+    "backend",
+    "interface",
+    "conformance",
+    "transformer",
+    "mlx",
+    "webgpu"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/tensor-backend"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -17,27 +36,23 @@
   },
   "files": [
     "dist",
-    "fixtures"
+    "src",
+    "fixtures",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/tensor-backend"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/tensor-backend"
+  }
 }

@@ -2,6 +2,29 @@
   "name": "@johnhenry/backend-mlx",
   "version": "0.0.0",
   "description": "Native Apple Silicon MLX backend (mlx-c over FFI) for @johnhenry/tensor-backend on Node and Bun",
+  "keywords": [
+    "mlx",
+    "apple-silicon",
+    "metal",
+    "gpu",
+    "ffi",
+    "mlx-c",
+    "tensor",
+    "transformer",
+    "inference",
+    "bun",
+    "koffi"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/backend-mlx"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -12,36 +35,35 @@
   },
   "files": [
     "dist",
-    "scripts"
+    "src",
+    "scripts/build-mlxc.sh",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/",
     "build:mlxc": "bash scripts/build-mlxc.sh",
     "bench": "node --conditions=source bench/ops.bench.ts"
   },
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  },
   "dependencies": {
     "@johnhenry/tensor-backend": "^0.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/backend-mlx"
+  "optionalDependencies": {
+    "@johnhenry/backend-mlx-darwin-arm64": "^0.0.0",
+    "koffi": "^3.3.1"
   },
-  "license": "Apache-2.0",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=24.0.0"
+  "devDependencies": {
+    "@nielspeter/mlx-ts": "^0.5.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx",
-  "devDependencies": {
-    "@nielspeter/mlx-ts": "^0.5.0",
-    "koffi": "^3.3.1"
   }
 }

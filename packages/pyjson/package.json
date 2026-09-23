@@ -2,6 +2,25 @@
   "name": "@johnhenry/pyjson",
   "version": "0.0.0",
   "description": "Python-compatible json.dumps and round-half-even for JavaScript",
+  "keywords": [
+    "python",
+    "json",
+    "json.dumps",
+    "repr",
+    "round-half-even",
+    "bankers-rounding",
+    "compat"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/pyjson",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/pyjson"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -11,30 +30,26 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/pyjson"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  },
+  "devDependencies": {
+    "@johnhenry/laya-fixtures": "^0.0.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/pyjson",
-  "devDependencies": {
-    "@johnhenry/laya-fixtures": "^0.0.0"
   }
 }

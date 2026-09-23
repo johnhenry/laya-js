@@ -2,6 +2,25 @@
   "name": "@johnhenry/modernbert",
   "version": "0.0.0",
   "description": "ModernBERT / mmBERT encoder on any @johnhenry/tensor-backend, loading safetensors",
+  "keywords": [
+    "modernbert",
+    "mmbert",
+    "bert",
+    "encoder",
+    "transformer",
+    "safetensors",
+    "inference"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/modernbert",
+  "bugs": {
+    "url": "https://github.com/johnhenry/laya-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnhenry/laya-js.git",
+    "directory": "packages/modernbert"
+  },
   "type": "module",
   "exports": {
     ".": {
@@ -11,35 +30,32 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md",
+    "NOTICE"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/rewrite-dts-extensions.mjs dist",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/"
   },
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  },
   "dependencies": {
-    "@johnhenry/tensor-backend": "^0.0.0",
-    "@johnhenry/math-plus-safetensors": "file:../../../@johnhenry/math-plus.worktrees/f16-safetensors/packages/safetensors"
+    "@johnhenry/tensor-backend": "^0.0.0"
   },
   "devDependencies": {
+    "@johnhenry/math-plus-safetensors": "^0.0.0",
     "@johnhenry/backend-cpu": "^0.0.0",
     "@johnhenry/laya-fixtures": "^0.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/johnhenry/laya-js.git",
-    "directory": "packages/modernbert"
-  },
-  "license": "Apache-2.0",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=24.0.0"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
-  },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/modernbert"
+  }
 }
