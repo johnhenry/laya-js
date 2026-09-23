@@ -11,13 +11,16 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
-    "test:bun": "bun --conditions=source test test/"
+    "test:bun": "bun --conditions=source test test/",
+    "build:mlxc": "bash scripts/build-mlxc.sh",
+    "bench": "node --conditions=source bench/ops.bench.ts"
   },
   "dependencies": {
     "@johnhenry/tensor-backend": "^0.0.0"
