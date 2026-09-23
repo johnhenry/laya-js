@@ -20,7 +20,8 @@
     "test:bun": "bun --conditions=source test test/"
   },
   "dependencies": {
-    "@johnhenry/tensor-backend": "^0.0.0"
+    "@johnhenry/tensor-backend": "^0.0.0",
+    "webgpu": "^0.6.1"
   },
   "repository": {
     "type": "git",

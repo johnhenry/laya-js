@@ -20,6 +20,7 @@
     "test:bun": "bun --conditions=source test test/"
   },
   "dependencies": {
+    "@huggingface/tokenizers": "^0.2.0",
     "@johnhenry/pyjson": "^0.0.0"
   },
   "repository": {

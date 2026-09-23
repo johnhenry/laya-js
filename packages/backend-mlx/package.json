@@ -36,5 +36,9 @@
     "access": "public",
     "provenance": true
   },
-  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx"
+  "homepage": "https://github.com/johnhenry/laya-js/tree/main/packages/backend-mlx",
+  "devDependencies": {
+    "@nielspeter/mlx-ts": "^0.5.0",
+    "koffi": "^3.3.1"
+  }
 }
