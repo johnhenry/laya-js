@@ -128,9 +128,15 @@ export class Runtime {
   sleepWhileWaiting = false;
   /** Only sleep when the expected wait exceeds this many milliseconds (default 3). */
   sleepThresholdMs = 3;
-  /** Dispatches enqueued since the last readback, and the last observed wait (ms) per count. */
+  /**
+   * Work enqueued since the last readback: dispatch count and total workgroups.
+   * The last observed wait (ms) is remembered per (count, workgroups) pair --
+   * the workgroup total scales with input size, so a small input after a large
+   * one with the same op graph no longer inherits the large one's wait.
+   */
   private sinceRead = 0;
-  private waitMs = new Map<number, number>();
+  private sinceReadGroups = 0;
+  private waitMs = new Map<string, number>();
   /** The in-progress pre-read sleep: concurrent reads wait on it too before polling. */
   private sleeping: Promise<void> | null = null;
 
@@ -192,6 +198,11 @@ export class Runtime {
     while (i > 0 && list[i - 1]!.id < id) i--;
     list.splice(i, 0, { buffer, id, releasedEpoch: this.epoch });
     this.stats.pooledBytes += bytes;
+  }
+
+  /** The remembered readback-wait estimates (ms), keyed "dispatches:workgroups". For tests and diagnostics. */
+  get waitEstimates(): ReadonlyMap<string, number> {
+    return this.waitMs;
   }
 
   /** Destroys all pooled (idle) buffers. */
@@ -329,6 +340,7 @@ export class Runtime {
     }
     this.pendingDispatches++;
     this.sinceRead++;
+    this.sinceReadGroups += groups[0] * (groups[1] ?? 1) * (groups[2] ?? 1);
     this.stats.dispatches++;
     if (this.pendingDispatches >= (this.busy ? this.maxBatch : this.firstBatch)) this.flush();
   }
@@ -376,12 +388,14 @@ export class Runtime {
       this.stagingPool.get(size)?.pop() ?? this.device.createBuffer({ size, usage: USAGE_MAP_READ | USAGE_COPY_DST });
     const copyBytes = (bytes + 3) & ~3;
     const t0 = performance.now();
-    const work = this.sinceRead;
+    const work = this.sinceRead ? `${this.sinceRead}:${this.sinceReadGroups}` : null;
     this.sinceRead = 0;
+    this.sinceReadGroups = 0;
     this.flush((enc) => enc.copyBufferToBuffer(src, srcOffset, staging, 0, copyBytes));
     const est = work ? this.waitMs.get(work) : undefined;
-    // Sleep ~80% of the last wait for the same amount of work; poll only for the rest.
-    // Self-correcting: an overestimate shrinks by 20% per read.
+    // Sleep ~80% of the last wait for the same work (same dispatch count AND the
+    // same total workgroups, i.e. the same shapes); poll only for the rest. A new
+    // shape polls once and then has its own estimate.
     if (this.sleepWhileWaiting && est !== undefined && est > this.sleepThresholdMs) {
       const p = new Promise<void>((r) => setTimeout(r, est * 0.8 - (performance.now() - t0)));
       this.sleeping = p;

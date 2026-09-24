@@ -60,7 +60,9 @@ gpu.destroy();
     backend silently uses the portable kernels. `hasSubgroupMatrix` says which.
   - `sleepWhileWaiting` (default: true under Dawn, false for `navigator.gpu`):
     before awaiting a readback, sleep (`setTimeout`) for ~80% of the time the
-    same amount of work took last time. Dawn-node resolves `mapAsync` by
+    same work (same dispatch count and total workgroups, i.e. the same
+    shapes) took last time; a new shape polls once, then has its own
+    estimate. Dawn-node resolves `mapAsync` by
     polling in a busy loop (≈100% of a core under Bun, ≈33% under Node);
     this cuts process CPU during a forward by ~4× at the same latency.
   - `sleepThresholdMs = 3`: sleep only when the expected wait is longer
@@ -429,14 +431,6 @@ L=512 18.8 s.
 
 ## Limitations
 
-- `sleepWhileWaiting` (the default on Node/Bun) keys its expected wait by the
-  number of dispatches since the last readback, not by shape. So after a
-  large batch, a smaller batch with the same graph sleeps for most of the
-  large batch's GPU time. The estimate shrinks by 20% per read, so it takes
-  about 15 calls to recover. Measured on the English checkpoint: B=3 L=16
-  took 594, 476, 374, … 136 ms after B=3 L=512, against 31 ms steady state.
-  Until this is fixed, pass `sleepWhileWaiting: false` when shapes vary a
-  lot between calls. Browsers (`navigator.gpu`) are not affected.
 - Every op is its own dispatch. Encoding costs about 5 µs of CPU per
   dispatch (pass commands; bind groups are cached), about 2.4 ms per
   ModernBERT-large forward, overlapped with GPU work. WebGPU has no reusable
