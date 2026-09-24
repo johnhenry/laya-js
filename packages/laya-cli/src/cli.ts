@@ -10,6 +10,7 @@ import { loads } from "@johnhenry/pyjson";
 import { load, type LayaAgent, type LoadOptions } from "@johnhenry/laya";
 import { MLX_MODELS, Router } from "@johnhenry/laya-router";
 import { dumpsIndent, pythonFloats } from "./format.ts";
+import { quantizeCheckpoint } from "./quantize.ts";
 
 export const VERSION = "0.0.0";
 const DEFAULT_MODEL = "aac6fef/laya-mlx";
@@ -19,6 +20,7 @@ const USAGE = `usage: laya <command> [options]
 commands:
   predict   answer questions about a state, print the result as JSON
   bench     P50/P95 latency of one short question and 50-question throughput
+  quantize  write a q8/q4 copy of a checkpoint (smaller download, dequantized on load)
 
 predict options:
   --model <id|path>        Hub repo or local checkpoint (default ${DEFAULT_MODEL})
@@ -34,6 +36,15 @@ common options:
   --dtype f16|f32          (default f16; cpu always computes in f32)
   --device gpu|cpu         MLX device (default gpu)
   --subfolder <dir>  --revision <rev>  --batch-size <n>  --offline
+
+quantize options:
+  --model <id|path> --bits 8|4 --out <dir>   (required: bits and out)
+  --group-size <n|row>     values per scale along the input dim (default 64)
+  --no-embeddings          keep the token embedding in float16
+  --exclude <regex>        keep matching tensors in float (repeatable)
+  --q8 <regex>             with --bits 4: store matching tensors as q8 (repeatable)
+  --no-refine              q4: plain min/max ranges (skip the least-squares refit)
+  --force                  overwrite <dir>/model.safetensors
 
 bench options:
   --iterations <n> (default 50)  --warmup <n> (default 5)  --batch-size <n> (default 64)  --json
@@ -57,11 +68,19 @@ const OPTIONS = {
   iterations: { type: "string" },
   warmup: { type: "string" },
   json: { type: "boolean" },
+  bits: { type: "string" },
+  out: { type: "string" },
+  "group-size": { type: "string" },
+  "no-embeddings": { type: "boolean" },
+  exclude: { type: "string", multiple: true },
+  q8: { type: "string", multiple: true },
+  "no-refine": { type: "boolean" },
+  force: { type: "boolean" },
   help: { type: "boolean", short: "h" },
   version: { type: "boolean" },
 } as const;
 
-type Args = { [K in keyof typeof OPTIONS]?: (typeof OPTIONS)[K]["type"] extends "boolean" ? boolean : string };
+type Args = { [K in keyof typeof OPTIONS]?: (typeof OPTIONS)[K] extends { multiple: true } ? string[] : (typeof OPTIONS)[K]["type"] extends "boolean" ? boolean : string };
 
 export class UsageError extends Error {}
 
@@ -239,6 +258,46 @@ async function bench(a: Args, out: (s: string) => void): Promise<void> {
   }
 }
 
+// ------------------------------------------------------------------ quantize
+async function quantize(a: Args, out: (s: string) => void, err: (s: string) => void): Promise<void> {
+  if (a.bits !== "8" && a.bits !== "4") throw new UsageError("quantize needs --bits 8 or --bits 4");
+  if (!a.out) throw new UsageError("quantize needs --out <dir>");
+  let groupSize: number | "row" | undefined;
+  if (a["group-size"] !== undefined) groupSize = a["group-size"] === "row" ? "row" : int(a["group-size"], "group-size", 0);
+  const regexps = (flag: "exclude" | "q8") => {
+    try {
+      return a[flag]?.map((r) => new RegExp(r));
+    } catch (e) {
+      throw new UsageError(`--${flag}: ${(e as Error).message}`);
+    }
+  };
+  const exclude = regexps("exclude"), q8 = regexps("q8");
+  if (q8 && a.bits !== "4") throw new UsageError("--q8 only applies to --bits 4");
+  const model = a.model ?? DEFAULT_MODEL;
+  const t0 = performance.now();
+  err(`quantizing ${model} to q${a.bits} …\n`);
+  const r = await quantizeCheckpoint(model, {
+    bits: a.bits === "8" ? 8 : 4,
+    out: a.out,
+    ...(groupSize !== undefined ? { groupSize } : {}),
+    ...(a["no-embeddings"] ? { embeddings: false } : {}),
+    ...(exclude ? { exclude } : {}),
+    ...(q8 ? { q8 } : {}),
+    ...(a["no-refine"] ? { refine: false } : {}),
+    ...(a.force ? { force: true } : {}),
+    ...(a.subfolder ? { subfolder: a.subfolder } : {}),
+    ...(a.revision ? { revision: a.revision } : {}),
+    ...(a.offline ? { offline: true } : {}),
+  });
+  const mb = (n: number) => (n / 1e6).toFixed(1) + " MB";
+  out(
+    `${r.out}/model.safetensors: ${r.scheme} (group ${r.groupSize}), ${mb(r.bytesIn)} → ${mb(r.bytesOut)} ` +
+      `(${((100 * r.bytesOut) / r.bytesIn).toFixed(1)}%), ${r.quantized.length} tensors quantized` +
+      `${r.promoted.length ? ` (${r.promoted.length} at q8)` : ""}, ${r.kept.length} kept, ` +
+      `${((performance.now() - t0) / 1000).toFixed(1)} s\n`,
+  );
+}
+
 /** Runs the CLI; returns the exit code. */
 export async function main(argv: string[], io: { out?: (s: string) => void; err?: (s: string) => void } = {}): Promise<number> {
   const out = io.out ?? ((s: string) => void process.stdout.write(s));
@@ -258,6 +317,7 @@ export async function main(argv: string[], io: { out?: (s: string) => void; err?
     if (rest.length) throw new UsageError(`unexpected arguments: ${rest.join(" ")}`);
     if (command === "predict") await predict(a, out);
     else if (command === "bench") await bench(a, out);
+    else if (command === "quantize") await quantize(a, out, err);
     else throw new UsageError(`unknown command ${command}`);
     return 0;
   } catch (e) {

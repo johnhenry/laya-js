@@ -12,6 +12,7 @@ import type { AgentConfig } from "@johnhenry/laya-core";
 import { loadTokenizerFromDir } from "@johnhenry/laya-core/node";
 import { snapshot } from "@johnhenry/hf-cache";
 import { readWeights } from "./weights.ts";
+import { readCheckpointFromUrl } from "./url.ts";
 import { CHECKPOINT_FILES, REQUIRED_FILES, checkSubfolder, type BackendRequest, type Checkpoint, type ResolveOptions } from "./common.ts";
 
 export const RUNTIME = "node" as const;
@@ -54,6 +55,11 @@ export async function resolveModelDir(modelIdOrPath: string, opts: ResolveOption
 
 /** Everything `createAgent` needs, read from disk. */
 export async function readCheckpoint(modelIdOrPath: string, opts: ResolveOptions = {}): Promise<Checkpoint> {
+  // an http(s) base URL: fetched (Range requests for the weights), never cached
+  if (/^https?:\/\//i.test(String(modelIdOrPath))) {
+    const sub = opts.subfolder ? checkSubfolder(opts.subfolder) : "";
+    return readCheckpointFromUrl(String(modelIdOrPath), sub ? sub + "/" : "", opts);
+  }
   const dir = await resolveModelDir(modelIdOrPath, opts);
   const json = async (name: string) => JSON.parse(await readFile(join(dir, name), "utf8")) as Record<string, unknown>;
   const [agentConfig, encoderConfig, tokenizer] = await Promise.all([
@@ -66,7 +72,7 @@ export async function readCheckpoint(modelIdOrPath: string, opts: ResolveOptions
     agentConfig: agentConfig as AgentConfig,
     encoderConfig,
     tokenizer,
-    weights: () => readWeights(join(dir, "model.safetensors")),
+    weights: (w) => readWeights(join(dir, "model.safetensors"), w?.dtype ? { dtype: w.dtype } : undefined),
   };
 }
 

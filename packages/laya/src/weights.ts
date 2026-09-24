@@ -5,6 +5,7 @@
 import { openSafetensors, type LazySafetensors } from "@johnhenry/math-plus-safetensors";
 import type { HostTensor, DType } from "@johnhenry/tensor-backend";
 import type { WeightGetter } from "@johnhenry/modernbert";
+import { dequantizeMatrix, groupQuantized, quantMetadata, type DequantDtype, type QuantizedMatrix, type RawTensor } from "./quant.ts";
 
 type Source = Parameters<typeof openSafetensors>[0];
 type OpenOptions = Parameters<typeof openSafetensors>[1];
@@ -63,13 +64,65 @@ export async function readAllTensors(file: LazySafetensors): Promise<Map<string,
 }
 
 /**
- * Opens a safetensors checkpoint (path in Node/Bun, URL, Blob/File, bytes)
- * and returns a consuming weight source for `createAgent`.
+ * A consuming weight source over a quantized checkpoint's tensors
+ * (see quant.ts). Quantized matrices stay packed until asked for; `get`
+ * dequantizes one to `dtype` (f16 or f32) and forgets the packed copy, so
+ * at most one dequantized tensor exists on the host at a time (the backend
+ * upload follows immediately). Plain tensors are handed out as-is.
  */
-export async function readWeights(source: Source, options?: OpenOptions): Promise<ConsumingWeights> {
-  const file = await openSafetensors(source, options);
+export function dequantizingWeights(tensors: ReadonlyMap<string, RawTensor>, dtype: DequantDtype = "f16"): ConsumingWeights {
+  const { quantized, plain } = groupQuantized(tensors);
+  const q = new Map<string, QuantizedMatrix>();
+  for (const [name, m] of quantized) {
+    const key = sanitizeName(name);
+    if (q.has(key)) throw new Error(`Duplicate checkpoint parameter after conversion: ${key}`);
+    q.set(key, m);
+  }
+  const hosts = new Map<string, HostTensor>();
+  for (const [name, t] of plain) {
+    const d = DTYPES[t.dtype];
+    if (!d) throw new TypeError(`laya: unsupported safetensors dtype ${t.dtype} for ${name}`);
+    hosts.set(name, { dtype: d, shape: [...t.shape], data: t.data as HostTensor["data"] });
+  }
+  const rest = consumingWeights(hosts);
+  const plainKeys = new Set(rest.remaining());
+  for (const key of q.keys()) if (plainKeys.has(key)) throw new Error(`Duplicate checkpoint parameter after conversion: ${key}`);
+  return {
+    get: (name) => {
+      const m = q.get(name);
+      if (!m) return rest.get(name);
+      q.delete(name);
+      return { dtype, shape: [m.rows, m.cols], data: dequantizeMatrix(m, dtype) };
+    },
+    remaining: () => [...q.keys(), ...rest.remaining()],
+  };
+}
+
+/** Options for `readWeights`: safetensors open options plus the dequantization target. */
+export type ReadWeightsOptions = OpenOptions & {
+  /** Values dtype for dequantized tensors of a quantized checkpoint (default "f16"; ignored otherwise). */
+  dtype?: DequantDtype;
+};
+
+/**
+ * Opens a safetensors checkpoint (path in Node/Bun, URL, Blob/File, bytes)
+ * and returns a consuming weight source for `createAgent`. Quantized
+ * checkpoints (`laya_quant` in the file's metadata, see quant.ts) are
+ * detected and dequantized tensor by tensor as the model asks for them.
+ */
+export async function readWeights(source: Source, options?: ReadWeightsOptions): Promise<ConsumingWeights> {
+  const { dtype, ...open } = options ?? {};
+  const file = await openSafetensors(source, open);
   try {
-    return consumingWeights(await readAllTensors(file));
+    const meta = quantMetadata(file.metadata);
+    if (!meta) return consumingWeights(await readAllTensors(file));
+    const views = await file.readMany();
+    const raw = new Map<string, RawTensor>();
+    for (const [name, data] of views) {
+      const info = file.info(name);
+      raw.set(name, { dtype: info.dtype, shape: info.shape, data });
+    }
+    return dequantizingWeights(raw, dtype ?? "f16");
   } finally {
     await file.close();
   }
