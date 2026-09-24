@@ -111,11 +111,102 @@ layers are about 85% of GPU time.
 - Every run had 0 deaths.
 - Shield interventions match Python seed for seed.
 
+## Quantized checkpoints
+
+`laya quantize` writes q8 (8-bit symmetric, groups of 64) and q4 (4-bit
+affine, groups of 64, least-squares refit) copies of a checkpoint. `load()`
+dequantizes them to f16 on the host while loading, so on the GPU the model is
+the fp16 model with slightly perturbed weights. The format is described in
+[QUANTIZATION.md](QUANTIZATION.md).
+
+The parity run is the same 16 cases / 63 questions as above, measured against
+Python `result_fp16`:
+`LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> npm test -w @johnhenry/laya`.
+`<dir>` holds `<model>-q8` and `<model>-q4` written by `laya quantize`. The
+test requires q8 to keep every choice and argmax, with max |Δp| ≤ 0.05. q4 is
+reported, not asserted.
+
+| checkpoint | backend | choices | argmax | max \|Δp\| vs fp16 | worst field |
+|---|---|---|---|---|---|
+| english q8 | mlx f16 | 22/22 | 63/63 | 4.3e-2 | hi q2 confidence 0.638 vs 0.681 |
+| english q8 | webgpu f16 | 22/22 | 63/63 | 4.7e-2 | hi q2 confidence 0.634 vs 0.681 |
+| multilingual q8 | mlx f16 | 22/22 | 63/63 | 3.8e-2 | structured score confidence 0.528 vs 0.490 |
+| typed-decisions q8 | mlx f16 | 22/22 | 63/63 | 2.2e-2 | mask_literals q1 score 0.890 vs 0.868 |
+| english q4 | mlx f16 | 21/22 | 58/63 | 0.43 | hi q2 noul 0.248 vs 0.681 |
+| english q4 | webgpu f16 | 21/22 | 58/63 | 0.43 | hi q2 noul 0.250 vs 0.681 |
+| multilingual q4 | mlx f16 | 21/22 | 62/63 | 0.60 | hi q0 confidence 0.313 vs 0.910 |
+| typed-decisions q4 | mlx f16 | 22/22 | 58/63 | 0.25 | ru q1 score 1.034 vs 0.783 |
+
+**Which q4 argmaxes change** (mlx f16). "Margin" is the fp16 gap between the
+top two probabilities, or 2·|noul − 0.5| for noul questions.
+
+| checkpoint | case / question | type | fp16 → q4 | fp16 margin |
+|---|---|---|---|---|
+| english | hi q2 | noul | true → false | 0.36 |
+| english | ja q0 | choice | other → sales | 0.05 |
+| english | ja q1 | score | 1 → 0 | 0.01 |
+| english | ru q1 | score | 0 → 1 | 0.16 |
+| english | empty_state q1 | score | 1 → 2 | 0.05 |
+| multilingual | empty_state q0 | choice | other → billing | 0.22 |
+| typed-decisions | zh q1, de q1, ja q1 | score | 1 → 2 | 0.19, 0.13, 0.11 |
+| typed-decisions | long q1 | score | 2 → 1 | 0.07 |
+| typed-decisions | es q2 | noul | false → true | 0.03 |
+
+Most flips are close calls, or non-English text given to the English-only
+checkpoints. Two are not: English `hi q2` (margin 0.36) and multilingual
+`empty_state q0` (margin 0.22). q4 genuinely changes the model.
+
+**Sizes** of `model.safetensors`, raw and as served compressed. The
+compressed columns use `gzip -9` and `brotli -q 9 -w 24`.
+
+| checkpoint | fp16 | q8 | q4 | q8 gzip / brotli | q4 gzip / brotli |
+|---|---:|---:|---:|---:|---:|
+| english | 842.6 MB (gzip 777.8, br 774.5) | 434.8 MB (51.6%) | 237.5 MB (28.2%) | 413.6 / 411.8 MB | 221.0 / 219.4 MB |
+| multilingual | 643.8 MB (gzip 594.2, br 591.7) | 332.2 MB (51.6%) | 181.5 MB (28.2%) | 315.9 / 314.6 MB | 168.8 / 167.4 MB |
+| typed-decisions | 842.6 MB (same as english) | 434.8 MB (51.6%) | 237.5 MB (28.2%) | 413.6 / 411.8 MB | 221.0 / 219.4 MB |
+
+- **Transfer compression adds only about 5–8%**, for fp16 and quantized files
+  alike. The size win comes from the format.
+- **Load time** is 0.6–1.3 s for q8/q4 on MLX, against 0.4 s for fp16. The
+  host dequantization takes the extra time.
+- **Inference speed and GPU memory** are the same as fp16, because the
+  weights are dequantized on load.
+- **Converter time:** about 10 s for q8 and 30 s for q4 on the M2, with a
+  peak of about 1.1 GB.
+
+**What was tried for q4.** Every variant below was measured on English, mlx
+f16. Keeping some tensors at q8 (`--q8`) costs 3–7 percentage points of size
+and does not rescue the flips:
+
+| variant | size | choices | argmax | max \|Δp\| |
+|---|---:|---|---|---|
+| q4 (default) | 28.2% | 21/22 | 58/63 | 0.43 |
+| q4, group 32 | 31.3% | 21/22 | 56/63 | 0.43 |
+| q4, attention at q8 | 35.2% | 22/22 | 57/63 | 0.28 |
+| q4, mlp.Wo at q8 | 32.4% | 20/22 | 56/63 | 0.44 |
+| q4, embedding at q8 | 31.1% | 21/22 | 57/63 | 0.52 |
+| q4, first and last 4 layers at q8 | 33.6% | 22/22 | 59/63 | 0.33 |
+| q4, head/scorer kept fp16 (no refit) | 32.7% | 21/22 | 57/63 | 0.41 |
+
+For q8, groups of 64 are needed. Per-row scales lose 2 argmaxes on English
+(61/63, max |Δp| 0.14), because a single outlier in a row coarsens the whole
+row.
+
+**Recommendation.**
+- **q8** is a safe drop-in: half the download, identical decisions on this
+  set, and probabilities within 0.05.
+- **q4** is a quarter of the download, but it flips 1–5 of 63 argmaxes per
+  checkpoint and moves probabilities by up to 0.6. Use it only where a
+  smaller download matters more than matching the fp16 model. Validate it on
+  your own questions first.
+
 ## Reproducing
 
 ```bash
 # parity (all 3 checkpoints must be in the HF cache; the fixtures record which snapshot)
 LAYA_REAL=1 npm test -w @johnhenry/laya
+# quantized checkpoints (write them first: laya quantize --model <repo> --bits 8|4 --out <dir>/<model>-q8|q4)
+LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> LAYA_REAL_BACKENDS=mlx-f16 npm test -w @johnhenry/laya
 # latency grid (takes a lock on ~/gpu.lock; about 10 minutes because of cooldowns)
 node --conditions=source packages/backend-webgpu/bench/grid.ts
 # regenerate golden fixtures from Python

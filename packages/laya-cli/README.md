@@ -60,6 +60,39 @@ measures end-to-end `predict` wall time after `--warmup` (5) runs, over
 for 50 questions (50 000 / mean ms), load time, peak MLX allocation, and
 backend/device/host details. `--json` prints the report as JSON.
 
+## `laya quantize`
+
+`laya quantize --model <repo|dir> --bits 8|4 --out <dir>` writes a q8 or q4
+copy of a checkpoint as a complete checkpoint directory:
+- `model.safetensors`;
+- configs, tokenizer, `LICENSE` and `NOTICE`, copied from the source;
+- a `README.md` saying the copy is derived from the Apache-2.0 Laya checkpoint.
+
+`load()` from `@johnhenry/laya` reads the result from a directory, a Hub repo
+or any URL, and dequantizes it while loading. q8 halves the download and q4
+cuts it to about 28%. Accuracy and sizes for the three published checkpoints
+are in [docs/RESULTS.md](https://github.com/johnhenry/laya-js/blob/main/docs/RESULTS.md#quantized-checkpoints),
+and the format is described in [docs/QUANTIZATION.md](https://github.com/johnhenry/laya-js/blob/main/docs/QUANTIZATION.md).
+
+```bash
+laya quantize --model aac6fef/laya-mlx --bits 8 --out ./laya-mlx-q8
+laya quantize --model aac6fef/laya-multilingual-mlx --bits 4 --out ./laya-multilingual-q4
+```
+
+| flag | |
+|---|---|
+| `--bits 8\|4` | required |
+| `--out <dir>` | required; an existing `model.safetensors` there is refused without `--force` |
+| `--group-size <n\|row>` | values per scale along the input dimension (default 64) |
+| `--no-embeddings` | keep the token embedding in float |
+| `--exclude <regex>` | keep matching tensors in float (repeatable) |
+| `--q8 <regex>` | with `--bits 4`: store matching tensors as q8 (repeatable) |
+| `--no-refine` | q4: plain min/max ranges instead of the least-squares refit |
+| `--offline`, `--revision`, `--subfolder` | as for `predict` |
+
+Quantizing the English checkpoint takes about 10 s (q8) or 30 s (q4), and
+peaks at about 1.1 GB of memory.
+
 ## Running from a checkout
 
 `bin/laya.js` runs `dist/bin.js` when the package is built. In a workspace
@@ -72,6 +105,8 @@ both work.
 
 - `--state` that happens to be valid JSON (for example `123` or `"quoted"`)
   is parsed as JSON. Use `--state-file` or `@file` to be explicit.
+- `laya quantize` output is for laya-js only: the Python laya-mlx runtime
+  cannot read quantized files. It reads a Hub repo or a local directory, not a URL.
 - There is no `convert` command (laya-mlx `convert` writes MLX checkpoints;
   use the Python tool).
 

@@ -8,6 +8,10 @@
  *   f16 vs Python result_fp16: within 0.02, identical choices.
  * `embed` is compared with the Python `embed_fn_from_agent` vectors (f32: 1e-3 rel).
  * CPU (≈60 s per case): LAYA_REAL_CPU=1 adds one small English case on cpu f32.
+ * Quantized checkpoints: LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> loads
+ *   <dir>/<model>-q8 (written by `laya quantize`) instead of the Hub repo and
+ *   compares with the same float references: q8 must keep every choice and
+ *   argmax with max |Δp| ≤ 0.05; q4 is reported only (it may flip close calls).
  * Take ~/gpu.lock around this run (AGENTS.md rule 6).
  */
 // @ts-ignore -- bun types are not installed
@@ -25,6 +29,9 @@ const models = (env.LAYA_REAL_MODELS ?? MODELS.join(",")).split(",") as ModelNam
 const CONFIGS = ["mlx-f32", "mlx-f16", "webgpu-f32", "webgpu-f16"] as const;
 const configs = (env.LAYA_REAL_BACKENDS ?? CONFIGS.join(",")).split(",");
 const HOURS = 3600_000;
+const quants = env.LAYA_REAL_QUANT ? env.LAYA_REAL_QUANT.split(",") : [""];
+const quantDir = env.LAYA_REAL_QUANT_DIR ?? "";
+if (enabled && env.LAYA_REAL_QUANT && !quantDir) throw new Error("LAYA_REAL_QUANT needs LAYA_REAL_QUANT_DIR (the parent of <model>-q8 / <model>-q4)");
 
 interface Cmp {
   questions: number;
@@ -87,14 +94,17 @@ async function unavailable(name: "mlx" | "webgpu"): Promise<string | false> {
 const skipOf: Record<string, string | false> = enabled ? { mlx: await unavailable("mlx"), webgpu: await unavailable("webgpu") } : {};
 
 for (const m of models) {
-  for (const cfg of configs) {
+  for (const quant of quants) for (const cfg of configs) {
     const [backend, dtype] = cfg.split("-") as ["mlx" | "webgpu", "f32" | "f16"];
     const tol = dtype === "f32" ? 1e-4 : 0.02;
-    const name = `real ${m} on ${backend} ${dtype}: 63 questions vs Python result_${dtype === "f32" ? "fp32" : "fp16"} (≤ ${tol}, identical choices)`;
+    const label = quant ? `${m} ${quant}` : m;
+    const ref = `Python result_${dtype === "f32" ? "fp32" : "fp16"}`;
+    const bar = quant === "q4" ? "reported only" : quant === "q8" ? "≤ 0.05, identical choices and argmax" : `≤ ${tol}, identical choices`;
+    const name = `real ${label} on ${backend} ${dtype}: 63 questions vs ${ref} (${bar})`;
     test(name, async () => {
       const fx = fixtures.get(m)!;
       const t0 = performance.now();
-      const agent = await load(REPOS[m], { offline: true, backend, dtype, warn: () => {} });
+      const agent = await load(quant ? `${quantDir}/${m}-${quant}` : REPOS[m], { offline: true, backend, dtype, warn: () => {} });
       const loadMs = performance.now() - t0;
       const cmp: Cmp = { questions: 0, choiceAgree: 0, choiceTotal: 0, exact: 0, argmaxAgree: 0, maxAbs: 0, worst: "" };
       const t1 = performance.now();
@@ -120,11 +130,18 @@ for (const m of models) {
         }
         const runMs = performance.now() - t1;
         const line =
-          `| ${m} | ${backend} ${dtype} | ${cmp.choiceAgree}/${cmp.choiceTotal} | ${cmp.argmaxAgree}/${cmp.questions} | ${cmp.exact}/${cmp.questions} | ` +
+          `| ${label} | ${backend} ${dtype} | ${cmp.choiceAgree}/${cmp.choiceTotal} | ${cmp.argmaxAgree}/${cmp.questions} | ${cmp.exact}/${cmp.questions} | ` +
           `${cmp.maxAbs.toExponential(2)} | ${Number.isNaN(embRel) ? "—" : embRel.toExponential(2)} | ${(loadMs / 1000).toFixed(1)} s | ${(runMs / 1000).toFixed(1)} s |`;
         matrix.push(line);
         console.log(line + (cmp.worst ? `\n    worst: ${cmp.worst}` : ""));
         assert.equal(cmp.questions, 63);
+        if (quant === "q4") return; // reported, not asserted
+        if (quant === "q8") {
+          assert.equal(cmp.choiceAgree, cmp.choiceTotal, "choice agreement");
+          assert.equal(cmp.argmaxAgree, cmp.questions, "argmax agreement");
+          assert.ok(cmp.maxAbs <= 0.05, `max |Δ| ${cmp.maxAbs} > 0.05 (${cmp.worst})`);
+          return;
+        }
         assert.equal(cmp.choiceAgree, cmp.choiceTotal, "choice agreement");
         if (dtype === "f32") assert.equal(cmp.argmaxAgree, cmp.questions, "argmax agreement");
         assert.ok(cmp.maxAbs <= tol, `max |Δ| ${cmp.maxAbs} > ${tol} (${cmp.worst})`);

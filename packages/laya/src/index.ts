@@ -13,7 +13,26 @@ export {
   type ShortlistMeta,
   type ShortlistOptions,
 } from "./shortlist.ts";
-export { readWeights, consumingWeights, readAllTensors, sanitizeName, type ConsumingWeights } from "./weights.ts";
+export { readWeights, consumingWeights, dequantizingWeights, readAllTensors, sanitizeName, type ConsumingWeights, type ReadWeightsOptions } from "./weights.ts";
+export {
+  quantizeMatrix,
+  dequantizeMatrix,
+  quantizeSafetensors,
+  quantMetadata,
+  shouldQuantize,
+  bitsOf,
+  groupQuantized,
+  QUANT_FORMAT_VERSION,
+  DEFAULT_GROUP_SIZE,
+  type DequantDtype,
+  type QuantBits,
+  type QuantMetadata,
+  type QuantScheme,
+  type QuantizeOptions,
+  type QuantizeReport,
+  type QuantizedMatrix,
+  type RawTensor,
+} from "./quant.ts";
 export { loadDecisionModel, DecisionModel, type DecisionForwardOptions, type DecisionWeights, type ForwardInputs, type HeadLayerWeights, type LoadDecisionModelOptions } from "./model.ts";
 export { CHECKPOINT_FILES, REQUIRED_FILES, type BackendName, type BackendRequest, type Checkpoint, type ProgressInfo } from "./common.ts";
 export { createBackend, readCheckpoint, RUNTIME } from "#io";

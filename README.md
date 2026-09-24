@@ -182,6 +182,8 @@ checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 `LAYA_REAL=1 npm test -w @johnhenry/laya` (details in the
 [laya README](./packages/laya/README.md#parity)).
 
+**Quantized checkpoints.** `laya quantize --bits 8|4` writes smaller copies that `load()` dequantizes on load. q8 halves the download (english 843 → 435 MB, multilingual 644 → 332 MB) and keeps 63/63 argmax on all three checkpoints (max |Δp| ≤ 0.047 vs fp16). q4 cuts it to 28% (238 / 182 MB) but changes 1–5 of 63 argmaxes per checkpoint. See [docs/RESULTS.md](./docs/RESULTS.md#quantized-checkpoints) and [docs/QUANTIZATION.md](./docs/QUANTIZATION.md).
+
 **Speed on an Apple M2 (fanless).** English checkpoint, f16, median forward-pass time with a cold GPU. The full grid, the thermal caveat and Snake numbers are in [docs/RESULTS.md](./docs/RESULTS.md).
 
 | tokens (B = 1) | 33 | 93 | 256 | 512 |
