@@ -1,7 +1,8 @@
 /**
  * Thin, runtime-neutral binding to the subset of mlx-c this backend uses.
  *
- * - Bun: `bun:ffi` (built in). Node: `koffi` (prebuilt N-API addon).
+ * - Bun: `bun:ffi` (built in). Deno: `Deno.dlopen` (built in; needs
+ *   `--allow-ffi`). Node: `koffi` (prebuilt N-API addon).
  * - Every mlx-c handle (`mlx_array`, `mlx_stream`, `mlx_vector_array`,
  *   `mlx_closure`) is a one-pointer struct passed by value, which on arm64 is
  *   ABI-identical to passing the pointer itself, so handles cross as JS
@@ -16,7 +17,9 @@
  */
 import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
+// Created lazily: only the Bun/Node loaders need it, and createRequire throws
+// for a non-file module URL (Deno importing this package from JSR over https).
+const require = (id: string) => createRequire(import.meta.url)(id);
 
 type ArgT = "h" | "buf" | "i32" | "bool" | "f32" | "usize" | "optf";
 type RetT = "h" | "i32" | "usize" | "void";
@@ -132,7 +135,7 @@ export type Native = { [K in keyof typeof SYMBOLS]: Fn } & {
   cumsum(res: number, a: number, axis: number, reverse: boolean, inclusive: boolean, stream: number): number;
   /** mlx-c ≥ 0.6 (MLX 0.32.2) added `bool force_fused` to sdpa. */
   readonly sdpaForceFused: boolean;
-  readonly runtime: "bun" | "node";
+  readonly runtime: "bun" | "deno" | "node";
   readonly libPath: string;
   /** Address of a typed array's first byte (the array must stay alive). */
   addressOf(a: ArrayBufferView): number;
@@ -143,6 +146,18 @@ export type Native = { [K in keyof typeof SYMBOLS]: Fn } & {
 };
 
 const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+const denoNs = (): DenoFfi | undefined => (globalThis as { Deno?: DenoFfi }).Deno;
+
+/** The slice of the `Deno` namespace this loader uses (typed locally: tsc here has no Deno lib). */
+interface DenoFfi {
+  dlopen(path: string, symbols: Record<string, { parameters: string[]; result: string; optional?: boolean }>): {
+    symbols: Record<string, Fn | null>;
+    close(): void;
+  };
+  UnsafeCallback: new (def: { parameters: string[]; result: string }, fn: Fn) => { pointer: unknown; close(): void };
+  UnsafePointer: { of(a: ArrayBufferView): unknown; value(p: unknown): number | bigint };
+  UnsafePointerView: { getCString(p: unknown): string };
+}
 
 let lastError: string | null = null;
 
@@ -201,6 +216,58 @@ function openBun(path: string): Native {
   }) as unknown as Native;
 }
 
+function openDeno(path: string): Native {
+  const D = denoNs()!;
+  // Handles cross as `usize` (JS number | bigint), not `pointer` (opaque objects),
+  // so the backend's numeric handle arithmetic is identical on every runtime.
+  const T: Record<string, string> = { h: "usize", buf: "buffer", i32: "i32", bool: "bool", f32: "f32", usize: "usize", optf: "u64", void: "void" };
+  const probeLib = D.dlopen(path, { mlx_compile_cache_new: { parameters: [], result: "usize", optional: true } });
+  const probe = probeLib.symbols.mlx_compile_cache_new != null;
+  probeLib.close();
+  const specs: Record<string, Sym> = { ...SYMBOLS, ...(probe ? ABI_NEW : ABI_OLD), mlx_fast_scaled_dot_product_attention: probe ? SDPA_NEW : SDPA_OLD };
+  const defs: Record<string, { parameters: string[]; result: string }> = {};
+  for (const [k, s] of Object.entries(specs)) defs[k] = { parameters: s.args.map((a) => T[a]!), result: T[s.ret]! };
+  const lib = D.dlopen(path, defs);
+  const out: Record<string, unknown> = {};
+  for (const [k, s] of Object.entries(specs)) {
+    const fn = lib.symbols[k]!;
+    out[k] = s.ret === "h" || s.ret === "usize" ? (...a: unknown[]) => Number(fn(...a)) : fn;
+  }
+  const addr = (p: unknown): number => (p == null ? 0 : Number(D.UnsafePointer.value(p)));
+  // Callbacks are only ever invoked synchronously on the JS thread (from inside
+  // an mlx-c call), which Deno.UnsafeCallback supports without `threadSafe`.
+  // They are never `ref()`ed, so they do not keep the event loop alive.
+  const keep: unknown[] = [lib];
+  const errCb = new D.UnsafeCallback({ parameters: ["pointer", "pointer"], result: "void" }, (msg: unknown) => {
+    try {
+      lastError = msg ? D.UnsafePointerView.getCString(msg) : "unknown mlx-c error";
+    } catch {
+      lastError = "mlx-c error (message not decodable)";
+    }
+  });
+  keep.push(errCb);
+  (out.mlx_set_error_handler as Fn)(addr(errCb.pointer), 0, 0);
+  return Object.assign(out, {
+    sdpaForceFused: probe,
+    runtime: "deno" as const,
+    libPath: path,
+    _keep: keep,
+    addressOf: (a: ArrayBufferView) => addr(D.UnsafePointer.of(a)),
+    takeError: () => {
+      const e = lastError;
+      lastError = null;
+      return e;
+    },
+    closureTrampoline(fn: (res: number, input: number, payload: number) => number) {
+      const cb = new D.UnsafeCallback({ parameters: ["usize", "usize", "usize"], result: "i32" }, (r: number | bigint, i: number | bigint, p: number | bigint) =>
+        fn(Number(r), Number(i), Number(p)),
+      );
+      keep.push(cb);
+      return addr(cb.pointer);
+    },
+  }) as unknown as Native;
+}
+
 function openNode(path: string): Native {
   const koffi = require("koffi");
   const T: Record<string, string> = { h: "uintptr_t", buf: "void *", i32: "int32_t", bool: "bool", f32: "float", usize: "size_t", optf: "uint64_t", void: "void" };
@@ -251,7 +318,7 @@ const cache = new Map<string, Native>();
 export function openNative(path: string): Native {
   let n = cache.get(path);
   if (!n) {
-    n = isBun ? openBun(path) : openNode(path);
+    n = isBun ? openBun(path) : denoNs() ? openDeno(path) : openNode(path);
     const raw = n as unknown as Record<string, Fn>;
     // mlx-c >= 0.6 renamed mlx_cumsum(res, a, axis, ...) to mlx_cumsum_axis(..., optional dtype, s).
     n.cumsum = n.sdpaForceFused
@@ -270,6 +337,11 @@ export function openNative(path: string): Native {
  * avoids this with an atexit hook calling compile_clear_cache; so do we.
  */
 function installExitHook(n: Native): void {
+  const g = globalThis as { addEventListener?(ev: string, fn: () => void): void };
+  if (denoNs() && g.addEventListener) {
+    g.addEventListener("unload", () => clearCompileCache(n));
+    return;
+  }
   const proc = (globalThis as { process?: { on?(ev: string, fn: () => void): void } }).process;
   proc?.on?.("exit", () => clearCompileCache(n));
 }

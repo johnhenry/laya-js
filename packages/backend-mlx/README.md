@@ -6,8 +6,8 @@ Native Apple Silicon backend for
 [`@johnhenry/tensor-backend`](../tensor-backend). It calls Apple's
 [mlx-c](https://github.com/ml-explore/mlx-c), the C API over
 [MLX](https://github.com/ml-explore/mlx), through FFI. There is no C or C++
-of our own. Bun uses the built-in `bun:ffi`, and Node 24+ uses the prebuilt
-[`koffi`](https://koffi.dev) addon. MLX runs on the Metal GPU, which is the
+of our own. Bun uses the built-in `bun:ffi`, Deno 2 the built-in
+`Deno.dlopen`, and Node 24+ the prebuilt [`koffi`](https://koffi.dev) addon. MLX runs on the Metal GPU, which is the
 default, or on the CPU.
 
 ```ts
@@ -26,6 +26,7 @@ mlx.dispose(x);
 ```bash
 npm install @johnhenry/backend-mlx
 bun add @johnhenry/backend-mlx
+deno add jsr:@johnhenry/backend-mlx npm:@johnhenry/backend-mlx-darwin-arm64
 ```
 
 - **macOS on Apple Silicon** (darwin/arm64) with Metal. Tested on macOS 27
@@ -39,7 +40,14 @@ bun add @johnhenry/backend-mlx
   --omit=optional` skips it; then use one of the other sources below.
 - **Node** loads the libraries through [`koffi`](https://koffi.dev), also an
   optional dependency (a prebuilt N-API addon; no compiler, no install
-  script). **Bun** uses the built-in `bun:ffi`. Deno is not supported yet.
+  script). **Bun** uses the built-in `bun:ffi`.
+- **Deno 2** uses the built-in `Deno.dlopen` and needs `--allow-ffi` (plus
+  `--allow-read` and `--allow-env` to locate the library). From JSR, add the
+  platform package yourself (`deno add npm:@johnhenry/backend-mlx-darwin-arm64`):
+  Deno finds it in `node_modules` or, without one, in its npm cache. Tested
+  on Deno 2.9.7: the conformance suite (f32/f16/bf16 including the numerics
+  cases, GPU and CPU devices) and `@johnhenry/laya` parity on the three
+  published checkpoints (bit-identical to Python, as on Node/Bun).
 
 `libmlxc.dylib` is resolved at runtime, first match wins:
 
@@ -47,8 +55,11 @@ bun add @johnhenry/backend-mlx
 2. `$LAYA_MLXC_PATH`: the dylib, or a directory containing it
    (`$LAYA_MLXC_LIB` is a legacy alias). If it is set and the path does not
    exist, `createMlxBackend` throws instead of falling back.
-3. The platform package `@johnhenry/backend-mlx-darwin-arm64` (`lib/`).
-4. A local build in this package, `prebuilds/darwin-arm64/`:
+3. The platform package `@johnhenry/backend-mlx-darwin-arm64` (`lib/`). Deno
+   looks in `node_modules` (next to the module, then the working directory)
+   and then in its npm cache.
+4. A local build in this package, `prebuilds/darwin-arm64/` (skipped when
+   the module was loaded over https, e.g. from JSR):
    `npm run build:mlxc -w @johnhenry/backend-mlx` compiles mlx-c (commit
    `d4afaec`, "Support MLX v0.32.2") against the `mlx` 0.32.2 Python wheel in
    about 10 s. It needs `cmake`, a macOS SDK that links (the script probes;
@@ -161,6 +172,10 @@ twins are in `bench/`. The analysis is in
 
 The rows were measured under the same GPU lock, interleaved.
 
+Deno 2.9.7 (`Deno.dlopen`) dispatches at Node's speed: 0.67 µs per op against
+0.67 µs on Node and 0.50 µs on Bun in one interleaved run of
+`bench/ops.bench.ts`, and the same linear f16 time (1.52 ms).
+
 The Laya English model (421M, `@johnhenry/laya`) runs on this backend and
 is compared with the laya-mlx fp32 fixture over 63 questions:
 
@@ -187,8 +202,6 @@ is GPU time in the same libmlx that Python uses.
 - One MLX stream per backend, which is the device's default stream. `read`
   evaluates synchronously on the calling thread, so its promise is already
   settled when it is returned.
-- Deno is untested: there is no `Deno.dlopen` adapter, although mlx-ts shows
-  that one works.
 
 ## Family
 

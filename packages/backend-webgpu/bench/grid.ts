@@ -2,6 +2,11 @@
  * Laya English DecisionModel latency over an (L, B) grid, synthetic token ids.
  * Workspace-only (imports @johnhenry/laya's model by path).
  *
+ * BACKEND entries: "mlx", "webgpu", "webgpu+opt=value+..." (backend options),
+ * and "webgpu-main": an unmodified copy of another revision's src/ in
+ * ../.base/src (untracked), for before/after comparisons in one process:
+ *   mkdir -p .base && git archive main src | tar -x -C .base
+ *
  *   [BACKEND=webgpu,mlx] [DTYPE=f16] [LS=16,33,64,93,128,256,512] [BS=1,3,16] [COOL=5] \
  *     node --conditions=source bench/grid.ts          (or: bun --conditions=source bench/grid.ts)
  *
@@ -39,8 +44,12 @@ for (const name of which) {
     const m = await import("@johnhenry/backend-mlx");
     backend = m.createMlxBackend() as unknown as Backend;
   } else {
-    const w = await import("../src/index.ts");
-    backend = (await w.createWebGpuBackend({ profiling: profile })) as unknown as Backend;
+    // "webgpu", "webgpu-main" (main's unmodified backend from ../.base/src, for
+    // before/after in one process), options as "+key=value" (e.g. webgpu+firstBatch=32).
+    const [base, ...kv] = name.split("+");
+    const opts = Object.fromEntries(kv.map((p) => p.split("=")).map(([k, v]) => [k!, Number.isNaN(Number(v)) ? v === "true" : Number(v)]));
+    const w = base === "webgpu-main" ? await import(new URL("../.base/src/index.ts", import.meta.url).href) : await import("../src/index.ts");
+    backend = (await w.createWebGpuBackend({ profiling: profile, ...opts })) as unknown as Backend;
   }
   const model = await loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
   setups.push({ name, backend, model });
@@ -81,7 +90,7 @@ for (const B of Bs) {
       const med = ts[Math.floor(ts.length / 2)]!;
       (results[name] ??= {})[`${B}x${L}`] = med;
       console.error(`${name}/${runtime} ${dtype} B=${B} L=${L}: median ${med.toFixed(1)} ms (min ${ts[0]!.toFixed(1)}, n=${ts.length})`);
-      if (profile && name === "webgpu") {
+      if (profile && name.startsWith("webgpu")) {
         const rt = (backend as unknown as { rt: { startProfiling(): void; stopProfiling(): Promise<{ kernel: string; ms: number; count: number }[]> } }).rt;
         rt.startProfiling();
         await model.forward(batch);

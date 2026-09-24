@@ -2,6 +2,7 @@
  * Microbenchmarks for backend-mlx; `python_ref.py` runs the same graphs in
  * Python MLX. Run under the GPU lock:
  *   node --conditions=source bench/ops.bench.ts   |   bun --conditions=source bench/ops.bench.ts
+ *   deno run -A --conditions=source --node-modules-dir=manual bench/ops.bench.ts
  * Timings: median of N warmed iterations, graph build + eval (+ no readback).
  */
 import { host } from "@johnhenry/tensor-backend";

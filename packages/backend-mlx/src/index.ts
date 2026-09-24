@@ -1,7 +1,7 @@
 /**
  * @johnhenry/backend-mlx — native Apple Silicon backend for
  * @johnhenry/tensor-backend, over Apple's mlx-c via FFI (bun:ffi on Bun,
- * koffi on Node).
+ * Deno.dlopen on Deno, koffi on Node).
  *
  * Semantics: every op appends a node to MLX's lazy graph and returns
  * immediately (one FFI call per op); `fromHost` copies the host buffer into
@@ -40,7 +40,7 @@ export interface MlxBackend extends Backend<MlxTensor> {
   readonly name: "mlx";
   readonly device: "gpu" | "cpu";
   /** Which libmlxc was loaded, via which FFI, and which mlx-c ABI it has. */
-  readonly info: { libPath: string; runtime: "bun" | "node"; mlxcAbi: "mlx-c<0.6 (MLX 0.32.1)" | "mlx-c>=0.6 (MLX 0.32.2)" };
+  readonly info: { libPath: string; runtime: "bun" | "deno" | "node"; mlxcAbi: "mlx-c<0.6 (MLX 0.32.1)" | "mlx-c>=0.6 (MLX 0.32.2)" };
   flush(...ts: MlxTensor[]): void;
   destroy(): void;
   geglu(x: MlxTensor): MlxTensor;

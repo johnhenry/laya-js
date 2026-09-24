@@ -38,8 +38,12 @@ gpu.destroy();
   - `preferF16 = true`: request `shader-f16` and store/compute `"f16"` natively.
   - `powerPreference = "high-performance"`.
   - `maxBatch = 128`: dispatches per command buffer before an automatic submit.
+  - `firstBatch = 24`: dispatches in the first submit after the GPU went idle
+    (a completed readback), so the GPU starts while the rest is encoded.
   - `maxPooledBytes = 1 GiB`: idle bytes kept in the buffer pool.
-  - `gemm?: GemmConfig`: GEMM tile configs (see `GEMM_DEFAULT` and `bench/gemm.ts`).
+  - `gemm?: GemmConfig`: GEMM tile configs (see `GEMM_DEFAULT`, `bench/gemm.ts`
+    and `bench/linear-shapes.ts`). `GEMM_V020` is the 0.2.0 configuration.
+  - `gemmTuning?: Record<string, GemmChoice>`: `tuneGemm` results to restore.
   - `profiling = false`: also request `timestamp-query` so
     `backend.rt.startProfiling()` / `await backend.rt.stopProfiling()` report
     GPU time per kernel.
@@ -60,7 +64,13 @@ gpu.destroy();
   `flush` and `destroy`. Extras:
   - `adapterInfo`: vendor, architecture, device, description, source, features, limits.
   - `sync()`: wait for submitted work.
-  - `rt.stats`: live/pooled bytes, buffers created, dispatches, submits, pipelines.
+  - `tuneGemm(shapes, { dtype?, rounds? })`: measures every applicable
+    Linear kernel (skinny, each `gemmConfig.sg` entry, direct) for each
+    exact `{ M, N, K }` and records the fastest in `gemmTuning` (a `Map`
+    shared by all backends on the same `GPUDevice`; persist it with
+    `Object.fromEntries(backend.gemmTuning)`). Roughly 10–50 ms per shape.
+    Without it, the built-in rules below pick the kernel.
+  - `rt.stats`: live/pooled bytes, buffers created, bind groups created, dispatches, submits, pipelines.
   - `rt.trim()`: free pooled buffers.
 - `WebGpuTensor` has `shape`, `dtype`, `storage` (a refcounted `GPUBuffer`),
   `offset` (element offset: views share storage) and `disposed`.
@@ -104,16 +114,24 @@ gpu.destroy();
 **Execution**
 - Ops are synchronous and only enqueue work. All dispatches go into one
   compute pass (WebGPU orders them) and are submitted at `flush`, at `read`,
-  or every `maxBatch` dispatches.
+  or every `maxBatch` dispatches (`firstBatch` for the first submit after
+  the GPU went idle). A ModernBERT-large forward is ~450 dispatches in
+  6 submits (4 automatic, one per `read`).
 - Uniforms are packed into a 64 KiB arena that is written once per submit,
   bound with a dynamic offset. Bind groups are cached by (layout, buffers,
-  uniform chunk); pooled buffers are reused in the same pattern every
-  forward, so a steady-state ModernBERT forward creates no bind groups
-  (encode cost ≈ 8 µs per dispatch in Node, was ≈ 13 µs).
-- Buffer pool with ¼-power-of-two size classes (at most 25% waste).
-  `fromHost` copies the host data with `queue.writeBuffer` when called and
-  returns an already-settled Promise; it flushes first only when it reuses
-  a buffer that a pending, unsubmitted pass may still read.
+  uniform chunk).
+- Buffer pool with ¼-power-of-two size classes (at most 25% waste). A
+  size class hands out its lowest-id free buffer (not LIFO), so a
+  computation that allocates and frees in the same order gets the same
+  buffers every time and its bind groups are cache hits: a steady-state
+  ModernBERT forward creates none (0.2.0's LIFO pool permuted buffers and
+  created ~170 per forward). Encoding costs ≈ 5 µs per dispatch in Node.
+- Buffer reuse is ordered: a freed buffer can be handed to the next GPU
+  write immediately (the queue orders it after pending reads); `fromHost`
+  copies the host data with `queue.writeBuffer` when called and returns an
+  already-settled Promise, flushing first only when it reuses a buffer that
+  the pending, unsubmitted pass may still read; buffers evicted from a full
+  pool are destroyed only after the submit that uses them.
 - Pipeline cache keyed by (kernel, dtypes, specialization). Explicit bind
   group layouts are used, not `layout: "auto"`.
 - Free views: `reshape`, same-dtype `cast`, identity-like `transpose`, and
@@ -133,7 +151,7 @@ gpu.destroy();
 | Op | Kernel |
 |---|---|
 | linear, M ≤ 64 (latency path) | Split-K "skinny" kernel: each weight row is read from DRAM once. |
-| linear, M > 64, K % 4 = 0, subgroup matrices available | 32×64 tiles, 2 subgroups × 4×4 f32 8×8 fragments; K panels of 8 staged (converted to f32) through workgroup memory, software-pipelined through registers. f32 accumulation. |
+| linear, M > 64, K % 4 = 0, subgroup matrices available | `tuneGemm` choice if any, else: 64×64 tiles, 2 subgroups × 8×4 f32 8×8 fragments, when the grid has ≥ 48 workgroups (not 57–79: a poor last wave on M2) and rows pad by ≤ 10%; otherwise 32×64 tiles (2 subgroups × 4×4 fragments), split-K 2 below 48 workgroups. K panels of 8 staged (converted to f32; f16 read 8 at a time as `vec4<u32>`) through workgroup memory, software-pipelined through registers. f32 accumulation. |
 | linear, K % 4 = 0 otherwise | Register-blocked "direct" kernel: 4×8 outputs per thread, vec4 loads straight from global memory. |
 | linear otherwise; batched and broadcast matmul | 64×64×16 workgroup-memory tiled GEMM. |
 | sdpa, head dim 32 or 64 | Flash attention: online softmax, register-blocked 32q×16k tiles. With a mask, each query block first scans its mask rows and only visits the key-tile range that has a visible key (sliding window, padding). |
@@ -182,17 +200,36 @@ conformance case, then a GEMM benchmark.
 
 | Case | f32 | f16 |
 |---|---:|---:|
-| linear [2048,1024]·[3072,1024]ᵀ, subgroup matrices (default under Dawn) | 1.97 TFLOP/s | 1.75 TFLOP/s |
+| linear [2048,1024]·[3072,1024]ᵀ, subgroup matrices (default under Dawn) | 2.07 TFLOP/s | 1.95 TFLOP/s |
+| same shape, 0.2.0 (32×64 tiles) | 1.97 | 1.75 |
 | same shape, portable kernels (`subgroupMatrix: false`, browsers without the flag) | 1.20 | 1.32 |
 | same shape, MLX `x @ w.T` | 2.32 | 3.06 |
 | linear [33,1024]·[3072,1024]ᵀ (skinny) | 0.32 ms | 0.19 ms |
 | batched matmul [16,128,1024]·[16,1024,128] | 0.67 TFLOP/s | 0.75 TFLOP/s |
 
 The portable kernels reach about 40% of the measured FMA peak (2.85
-TFLOP/s). Subgroup matrices get f16 to ≈1.75 TFLOP/s (f16 tiles are
-converted to f32 in workgroup memory; f32 needs no conversion and gets
-≈2). `bench/gemm-m.ts` sweeps M for the four ModernBERT-large Linear
-shapes. MLX's hand-written Metal GEMM reaches ≈3. Chromium 152 gives the same
+TFLOP/s). Subgroup matrices get f16 to ≈1.95 TFLOP/s for large M (f16
+tiles are converted to f32 in workgroup memory). MLX's hand-written Metal
+GEMM reaches ≈3. `bench/linear-shapes.ts` reports GFLOP/s per Laya Linear
+shape and M, against main's backend and MLX in the same process;
+`bench/gemm-m.ts` sweeps M per config.
+
+GFLOP/s, f16, English Linears (hidden 1024, Wi 5248, intermediate 2624),
+0.2.0 → now (MLX `x @ w.T`); best of 3 interleaved rounds:
+
+| M = B·L | qkv 3072×1024 | o 1024×1024 | wi 5248×1024 | mlp-o 1024×2624 |
+|---:|---:|---:|---:|---:|
+| 33 | 885 → 956 (519) | 802 → 810 (310) | 1255 → 1260 (725) | 1056 → 1096 (565) |
+| 93 | 1339 → 1425 (1117) | 1116 → 1154 (680) | 1493 → 1576 (1426) | 1206 → 1227 (1152) |
+| 128 | 1487 → 1604 (1757) | 1334 → 1358 (838) | 1579 → 1744 (2021) | 1394 → 1409 (1573) |
+| 256 | 1549 → 1724 (2070) | 1460 → 1488 (1241) | 1644 → 1829 (2495) | 1488 → 1546 (1798) |
+| 512 | 1710 → 1879 (2215) | 1585 → 1679 (2047) | 1667 → 1856 (2792) | 1641 → 1746 (2412) |
+| 1488 | 1696 → 1837 (2828) | 1637 → 1783 (2454) | 1730 → 1900 (2882) | 1693 → 1858 (2638) |
+| 4096 | 1722 → 1956 (3010) | 1654 → 1856 (2835) | 1695 → 1903 (3065) | 1706 → 1929 (3003) |
+
+MLX's small-M numbers include one FFI evaluation per Linear, so they
+understate it there. Multilingual shapes (768 / 2304 / 1152) move the same way
+(e.g. M=4096: 1.67–1.72 → 1.86–1.95 TFLOP/s; M=93 o/mlp-o: 0.90/0.94 → 1.18/1.26 with split-K). Chromium 152 gives the same
 portable-kernel numbers. In Deno (wgpu) the large GEMM matches, but small
 dispatches cost more.
 
@@ -202,16 +239,22 @@ WebGPU and MLX interleaved per cell in one Node process.
 
 | L → | 16 | 33 | 64 | 93 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| B=1 WebGPU | 15.1 | 25.1 | 39.3 | 57.4 | 73.5 | 139.7 | 278.9 |
-| B=1 MLX | 20.0 | 22.4 | 23.0 | 39.5 | 41.7 | 80.0 | 150.6 |
-| B=3 WebGPU | 31.5 | 69.6 | 105.7 | 145.2 | 193.3 | 385.0 | 804.9 |
-| B=3 MLX | 25.1 | 43.5 | 59.3 | 92.2 | 108.4 | 212.8 | 436.6 |
-| B=16 WebGPU | 130.4 | 264.1 | 471.6 | 696.9 | 954.9 | 1980.1 | 4259.9 |
-| B=16 MLX | 81.7 | 159.5 | 269.6 | 408.2 | 537.2 | 1096.2 | 2296.6 |
+| B=1 WebGPU 0.2.0 | 15.4 | 25.7 | 39.4 | 59.0 | 77.0 | 149.3 | 288.2 |
+| B=1 WebGPU | **14.6** | 24.1 | 37.9 | 53.8 | 67.2 | 130.2 | 252.2 |
+| B=1 MLX | 20.0 | 23.6 | 23.6 | 41.7 | 39.0 | 80.4 | 154.4 |
+| B=3 WebGPU 0.2.0 | 32.1 | 71.1 | 106.0 | 148.3 | 199.6 | 398.7 | 836.0 |
+| B=3 WebGPU | 30.8 | 67.0 | 90.6 | 141.7 | 175.1 | 354.1 | 727.3 |
+| B=3 MLX | 25.4 | 43.7 | 62.1 | 95.5 | 107.4 | 220.9 | 442.6 |
+| B=16 WebGPU 0.2.0 | 129.7 | 279.0 | 488.7 | 723.6 | 992.2 | 2067.0 | 4440.0 |
+| B=16 WebGPU | 119.6 | 252.5 | 435.7 | 653.4 | 886.3 | 1820.5 | 3842.9 |
+| B=16 MLX | 79.7 | 159.4 | 271.7 | 413.2 | 545.9 | 1117.9 | 2367.3 |
 
-Bun gives the same WebGPU numbers (±3%). WebGPU is 0.75–1.9× MLX's time;
-for M = B·L > 64 the Linears are ≈85% of GPU time, so the ratio is
-MLX's GEMM advantage (see above). Previously (portable kernels only,
+All three measured in one Node process, interleaved per cell
+(`BACKEND=webgpu-main,webgpu,mlx`, with main's `src/` copied to `.base/`).
+WebGPU is 4–15% faster than 0.2.0 and 0.73–1.7× MLX's time. For
+M = B·L > 64 the Linears are ≈85% of GPU time (B=16 L=256: 1545 of
+1827 ms, ≈1.85 TFLOP/s); that is most of the gap to MLX (see Limitations).
+Attention is ≈9% (169 ms at B=16 L=256). Previously (portable kernels only,
 uncached bind groups) B=1 L=93 took 80.5 ms, B=3 L=93 201.6 ms and B=16
 L=512 18.8 s.
 
@@ -228,17 +271,21 @@ L=512 18.8 s.
 
 ## Limitations
 
-- Every op is its own dispatch. Encoding costs about 8 µs of CPU per
-  dispatch (pass commands; bind groups are cached), about 3.5 ms per
+- Every op is its own dispatch. Encoding costs about 5 µs of CPU per
+  dispatch (pass commands; bind groups are cached), about 2.4 ms per
   ModernBERT-large forward, overlapped with GPU work. WebGPU has no reusable
   compute command buffers, and there is no graph fusion (`compile` isn't
   implemented).
 - Subgroup-matrix GEMM needs Dawn's experimental
   `chromium-experimental-subgroup-matrix` (f32 8×8×8, subgroup size 32);
-  the WGSL/Dawn path tops out at ≈1.8 TFLOP/s on M2 (MLX's Metal GEMM ≈3),
-  even with fragments loaded straight from global memory. Only f16→f16
-  accumulation is offered for f16 fragments, so f16 operands are converted
-  to f32 in workgroup memory. Kernel configs are tuned on Apple M2 and are
+  the WGSL/Dawn path tops out at ≈1.95 TFLOP/s on M2 (MLX's Metal GEMM ≈3).
+  Measured ceiling (`subgroupMatrixMultiplyAccumulate` in a loop, M2): 3.2
+  TFLOP/s with fragments held in registers, but 2.0–2.45 TFLOP/s when each
+  MMA's fragments are loaded from workgroup memory, as a GEMM must; the
+  kernel reaches ≈80% of that. Only f16→f16 accumulation is offered for f16
+  fragments (parity needs f32), so f16 operands are converted to f32 in
+  workgroup memory, doubling its traffic. Split-K, double buffering and
+  larger per-subgroup blocks did not help on M2 (occupancy/registers). Kernel configs are tuned on Apple M2 and are
   untested on discrete or mobile GPUs. No other subgroup (shuffle/reduce) paths.
 - `sort` rows over 4096 elements use a slow per-row insertion sort.
   `cumsum` scans each lane sequentially, so it is slow for very long axes.

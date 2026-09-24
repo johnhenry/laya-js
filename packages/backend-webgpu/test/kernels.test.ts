@@ -108,7 +108,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     }
   });
 
-  t.it("linear: subgroup-matrix kernels (when available) vs direct, partial tiles, K % 8 != 0", async () => {
+  t.it("linear: subgroup-matrix kernels (when available) vs direct, partial tiles, K % 8 != 0, wide loads, split-K", async () => {
     const bk = await get();
     const saved = bk.gemmConfig;
     try {
@@ -122,6 +122,10 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
           ["direct", { ...saved, sg: null, skinny: [] }],
           ["sg 32x64", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 2, WN: 2 }] }],
           ["sg 96x64x16", { ...saved, skinny: [], sg: [{ minM: 0, BM: 96, BN: 64, BK: 16, WM: 2, WN: 2 }] }],
+          ["sg 64x64 pad 0", { ...saved, skinny: [], sg: [{ minM: 0, BM: 64, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0 }] }],
+          ["sg 32x64 narrow, double-buffered, block epilogue", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, wide: false, db: true, epi: "block" }] }],
+          ["sg 32x64 split-K 3", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, splitK: [{ S: 3 }] }] }],
+          ["sg 64x64x16 split-K 2", { ...saved, skinny: [], sg: [{ minM: 0, BM: 64, BN: 64, BK: 16, WM: 2, WN: 2, splitK: [{ S: 2 }] }] }],
         ];
         for (const [name, cfg] of cfgs) {
           bk.gemmConfig = cfg;
@@ -132,6 +136,39 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     } finally {
       bk.gemmConfig = saved;
     }
+  });
+
+  t.it("buffer reuse: a host upload into a buffer freed while pending work still reads it; repeated chains hit the bind-group cache", async () => {
+    const bk = await get();
+    const [M, N, K] = [70, 96, 64];
+    const x1 = rnd(M * K), x2 = rnd(M * K), w = rnd(N * K, 0.1);
+    const W = await up(bk, [N, K], w);
+    const X1 = await up(bk, [M, K], x1);
+    const Y1 = bk.linear(X1, W); // enqueued, not submitted
+    bk.dispose(X1); // back to the pool while Y1's dispatch is pending
+    const X2 = await up(bk, [M, K], x2); // reuses X1's buffer: must not clobber Y1's input
+    const Y2 = bk.linear(X2, W);
+    close(await rd(bk, Y1), refLinear(x1, w, null, M, N, K), 1e-4, 1e-4, "Y1 after reuse");
+    close(await rd(bk, Y2), refLinear(x2, w, null, M, N, K), 1e-4, 1e-4, "Y2");
+    const chain = () => bk.scope(() => bk.gelu(bk.add(bk.linear(X2, W), bk.linear(X2, W))));
+    for (let i = 0; i < 3; i++) bk.dispose(chain());
+    const before = bk.rt.stats.bindGroups;
+    for (let i = 0; i < 5; i++) bk.dispose(chain());
+    await bk.sync();
+    assert.equal(bk.rt.stats.bindGroups, before, "steady-state chain creates no bind groups");
+  });
+
+  t.it("tuneGemm records a measured choice per shape and uses it", async () => {
+    const bk = await get();
+    const shapes = [{ M: 70, N: 96, K: 64 }, { M: 20, N: 64, K: 32 }];
+    const picks = await bk.tuneGemm(shapes, { dtype: "f32", rounds: 1 });
+    for (const [key, v] of Object.entries(picks)) {
+      assert.equal(bk.gemmTuning.get(key), v);
+      assert.ok(v === "skinny" || v === "direct" || typeof v === "number", key);
+    }
+    const x = rnd(70 * 64), w = rnd(96 * 64, 0.1);
+    close(await rd(bk, bk.linear(await up(bk, [70, 64], x), await up(bk, [96, 64], w))), refLinear(x, w, null, 70, 96, 64), 1e-4, 1e-4, "tuned linear");
+    bk.gemmTuning.clear();
   });
 
   t.it("strided copies: collapsed 5-D transpose (vector and scalar inner loops), concat", async () => {
