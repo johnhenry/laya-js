@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 07941a4: Native quantized weights: q8/q4 matrices stay packed in a `u32` buffer with f16 scales/biases; every Linear kernel (skinny, subgroup-matrix incl. split-K, direct, tiled) dequantizes in its B tile load and accumulates in f32; `quantizedEmbedding` is a dequantizing gather. New `bench/quantized-gemm.ts`.
+
+### Patch Changes
+
+- Updated dependencies [07941a4]
+  - @johnhenry/tensor-backend@0.3.0
+
 ## 0.3.1
 
 ### Patch Changes

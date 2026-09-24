@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 07941a4: Native quantized weights: `fromHostQuantized` repacks laya-js q8/q4 matrices into MLX's affine uint32 layout without dequantizing (q4 uploads as-is; symmetric q8 flips each byte's sign bit with bias = −128·scale, bit-exact), `quantizedLinear` is `mlx_quantized_matmul`, `quantizedEmbedding` gathers packed rows and runs `mlx_dequantize`. Groups of 32/64/128.
+
+### Patch Changes
+
+- Updated dependencies [07941a4]
+  - @johnhenry/tensor-backend@0.3.0
+
 ## 0.3.0
 
 ### Minor Changes

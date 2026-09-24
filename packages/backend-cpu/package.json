@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/backend-cpu",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Deprecated alias: re-exports @johnhenry/math-plus-tensor-cpu, the f32 CPU reference backend for @johnhenry/tensor-backend",
   "keywords": [
     "tensor",
@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@johnhenry/math-plus-tensor-cpu": "^0.2.0",
-    "@johnhenry/tensor-backend": "^0.2.0"
+    "@johnhenry/tensor-backend": "^0.3.0"
   },
   "publishConfig": {
     "access": "public",

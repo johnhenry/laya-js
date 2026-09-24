@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/backend-mlx",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Native Apple Silicon MLX backend (mlx-c over FFI) for @johnhenry/tensor-backend on Node, Bun and Deno",
   "keywords": [
     "mlx",
@@ -55,7 +55,7 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/tensor-backend": "^0.2.0"
+    "@johnhenry/tensor-backend": "^0.3.0"
   },
   "optionalDependencies": {
     "@johnhenry/backend-mlx-darwin-arm64": "^0.1.1",

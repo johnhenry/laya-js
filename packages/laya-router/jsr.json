@@ -1,11 +1,11 @@
 {
   "name": "@johnhenry/laya-router",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "Apache-2.0",
   "exports": "./src/index.ts",
   "imports": {
     "@johnhenry/langdetect-lite": "jsr:@johnhenry/langdetect-lite@^0.1.1",
-    "@johnhenry/laya": "npm:@johnhenry/laya@^0.2.0",
+    "@johnhenry/laya": "npm:@johnhenry/laya@^0.3.0",
     "@johnhenry/laya-core": "jsr:@johnhenry/laya-core@^0.1.1",
     "@johnhenry/pyjson": "jsr:@johnhenry/pyjson@^0.1.2"
   },

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [07941a4]
+  - @johnhenry/laya@0.3.0
+
 ## 0.1.3
 
 ### Patch Changes

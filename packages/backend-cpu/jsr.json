@@ -1,11 +1,11 @@
 {
   "name": "@johnhenry/backend-cpu",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "license": "MIT",
   "exports": "./src/index.ts",
   "imports": {
     "@johnhenry/math-plus-tensor-cpu": "jsr:@johnhenry/math-plus-tensor-cpu@^0.2.0",
-    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.2.0"
+    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.3.0"
   },
   "publish": {
     "include": [

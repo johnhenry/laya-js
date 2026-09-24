@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 07941a4: Quantized checkpoints now stay quantized on the device on MLX and WebGPU (less device memory): `load(..., { quantized: "device" | "dequantize" })`, default `"device"` when the backend has native quantized ops, else host dequantization as before. `agent.model.quantizedOnDevice` reports which. modernbert and `DecisionModel` accept `HostQuantized` Linear weights and token/type embeddings (`HostWeight`, `MatrixWeight`, `disposeWeight`); `readWeights(src, { quantized: "device" })` and `hostQuantized(matrix)` hand out packed matrices. Optional peer ranges on backend-mlx/backend-webgpu widened to `^0.4.0`.
+
+### Patch Changes
+
+- Updated dependencies [07941a4]
+  - @johnhenry/tensor-backend@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

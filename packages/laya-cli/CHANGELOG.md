@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 07941a4: Tracks @johnhenry/laya 0.3 (quantized checkpoints stay quantized on MLX/WebGPU by default) and accepts `@johnhenry/backend-mlx` / `@johnhenry/backend-webgpu` 0.4 as optional peers.
+
+### Patch Changes
+
+- Updated dependencies [07941a4]
+  - @johnhenry/laya@0.3.0
+  - @johnhenry/laya-router@0.1.4
+
 ## 0.2.1
 
 ### Patch Changes
