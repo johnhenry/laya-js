@@ -51,6 +51,7 @@ On MLX the result is bit-identical to Python laya-mlx (see Parity).
 | `cachePrompts` | false | reuse tokenized question prefixes (laya-core `PrefixCache`) |
 | `compile` | false | trace the forward pass with `backend.compile` (MLX `mlx_compile`, once per input shape); ignored by backends without it |
 | `warn` | `console.warn` | receives the temperature-clamping warning |
+| `quantized` | `"device"` | quantized checkpoints: `"device"` keeps the int8/int4 weights quantized on MLX/WebGPU (falls back to `"dequantize"` on a backend without quantized ops, e.g. CPU); `"dequantize"` rebuilds float weights on the host |
 
 Model resolution (`resolve_model`): an existing local directory is read from
 disk; a path-looking string (`/`, `./`, `../`, `~`) that does not exist throws
@@ -79,11 +80,23 @@ not held twice.
 ### Quantized checkpoints
 
 A `model.safetensors` whose `__metadata__` has `laya_quant: "q8" | "q4"` is
-dequantized while loading. It is dequantized to f16, or to f32 when the agent
-computes in f32 (CPU, or `dtype: "f32"`). Loading is tensor by tensor: at
-most one dequantized tensor exists on the host at a time. Nothing else
-changes: GPU memory and speed are those of the float checkpoint, and only the
-download shrinks.
+detected automatically. On MLX and WebGPU its Linear weights and token
+embedding **stay quantized on the device** (`quantized: "device"`, the
+default): they are uploaded as stored and the backends' quantized kernels
+dequantize inside the matrix multiply (`agent.model.quantizedOnDevice` is
+then true). Device memory drops with the file: 52–55% of fp16 for q8, 28%
+for q4. On the CPU backend, or with `quantized: "dequantize"`, each tensor is
+dequantized on the host while loading, to f16 (f32 when the agent computes in
+f32), at most one at a time; the model then has the float checkpoint's
+memory and speed.
+
+| English, f16 | device memory | 1 question P50 | 16 questions |
+|---|---:|---:|---:|
+| mlx fp16 / q8 / q4 | 804 / 441 / 228 MiB | 39.1 / 33.8 / 34.4 ms | 38.7 / 34.9 / 34.3 q/s |
+| webgpu fp16 / q8 / q4 | 891 / 460 / 251 MiB | 53.4 / 58.0 / 60.6 ms | 25.2 / 22.1 / 21.6 q/s |
+
+Answers are the same as with dequantize-on-load (every argmax and q4 flip
+identical; max |Δp| between the modes ≤ 5e-3).
 
 Write quantized checkpoints with `laya quantize` (`@johnhenry/laya-cli`) or
 `quantizeSafetensors`.
@@ -104,8 +117,11 @@ Exports:
 - `quantizeMatrix` / `dequantizeMatrix`: one matrix;
 - `quantizeSafetensors`: a whole file, browser-safe;
 - `quantMetadata`: parses and validates `__metadata__`;
-- `dequantizingWeights`, and `readWeights(src, { dtype })`, which detects
-  quantized files automatically.
+- `dequantizingWeights`, and `readWeights(src, { dtype, quantized })`, which
+  detects quantized files automatically (`quantized: "device"` hands out
+  `HostQuantized` matrices instead of dequantizing);
+- `hostQuantized(matrix)`: a `QuantizedMatrix` as a tensor-backend
+  `HostQuantized` (zero-copy).
 
 ### `LayaAgent`
 
@@ -237,10 +253,11 @@ results. Measured on an Apple M2 (Node 24.9, macOS 27):
 
 ## Limitations
 
-- Quantized checkpoints are dequantized on load, so they save download size
-  only, not GPU memory or time. Loading takes about 0.3–0.9 s longer on an
-  M2. Running quantized matmuls on the GPU would need new backend ops.
-  q4 changes some answers; see the table above.
+- Quantized checkpoints stay quantized only on backends with quantized ops
+  (MLX, WebGPU); on the CPU backend they are dequantized on load (download
+  size only). On the device they trade speed for memory: 16-question batches
+  are 10–16% slower than fp16, and one question is 1.16× faster on MLX but
+  9–14% slower on WebGPU. q4 changes some answers; see the table above.
 
 - `embed` does not run texts that tokenize to nothing; it returns the zero
   vector for them. Python computes `sum(h·0) / max(0, 1)`, and an all-masked

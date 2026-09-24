@@ -190,7 +190,15 @@ the tile; accumulation stays f32, as for fp16 weights. Group sizes must be
 multiples of 4 (partial last groups are fine). The embedding is a
 dequantizing gather.
 
-Numerically, the on-device path differs from host dequantization only in
-rounding: the host rounds each weight to f16 once, the kernels keep it in
-f32. The end-to-end effect is below 1e-2 on every probability (see
-[RESULTS.md](RESULTS.md#quantized-checkpoints)).
+Numerically the on-device path matches host dequantization: WebGPU rounds
+each dequantized weight to f16 when the activations are f16 (as the host
+does) and keeps f32 otherwise; MLX computes in its own order. On the parity
+set every argmax and every q4 flip is identical in both modes and the
+probabilities differ by at most 5e-3; in f32 they agree to 4 decimals.
+
+**What it buys** (M2, f16; [RESULTS.md](RESULTS.md#quantized-checkpoints)):
+device memory after load is 52–55% of fp16 for q8 and 28% for q4 (English on
+MLX: 804 → 441 / 228 MiB). One short question is 1.16× faster on MLX
+(batch 1 is memory-bound), 9–14% slower on WebGPU; 16-question batches are
+10–16% slower on both, since dequantizing inside the GEMM costs ALU time
+once the multiply is compute-bound.
