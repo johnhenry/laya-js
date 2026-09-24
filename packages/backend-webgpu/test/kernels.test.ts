@@ -95,6 +95,38 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
   const rd = async (bk: WebGpuBackend, t: WebGpuTensor) => toF32(await bk.read(t));
   t.after(() => b?.destroy());
 
+  t.it("sleepWhileWaiting: wait estimates are per shape, so a small read after a large one is not inflated", async () => {
+    // Regression: the estimate used to be keyed by dispatch count only, so after a
+    // large input a small input with the same op graph slept for most of the large
+    // input's GPU time (measured 594 ms instead of 31 ms, ~15 calls to recover).
+    const bk = await createWebGpuBackend({ sleepWhileWaiting: true, sleepThresholdMs: 0 });
+    try {
+      // Same op graph (one linear + gelu) at two very different sizes.
+      const run = async (m: number) => {
+        const x = await up(bk, [m, 1024], rnd(m * 1024));
+        const w = await up(bk, [1024, 1024], rnd(1024 * 1024));
+        const t0 = performance.now();
+        const y = bk.gelu(bk.linear(x, w));
+        await bk.read(y);
+        const ms = performance.now() - t0;
+        for (const z of [x, w, y]) bk.dispose(z);
+        return ms;
+      };
+      const small = async () => run(8);
+      for (let i = 0; i < 3; i++) await small(); // warm pipelines + learn the small estimate
+      const baseline = Math.min(await small(), await small(), await small());
+      for (let i = 0; i < 3; i++) await run(8192); // learn a much larger estimate for the same graph
+      const after = await small(); // the first small read right after large ones
+      const keys = [...bk.rt.waitEstimates.keys()];
+      const counts = new Set(keys.map((k) => k.split(":")[0]));
+      assert.ok(keys.length >= 2 && counts.size < keys.length, `estimates must be per shape (keys: ${keys.join(", ")})`);
+      // Generous bound (timing on a shared GPU): the old bug inflated this ~20x.
+      assert.ok(after < Math.max(baseline * 4, baseline + 25), `small read after large ones took ${after.toFixed(1)} ms vs ${baseline.toFixed(1)} ms baseline`);
+    } finally {
+      bk.destroy();
+    }
+  });
+
   t.it("linear: direct, tiled and skinny kernels, bias, f16", async () => {
     const bk = await get();
     // direct (M>64), tiled (K % 4 != 0), skinny buckets (M ≤ 40, M ≤ 64)

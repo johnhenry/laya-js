@@ -111,11 +111,11 @@ from one Node process per batch size, interleaved cell by cell
   earlier numbers, except MLX B=1 L=128 (44.4 vs 39.0) and L=512 (148.3 vs
   154.4). MLX single-row medians wander by ±5–10% from process to process
   (min 40.1 ms at L=128), so treat those as noise.
-- **Why one process per batch size:** in one process, a cell that follows a
-  larger shape can be measured several times too slow. The cause is
-  backend-webgpu's `sleepWhileWaiting` estimate (see the backend README's
-  limitations). Keep `BS` to one value per process, or run the Ls in
-  ascending order.
+- **Why one process per batch size:** these numbers were taken with
+  backend-webgpu 0.5.0, whose `sleepWhileWaiting` estimate was keyed by
+  dispatch count only, so a cell that followed a larger shape in the same
+  process could be measured several times too slow. Fixed in 0.5.1 (the
+  estimate is now per shape); the per-process runs were unaffected.
 - **Against 0.2.0:** WebGPU is 4–15% faster. The gains come from faster
   subgroup-matrix GEMM tiles (≈1.95 instead of ≈1.75 TFLOP/s f16 for large
   M; the backend README has per-shape GFLOP/s), a buffer pool that makes
