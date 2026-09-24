@@ -157,3 +157,11 @@ when it expires). Better: configure npm trusted publishing (`npm trust github
 <pkg> --file release.yml --repo johnhenry/laya-js --allow-publish`, run by a
 2FA-enabled account; a bypass-2FA token can't) and drop the secret.
 JSR: not published yet (packages must be created on jsr.io first).
+
+## GitHub Pages
+
+`.github/workflows/pages.yml` deploys the browser examples to
+<https://johnhenry.github.io/laya-js/> on every push to `main` (Pages source:
+"GitHub Actions"). `node scripts/build-pages.mjs` builds the same `_site/`
+locally; serve its parent under `/laya-js/` to reproduce the project-site
+base path. Keep the examples' asset URLs relative.
