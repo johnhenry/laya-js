@@ -185,6 +185,12 @@ twins are in `bench/`. The analysis is in
 
 The rows were measured under the same GPU lock, interleaved.
 
+The end-to-end numbers were re-measured on a quiet machine (2026-09-24) in
+[docs/RESULTS.md](../../docs/RESULTS.md). A full English `predict()` of one
+93-token question takes 42.1 ms P50 in JS and 41.5 ms in Python laya-mlx,
+interleaved in the same session. 50 questions run at 39.4 vs 39.1 q/s. The
+op-level rows above were not re-measured.
+
 Deno 2.9.7 (`Deno.dlopen`) dispatches at Node's speed: 0.67 µs per op against
 0.67 µs on Node and 0.50 µs on Bun in one interleaved run of
 `bench/ops.bench.ts`, and the same linear f16 time (1.52 ms).

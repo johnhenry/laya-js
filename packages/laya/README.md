@@ -92,8 +92,8 @@ memory and speed.
 
 | English, f16 | device memory | 1 question P50 | 16 questions |
 |---|---:|---:|---:|
-| mlx fp16 / q8 / q4 | 804 / 441 / 228 MiB | 39.1 / 33.8 / 34.4 ms | 38.7 / 34.9 / 34.3 q/s |
-| webgpu fp16 / q8 / q4 | 891 / 460 / 251 MiB | 53.4 / 58.0 / 60.6 ms | 25.2 / 22.1 / 21.6 q/s |
+| mlx fp16 / q8 / q4 | 804 / 441 / 228 MiB | 37.2 / 34.8 / 35.4 ms | 37.5 / 34.6 / 33.3 q/s |
+| webgpu fp16 / q8 / q4 | 891 / 460 / 251 MiB | 54.7 / 51.6 / 54.9 ms | 24.4 / 24.9 / 24.4 q/s |
 
 Answers are the same as with dequantize-on-load (every argmax and q4 flip
 identical; max |Δp| between the modes ≤ 5e-3).
@@ -275,8 +275,9 @@ results. Measured on an Apple M2 (Node 24.9, macOS 27):
   laya-mlx starts it with `laya-mlx: …`; the rest of the message is the same.
 - Integer-like choice labels in a criteria *object* follow JS key order (see
   laya-core). Pass a list to keep your order.
-- WebGPU is much slower than MLX on an Apple M2: one short question takes
-  about 250 ms, against 38 ms on MLX (see `@johnhenry/laya-cli` bench).
+- WebGPU is slower than MLX on an Apple M2: one short English question
+  (93 tokens) takes about 55 ms, against 37 ms on MLX, and longer inputs
+  are 1.3–1.7× MLX's time (see docs/RESULTS.md).
 
 ## Family
 

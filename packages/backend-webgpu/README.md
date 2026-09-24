@@ -386,8 +386,8 @@ same run:
 - Before: 0.51–0.99× for M ≤ 64 and 0.80–0.92× above.
 
 The model-level result is what the kernel choice was tuned for: see
-docs/RESULTS.md (English q8 on WebGPU: 1 question 51.3 vs 54.6 ms,
-16 questions 641 vs 654 ms).
+docs/RESULTS.md (English q8 on WebGPU: 1 question 51.6 vs 54.7 ms,
+16 questions 643 vs 657 ms, quiet machine).
 
 **Laya English checkpoint (ModernBERT-large, 28 layers), f16, median ms per
 forward (upload + forward + readback)** — `bench/grid.ts`, synthetic ids,
@@ -395,19 +395,21 @@ WebGPU and MLX interleaved per cell in one Node process.
 
 | L → | 16 | 33 | 64 | 93 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| B=1 WebGPU 0.2.0 | 15.4 | 25.7 | 39.4 | 59.0 | 77.0 | 149.3 | 288.2 |
-| B=1 WebGPU | **14.6** | 24.1 | 37.9 | 53.8 | 67.2 | 130.2 | 252.2 |
-| B=1 MLX | 20.0 | 23.6 | 23.6 | 41.7 | 39.0 | 80.4 | 154.4 |
-| B=3 WebGPU 0.2.0 | 32.1 | 71.1 | 106.0 | 148.3 | 199.6 | 398.7 | 836.0 |
-| B=3 WebGPU | 30.8 | 67.0 | 90.6 | 141.7 | 175.1 | 354.1 | 727.3 |
-| B=3 MLX | 25.4 | 43.7 | 62.1 | 95.5 | 107.4 | 220.9 | 442.6 |
-| B=16 WebGPU 0.2.0 | 129.7 | 279.0 | 488.7 | 723.6 | 992.2 | 2067.0 | 4440.0 |
-| B=16 WebGPU | 119.6 | 252.5 | 435.7 | 653.4 | 886.3 | 1820.5 | 3842.9 |
-| B=16 MLX | 79.7 | 159.4 | 271.7 | 413.2 | 545.9 | 1117.9 | 2367.3 |
+| B=1 WebGPU 0.2.0 | 16.6 | 25.5 | 40.2 | 58.3 | 74.9 | 140.3 | 286.5 |
+| B=1 WebGPU | **14.6** | 24.3 | 37.9 | 54.5 | 67.6 | 128.0 | 252.6 |
+| B=1 MLX | 20.4 | 23.8 | 23.6 | 40.8 | 44.4 | 81.8 | 148.3 |
+| B=3 WebGPU 0.2.0 | 32.3 | 71.5 | 106.4 | 147.7 | 198.9 | 397.7 | 834.7 |
+| B=3 WebGPU | 30.9 | 67.1 | 90.6 | 141.2 | 175.2 | 352.3 | 730.1 |
+| B=3 MLX | 25.8 | 46.2 | 61.4 | 96.4 | 106.4 | 212.8 | 452.0 |
+| B=16 WebGPU 0.2.0 | 131.1 | 270.3 | 489.9 | 720.4 | 992.2 | 2074.2 | 4473.6 |
+| B=16 WebGPU | 120.6 | 250.9 | 437.2 | 653.6 | 879.7 | 1824.8 | 3853.9 |
+| B=16 MLX | 80.8 | 165.7 | 280.4 | 413.2 | 556.0 | 1131.9 | 2354.0 |
 
-All three measured in one Node process, interleaved per cell
-(`BACKEND=webgpu-main,webgpu,mlx`, with main's `src/` copied to `.base/`).
-WebGPU is 4–15% faster than 0.2.0 and 0.73–1.7× MLX's time. For
+Quiet machine, 2026-09-24 (backend-webgpu 0.5.0). All three measured in
+one Node process per batch size, interleaved per cell
+(`BACKEND=webgpu-main,webgpu,mlx BS=<B>`, with 0.2.0's `src/` copied to
+`.base/`).
+WebGPU is 4–15% faster than 0.2.0 and 0.72–1.7× MLX's time. For
 M = B·L > 64 the Linears are ≈85% of GPU time (B=16 L=256: 1545 of
 1827 ms, ≈1.85 TFLOP/s); that is most of the gap to MLX (see Limitations).
 Attention is ≈9% (169 ms at B=16 L=256). Previously (portable kernels only,
@@ -427,6 +429,14 @@ L=512 18.8 s.
 
 ## Limitations
 
+- `sleepWhileWaiting` (the default on Node/Bun) keys its expected wait by the
+  number of dispatches since the last readback, not by shape. So after a
+  large batch, a smaller batch with the same graph sleeps for most of the
+  large batch's GPU time. The estimate shrinks by 20% per read, so it takes
+  about 15 calls to recover. Measured on the English checkpoint: B=3 L=16
+  took 594, 476, 374, … 136 ms after B=3 L=512, against 31 ms steady state.
+  Until this is fixed, pass `sleepWhileWaiting: false` when shapes vary a
+  lot between calls. Browsers (`navigator.gpu`) are not affected.
 - Every op is its own dispatch. Encoding costs about 5 µs of CPU per
   dispatch (pass commands; bind groups are cached), about 2.4 ms per
   ModernBERT-large forward, overlapped with GPU work. WebGPU has no reusable

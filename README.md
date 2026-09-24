@@ -200,16 +200,16 @@ checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 `LAYA_REAL=1 npm test -w @johnhenry/laya` (details in the
 [laya README](./packages/laya/README.md#parity)).
 
-**Quantized checkpoints.** `laya quantize --bits 8|4` writes smaller copies. On MLX and WebGPU `load()` keeps them quantized on the device (52% / 28% of the fp16 weight memory); on WebGPU they now run at least as fast as fp16 end to end (English q8: one question 51 vs 55 ms, 16 questions 641 vs 654 ms on an M2); the CPU backend dequantizes on load. q8 halves the download (english 843 → 435 MB, multilingual 644 → 332 MB) and keeps 63/63 argmax on all three checkpoints (max |Δp| ≤ 0.047 vs fp16). q4 cuts it to 28% (238 / 182 MB) but changes 1–5 of 63 argmaxes per checkpoint. See [docs/RESULTS.md](./docs/RESULTS.md#quantized-checkpoints) and [docs/QUANTIZATION.md](./docs/QUANTIZATION.md).
+**Quantized checkpoints.** `laya quantize --bits 8|4` writes smaller copies. On MLX and WebGPU `load()` keeps them quantized on the device (52% / 28% of the fp16 weight memory); on WebGPU they now run at least as fast as fp16 end to end (English q8: one question 51.6 vs 54.7 ms, 16 questions 643 vs 657 ms on an M2); the CPU backend dequantizes on load. q8 halves the download (english 843 → 435 MB, multilingual 644 → 332 MB) and keeps 63/63 argmax on all three checkpoints (max |Δp| ≤ 0.047 vs fp16). q4 cuts it to 28% (238 / 182 MB) but changes 1–5 of 63 argmaxes per checkpoint. See [docs/RESULTS.md](./docs/RESULTS.md#quantized-checkpoints) and [docs/QUANTIZATION.md](./docs/QUANTIZATION.md).
 
-**Speed on an Apple M2 (fanless).** English checkpoint, f16, median forward-pass time with a cold GPU. The full grid, the thermal caveat and Snake numbers are in [docs/RESULTS.md](./docs/RESULTS.md).
+**Speed on an Apple M2 (fanless).** English checkpoint, f16, median forward-pass time with a cold GPU, measured on a quiet machine (2026-09-24). The full grid, the thermal caveat and Snake numbers are in [docs/RESULTS.md](./docs/RESULTS.md).
 
 | tokens (B = 1) | 33 | 93 | 256 | 512 |
 |---|---:|---:|---:|---:|
-| MLX (JS) | 23.6 ms | 41.7 ms | 80.4 ms | 154.4 ms |
-| WebGPU (Node/Dawn) | 24.1 ms | 53.8 ms | 130.2 ms | 252.2 ms |
+| MLX (JS) | 23.8 ms | 40.8 ms | 81.8 ms | 148.3 ms |
+| WebGPU (Node/Dawn) | 24.3 ms | 54.5 ms | 128.0 ms | 252.6 ms |
 
-Python laya-mlx `predict()` at 93 tokens on the same machine: 46.2 ms P50. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.3–1.7× MLX at longer inputs; the gap is GEMM throughput (≈1.95 vs ≈3 TFLOP/s), since WGSL can't reach Apple's matrix units at full speed.
+Full `predict()` at 93 tokens, interleaved on the same machine: Python laya-mlx 41.5 ms P50, JS on MLX 42.1 ms; 50 questions 39.1 vs 39.4 q/s. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.3–1.7× MLX at longer inputs; the gap is GEMM throughput (≈1.95 vs ≈3 TFLOP/s), since WGSL can't reach Apple's matrix units at full speed.
 
 MLX op dispatch costs 0.80 µs (Node/koffi) and 0.55 µs (Bun/`bun:ffi`) per
 op, against 0.40 µs in Python (Deno's `Deno.dlopen` measures the same as
