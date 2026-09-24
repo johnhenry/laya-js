@@ -168,5 +168,7 @@ through Workstream C's `@johnhenry/laya` model on this backend
    service that skips `scope`/`dispose` can grow unboundedly between GCs,
    which is the same issue mlx-ts documents. The tests check that
    `scope`/`dispose` keep active memory flat.
-6. **Deno** has no adapter yet. `Deno.dlopen` would be about 60 lines, and
-   mlx-ts proves it works.
+6. **Deno** uses `Deno.dlopen` (added for issue #3, about 60 lines beside the
+   `bun:ffi` and koffi loaders). Handles cross as `usize`, callbacks are
+   `Deno.UnsafeCallback`s invoked on the JS thread, and dispatch measures the
+   same as Node.

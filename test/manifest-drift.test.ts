@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // @ts-expect-error — plain .mjs script without type declarations
-import { JSR_EXCLUDED, PACKAGE_DIRS, jsrConfigFor } from "../scripts/sync-jsr-configs.mjs";
+import { JSR_EXCLUDED, PACKAGE_DIRS, jsrConfigFor, jsrRange } from "../scripts/sync-jsr-configs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -84,6 +84,45 @@ test("every committed jsr.json matches what sync-jsr-configs.mjs generates", () 
   }
   for (const dir of Object.keys(JSR_EXCLUDED)) {
     assert.ok(!existsSync(join(ROOT, dir, "jsr.json")), `${dir} is JSR_EXCLUDED but has a jsr.json`);
+  }
+});
+
+/**
+ * Deno/JSR take ONE comparator per `jsr:`/`npm:` specifier: `^1.2.3`, `~1.2`,
+ * `1.2.3`, `1.x`, `*` (verified with Deno 2.9.7; `a || b`, `>=a <b` and `<b`
+ * all fail with "Invalid package specifier ... Unexpected character").
+ * math-plus release run 35967422091 failed on `jsr:...@^0.0.0 || ^0.1.0`.
+ */
+const VALID_SPECIFIER = /^(?:jsr:@[a-z0-9-]+\/[a-z0-9-]+|npm:(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+)@(?:\*|[\^~]?\d+(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?)$/;
+
+test("every jsr.json import specifier is one Deno/JSR accept (single comparator, no `||` or spaces)", () => {
+  const bad: string[] = [];
+  for (const dir of PACKAGE_DIRS as string[]) {
+    const jsr = JSON.parse(readFileSync(join(ROOT, dir, "jsr.json"), "utf8")) as { imports?: Record<string, string> };
+    for (const [name, spec] of Object.entries(jsr.imports ?? {})) {
+      if (name.startsWith("#")) continue; // package-internal ./src mapping (checked below)
+      if (!VALID_SPECIFIER.test(spec)) bad.push(`${dir}: ${name} -> ${spec}`);
+    }
+  }
+  assert.deepEqual(bad, [], `invalid JSR import specifiers (fix jsrRange in scripts/sync-jsr-configs.mjs, then npm run sync:jsr):\n${bad.join("\n")}`);
+});
+
+test("jsrRange turns npm unions into the highest single comparator and refuses what it cannot express", () => {
+  assert.equal(jsrRange("^0.2.0"), "^0.2.0");
+  assert.equal(jsrRange("^0.0.0 || ^0.1.0"), "^0.1.0");
+  assert.equal(jsrRange("^0.0.0 || ^0.1.0 || ^0.2.0"), "^0.2.0");
+  assert.equal(jsrRange("^0.2.0 || ^0.10.0 || ^0.9.1"), "^0.10.0");
+  assert.equal(jsrRange("~1.2.3"), "~1.2.3");
+  assert.equal(jsrRange("21.2.0"), "21.2.0");
+  assert.throws(() => jsrRange(">=1.0.0 <2.0.0"), /single/);
+  assert.throws(() => jsrRange("^1.0.0 || >=3"), /single/);
+  // The ranges laya/laya-cli declare today stay expressible, should they move to JSR.
+  for (const { pkg } of packages) {
+    for (const deps of [pkg.dependencies, pkg.peerDependencies, pkg.optionalDependencies]) {
+      for (const [name, range] of Object.entries(deps ?? {})) {
+        assert.match(`npm:${name}@${jsrRange(range)}`, VALID_SPECIFIER, `${pkg.name}: ${name}@${range}`);
+      }
+    }
   }
 });
 

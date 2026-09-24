@@ -63,10 +63,16 @@ bundle as usual. The `browser` export condition swaps in the browser I/O
 libmlxc. WebGPU needs Chrome/Edge ≥ 113 (f16 from 120); Safari 26 and
 Firefox 141 are expected to work but are not verified.
 
-**Deno**: the backend-agnostic packages (`tensor-backend`, `backend-cpu`,
+**Deno 2**: the backend-agnostic packages (`tensor-backend`, `backend-cpu`,
 `backend-webgpu`, `modernbert`, `laya-core`, `pyjson`, `langdetect-lite`,
-`hf-cache`, …) are prepared for JSR (`deno add jsr:@johnhenry/<name>`);
-`@johnhenry/laya` itself and MLX are Node/Bun/browser only for now.
+`hf-cache`, …) and `backend-mlx` are prepared for JSR (`deno add
+jsr:@johnhenry/<name>`). `backend-mlx` loads mlx-c through `Deno.dlopen`
+(`--allow-ffi`); outside a `node_modules` install, also `deno add
+npm:@johnhenry/backend-mlx-darwin-arm64` for the prebuilt libraries (or set
+`LAYA_MLXC_PATH`). `@johnhenry/laya` is not on JSR (its `#io` runtime split
+is package.json-only), but it runs under Deno from an npm install with
+`--conditions=source`: `predict` on MLX matches Python exactly on all three
+checkpoints.
 
 ## Quick start
 
@@ -162,7 +168,7 @@ examples are deployed to GitHub Pages by
 | Node ≥ 24, macOS arm64 | f32, f16 (bf16 storage) | f32, f16 (Dawn → Metal) | f32 |
 | Node ≥ 24, Linux / Windows | — | f32, f16 where Dawn finds an adapter | f32 |
 | Bun ≥ 1.2 | as Node (`bun:ffi`) | as Node (same Dawn addon) | f32 |
-| Deno 2 | — (no `Deno.dlopen` adapter yet) | f32, f16 (built-in wgpu); backend tested, `laya` not | f32 |
+| Deno 2 | as Node (`Deno.dlopen`); `laya` parity tested | f32, f16 (built-in wgpu); backend tested, `laya` not | f32 |
 | Chrome / Edge ≥ 113 | — | f32; f16 from 120 (`shader-f16`) | f32 |
 | Safari 26, Firefox ≥ 141 | — | expected, not verified | f32 |
 
@@ -206,14 +212,14 @@ checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 Python laya-mlx `predict()` at 93 tokens on the same machine: 46.2 ms P50. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.5–1.9× MLX at longer inputs; the gap is GEMM throughput, since WGSL can't reach Apple's matrix units at full speed.
 
 MLX op dispatch costs 0.80 µs (Node/koffi) and 0.55 µs (Bun/`bun:ffi`) per
-op, against 0.40 µs in Python; GPU time is identical because it is the same
+op, against 0.40 µs in Python (Deno's `Deno.dlopen` measures the same as
+Node); GPU time is identical because it is the same
 `libmlx`. Per-backend numbers: [backend-mlx](./packages/backend-mlx/README.md#performance),
 [backend-webgpu](./packages/backend-webgpu/README.md).
 
 ## Limitations
 
 - **MLX is macOS/arm64 only** and pins MLX 0.32.2 (the prebuilt bundle).
-  Deno has no MLX adapter yet.
 - **WebGPU f16 is not bit-exact** with MLX (its own kernels); f32 is within
   1e-4. Kernels are tuned on Apple M2 and untested on discrete or mobile GPUs.
   Every op is its own dispatch (no graph fusion; `compile` is MLX-only).

@@ -1,0 +1,20 @@
+{
+  "name": "@johnhenry/backend-mlx",
+  "version": "0.2.0",
+  "license": "MIT",
+  "exports": "./src/index.ts",
+  "imports": {
+    "@johnhenry/backend-mlx-darwin-arm64": "npm:@johnhenry/backend-mlx-darwin-arm64@^0.1.1",
+    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.2.0",
+    "koffi": "npm:koffi@^3.3.1"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "scripts/build-mlxc.sh",
+      "CHANGELOG.md",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}
