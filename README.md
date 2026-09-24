@@ -4,6 +4,8 @@
 [![CI](https://github.com/johnhenry/laya-js/actions/workflows/ci.yml/badge.svg)](https://github.com/johnhenry/laya-js/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/%40johnhenry%2Flaya.svg)](LICENSE)
 
+Full documentation: [opensource.johnhenry.me/laya-js](https://opensource.johnhenry.me/laya-js/)
+
 Laya typed decisions (choice / score / noul) in JavaScript. It loads the
 published Laya MLX checkpoints (fp16 safetensors from Hugging Face) and runs
 them on **native MLX** (Node and Bun on Apple Silicon, through our own
@@ -16,8 +18,13 @@ the three backends, the ModernBERT encoder, the Hugging Face cache, the
 language detector and the Python-compatible JSON are each usable without
 Laya.
 
-**Status:** 0.1.0 is prepared but not yet published. Nothing below is on npm
-or JSR yet.
+**Try it in your browser** (WebGPU, nothing to install):
+[playground](https://johnhenry.github.io/laya-js/playground/) ·
+[Snake](https://johnhenry.github.io/laya-js/snake/) — or start at
+<https://johnhenry.github.io/laya-js/>.
+
+**Status:** every package is on npm under `@johnhenry/*`. JSR is prepared
+(`jsr.json` per package) but not published yet.
 
 ## Contents
 
@@ -141,7 +148,12 @@ npx @johnhenry/laya-cli predict --state "I was billed twice. Please refund the d
 
 Private: [`laya-fixtures`](./packages/laya-fixtures) (golden data from
 Python) and three [examples](./examples): a terminal Snake driven by Laya
-(Node/Bun), the same game in the browser on WebGPU, and a web playground.
+(Node/Bun), the same game in the browser on WebGPU
+([live](https://johnhenry.github.io/laya-js/snake/)), and a web playground
+([live](https://johnhenry.github.io/laya-js/playground/)). The two browser
+examples are deployed to GitHub Pages by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
+`main`; `node scripts/build-pages.mjs` builds the same site into `_site/`.
 
 ## Backends
 
