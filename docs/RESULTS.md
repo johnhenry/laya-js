@@ -5,6 +5,22 @@ running macOS 27**, with Node 24.9.0, Bun 1.2.17 and MLX 0.32.2. This is *not*
 the M3 Max behind laya-mlx's published figures (13.4 ms), so compare against
 the Python column measured here, not against laya-mlx's README.
 
+> **Measured on a quiet machine, 2026-09-24**, at commit `588fd55`
+> (backend-webgpu 0.5.0, backend-mlx 0.4.0, laya 0.3.1), with Python 3.12.2 /
+> laya-mlx `a58cab8` and Chromium 152 for the browser rows. macOS 27.0
+> (26A428), on AC power (battery 80%, not charging), `pmset -g therm`: no
+> thermal or performance warning recorded. No other agents or GPU jobs ran:
+> `~/gpu.lock` was held for the whole session. The load average was 5.7
+> at the start (desktop processes only: WindowServer at 40–80% CPU, and the
+> idle GPU showed about 20% "Device Utilization" from compositing). It fell
+> below 3 after about 15 minutes, and the runs started then. It moved between
+> 3 and 6 during the runs, and higher while the benches' own processes ran.
+> The previous numbers were taken with other agents sharing the GPU (load
+> average 4–12). Most of them hold up: the grid, the WebGPU rows and the
+> quantized memory numbers moved by less than 3%. The Python reference, the
+> Python Snake run and the MLX quantized single-question speed-up did change.
+> Those are noted where they appear.
+
 > **Thermal caveat.** A fanless M2 drops to about 35% of its cold GPU speed
 > after roughly 10 s of sustained load and recovers after about 5 s idle.
 > Benchmarks that loop for a long time (`laya bench`, long Snake runs) measure
@@ -70,33 +86,62 @@ per case.
 ## Latency: English checkpoint, f16, one forward pass
 
 These are medians in ms with a cold GPU. B is batch rows, L is tokens per row.
-WebGPU runs on Node through Dawn; Bun is within ±3%.
+WebGPU runs on Node through Dawn. Bun was spot-checked on 6 cells (B=1 and 3,
+L=33/93/256) and is within ±4% of Node on both backends (e.g. B=1 L=93: MLX
+42.4, WebGPU 54.0 ms).
 
 | L | 16 | 33 | 64 | 93 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| B=1 MLX (JS) | 20.0 | 23.6 | 23.6 | 41.7 | 39.0 | 80.4 | 154.4 |
-| B=1 WebGPU | 14.6 | 24.1 | 37.9 | 53.8 | 67.2 | 130.2 | 252.2 |
-| B=1 WebGPU 0.2.0 | 15.4 | 25.7 | 39.4 | 59.0 | 77.0 | 149.3 | 288.2 |
-| B=3 MLX (JS) | 25.4 | 43.7 | 62.1 | 95.5 | 107.4 | 220.9 | 442.6 |
-| B=3 WebGPU | 30.8 | 67.0 | 90.6 | 141.7 | 175.1 | 354.1 | 727.3 |
-| B=3 WebGPU 0.2.0 | 32.1 | 71.1 | 106.0 | 148.3 | 199.6 | 398.7 | 836.0 |
-| B=16 MLX (JS) | 79.7 | 159.4 | 271.7 | 413.2 | 545.9 | 1118 | 2367 |
-| B=16 WebGPU | 119.6 | 252.5 | 435.7 | 653.4 | 886.3 | 1821 | 3843 |
-| B=16 WebGPU 0.2.0 | 129.7 | 279.0 | 488.7 | 723.6 | 992.2 | 2067 | 4440 |
+| B=1 MLX (JS) | 20.4 | 23.8 | 23.6 | 40.8 | 44.4 | 81.8 | 148.3 |
+| B=1 WebGPU | 14.6 | 24.3 | 37.9 | 54.5 | 67.6 | 128.0 | 252.6 |
+| B=1 WebGPU 0.2.0 | 16.6 | 25.5 | 40.2 | 58.3 | 74.9 | 140.3 | 286.5 |
+| B=3 MLX (JS) | 25.8 | 46.2 | 61.4 | 96.4 | 106.4 | 212.8 | 452.0 |
+| B=3 WebGPU | 30.9 | 67.1 | 90.6 | 141.2 | 175.2 | 352.3 | 730.1 |
+| B=3 WebGPU 0.2.0 | 32.3 | 71.5 | 106.4 | 147.7 | 198.9 | 397.7 | 834.7 |
+| B=16 MLX (JS) | 80.8 | 165.7 | 280.4 | 413.2 | 556.0 | 1132 | 2354 |
+| B=16 WebGPU | 120.6 | 250.9 | 437.2 | 653.6 | 879.7 | 1825 | 3854 |
+| B=16 WebGPU 0.2.0 | 131.1 | 270.3 | 489.9 | 720.4 | 992.2 | 2074 | 4474 |
 
-All three rows of a block come from one Node process, interleaved cell by cell
-(`BACKEND=webgpu-main,webgpu,mlx`; "0.2.0" is the unmodified backend from
-`main`, copied to `packages/backend-webgpu/.base/`). WebGPU is now 4–15% faster
-than 0.2.0: faster subgroup-matrix GEMM tiles (≈1.95 instead of ≈1.75 TFLOP/s
-f16 for large M, see the backend README for per-shape GFLOP/s), a buffer pool
-that makes every bind group a cache hit, an earlier first submit, and faster
-bool uploads and RoPE.
+Measured on the quiet machine, 2026-09-24. All three rows of a block come
+from one Node process per batch size, interleaved cell by cell
+(`BACKEND=webgpu-main,webgpu,mlx BS=<B>`). "0.2.0" is
+`@johnhenry/backend-webgpu@0.2.0`'s `src/`, copied to
+`packages/backend-webgpu/.base/`.
+- **Changes from the run under load:** every cell is within 3% of the
+  earlier numbers, except MLX B=1 L=128 (44.4 vs 39.0) and L=512 (148.3 vs
+  154.4). MLX single-row medians wander by ±5–10% from process to process
+  (min 40.1 ms at L=128), so treat those as noise.
+- **Why one process per batch size:** in one process, a cell that follows a
+  larger shape can be measured several times too slow. The cause is
+  backend-webgpu's `sleepWhileWaiting` estimate (see the backend README's
+  limitations). Keep `BS` to one value per process, or run the Ls in
+  ascending order.
+- **Against 0.2.0:** WebGPU is 4–15% faster. The gains come from faster
+  subgroup-matrix GEMM tiles (≈1.95 instead of ≈1.75 TFLOP/s f16 for large
+  M; the backend README has per-shape GFLOP/s), a buffer pool that makes
+  every bind group a cache hit, an earlier first submit, and faster bool
+  uploads and RoPE.
 
-**Python laya-mlx reference:** a full `predict()` on the same machine (L=93,
-B=1, 30 runs after warmup) has a P50 of **46.2 ms**. The JS MLX `predict()`
-adds about 1 ms of prompt building and result formatting on top of the 39.5 ms
-forward pass. The native path is therefore at parity with Python: both call the
-same MLX kernels, and graph building over FFI costs about 1.4 ms per pass.
+**Python laya-mlx reference, interleaved with JS.** Python laya-mlx and JS
+`@johnhenry/laya` on MLX each ran as a long-lived process on the English
+checkpoint, f16, `batch_size` 64. They used the laya-mlx benchmark workload:
+`benchmarks.common.workload(n)`, the README triage email, 93 tokens for one
+question. The two alternated cell by cell for 6 rounds, with the order
+swapped each round and 6 s idle before every cell. Each single-question cell
+was 5 warmups + 30 runs. Each 50-question cell was 1 warmup + 3 runs.
+
+| full `predict()`, English f16 | JS (Node + MLX) | Python laya-mlx |
+|---|---:|---:|
+| 1 question (93 tok), P50 of 180 runs | 42.1 ms (min 37.6) | 41.5 ms (min 37.3) |
+| per-round P50 range | 41.4–42.6 ms | 41.0–41.9 ms |
+| 50 questions (one batch), mean of 18 runs | 1270 ms (39.4 q/s) | 1277 ms (39.1 q/s) |
+
+JS and Python are at parity. JS is 0.6 ms (1.5%) slower on one question
+and 0.6% faster on 50 questions. Both call the same MLX kernels. Graph
+building over FFI costs about 1.4 ms per pass, and prompt building plus
+result formatting cost about 1 ms. The previous Python figure (46.2 ms P50)
+was measured under load and not interleaved, which made JS look faster than
+Python.
 
 **Why WebGPU is still 1.3–1.7× slower than MLX at L ≥ 64:** at those sizes
 the linear layers are about 85% of GPU time (B=16, L=256: 1545 of 1827 ms, at
@@ -119,15 +164,28 @@ the linear layers are about 85% of GPU time (B=16, L=256: 1545 of 1827 ms, at
 
 | runtime | per-decision p50 | notes |
 |---|---:|---|
-| Node + MLX | 24.3 ms | cold GPU, 150 steps |
-| Node + WebGPU (Dawn) | 39.8 ms | cold GPU, 150 steps |
-| Chromium + WebGPU (snake-web) | ≈60 ms | measured before the Phase 3 WebGPU work |
-| Python laya-mlx | ≈43 ms mean | sustained run, so thermally throttled |
+| Node + MLX | 25.5 ms (25.3, 25.7) | cold GPU, 150 steps, 39 moves/s |
+| Node + WebGPU (Dawn) | 36.6 ms (36.6, 36.7) | cold GPU, 150 steps, 27 moves/s |
+| Chromium + WebGPU (snake-web) | ≈60 ms | measured before the Phase 3 WebGPU work (not re-measured) |
+| Python laya-mlx | 23.9 ms (24.6, 23.2) | cold GPU, 150 steps, 40–41 moves/s |
 
-- In sustained 4 × 600-step runs, Node+MLX (25.1 moves/s) and Python (23.0 moves/s)
-  are equal within noise.
+- All runs used seed 101 and 150 uncapped steps, after 20 s idle. There were
+  two runs per runtime, in the order MLX, WebGPU, Python, Python, WebGPU,
+  MLX. JS ran `src/cli.ts --headless --episodes 1 --steps 150 --seed 101`.
+  Python ran `laya-snake --headless --max-speed --steps 150 --seed 101
+  --record …`, and its p50 is taken over the recorded `inference_ms` of each
+  frame.
+- Node + MLX and Python are equal within noise: Python is 1.6 ms (6%) faster
+  per decision. The previous Python figure (≈43 ms mean) came from a
+  sustained run on a loaded machine.
+- Node + WebGPU went from 39.8 to 36.6 ms (backend-webgpu 0.5 vs the earlier
+  run under load).
+- In the sustained 4 × 600-step runs from the earlier session (not
+  re-measured), Node+MLX (25.1 moves/s) and Python (23.0 moves/s) were
+  equal within noise.
 - Every run had 0 deaths.
-- Shield interventions match Python seed for seed.
+- Shield interventions match Python seed for seed. There were 0 in these
+  150-step runs.
 
 ## Quantized checkpoints
 
@@ -172,83 +230,103 @@ dequantization does); without that, the weights kept in f32 were slightly
 *more* accurate per Linear but moved English `hi q2` by 6e-3, to 0.052.
 
 **Device memory, latency, throughput** (M2 MacBook Air, fanless; f16; each
-cell in a fresh process after 20 s idle; `packages/laya/bench/quantized.ts`).
-Memory is MLX `memory().active` after load (peak: `memory().peak` over the
-process) or WebGPU `rt.stats.liveBytes` after load (peak: live + pooled
-buffers after the runs). "1 question" is the P50 of `predict` with the first
-question of the first fixture case; "16 questions" is one `predict` of 16
-questions (one batch of 16).
+cell in a fresh process after 20 s idle; `packages/laya/bench/quantized.ts`;
+quiet machine, 2026-09-24).
+- **Memory:** MLX `memory().active` after load (peak: `memory().peak` over
+  the process), or WebGPU `rt.stats.liveBytes` after load (peak: live +
+  pooled buffers after the runs).
+- **1 question:** the P50 of `predict` with the first question of the first
+  fixture case (91–93 tokens).
+- **16 questions:** one `predict` of 16 questions (one batch of 16).
+- **MLX timings vary more:** MLX single-question P50s vary by up to ±6%
+  between processes (English fp16: 37.1, 37.2 and 41.6 ms in three passes).
+  So the MLX fp16 and on-device rows are the median of three passes, and the
+  dequantize-on-load rows come from one pass.
+- **WebGPU timings are stable:** a second WebGPU pass agreed within 1%.
 
 | checkpoint | backend | weights | device memory after load | peak | load | 1 question P50 | 16 questions |
 |---|---|---|---:|---:|---:|---:|---:|
-| english | mlx | fp16 | 804 MiB | 1413 MiB | 0.4 s | 39.1 ms | 414 ms (38.7 q/s) |
-| english | mlx | q8, dequantize on load | 804 MiB | 1413 MiB | 0.8 s | 39.7 ms | 414 ms (38.7 q/s) |
-| english | mlx | **q8 on device** | **441 MiB (55%)** | 1193 MiB | 0.6 s | 33.8 ms | 458 ms (34.9 q/s) |
-| english | mlx | q4, dequantize on load | 804 MiB | 1413 MiB | 0.7 s | 40.2 ms | 415 ms (38.5 q/s) |
-| english | mlx | **q4 on device** | **228 MiB (28%)** | 1047 MiB | 0.1 s | 34.4 ms | 466 ms (34.3 q/s) |
-| english | webgpu | fp16 | 891 MiB | 999 MiB | 0.4 s | 54.6 ms | 654 ms (24.5 q/s) |
-| english | webgpu | q8, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
-| english | webgpu | **q8 on device** | **460 MiB (52%)** | 569 MiB | 0.2 s | **51.3 ms** | **641 ms (25.0 q/s)** |
-| english | webgpu | q4, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
-| english | webgpu | **q4 on device** | **251 MiB (28%)** | 360 MiB | 0.1 s | 54.7 ms | **650 ms (24.6 q/s)** |
-| multilingual | mlx | fp16 | 614 MiB | 1338 MiB | 0.8 s | 15.9 ms | 151 ms (106.1 q/s) |
-| multilingual | mlx | q8, dequantize on load | 614 MiB | 1338 MiB | 1.1 s | 16.1 ms | 152 ms (105.5 q/s) |
-| multilingual | mlx | **q8 on device** | **338 MiB (55%)** | 1124 MiB | 1.1 s | 16.1 ms | 168 ms (95.4 q/s) |
-| multilingual | mlx | q4, dequantize on load | 614 MiB | 1338 MiB | 1.2 s | 16.1 ms | 152 ms (105.5 q/s) |
-| multilingual | mlx | **q4 on device** | **175 MiB (28%)** | 950 MiB | 0.6 s | 15.9 ms | 172 ms (93.2 q/s) |
-| multilingual | webgpu | fp16 | 635 MiB | 713 MiB | 0.8 s | 22.8 ms | 239 ms (66.9 q/s) |
-| multilingual | webgpu | q8, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (67.1 q/s) |
-| multilingual | webgpu | **q8 on device** | **328 MiB (52%)** | 406 MiB | 0.6 s | **21.4 ms** | **234 ms (68.3 q/s)** |
-| multilingual | webgpu | q4, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (66.9 q/s) |
-| multilingual | webgpu | **q4 on device** | **179 MiB (28%)** | 257 MiB | 0.6 s | **21.9 ms** | **237 ms (67.5 q/s)** |
+| english | mlx | fp16 | 804 MiB | 1413 MiB | 0.2 s | 37.2 ms | 427 ms (37.5 q/s) |
+| english | mlx | q8, dequantize on load | 804 MiB | 1413 MiB | 0.9 s | 41.4 ms¹ | 414 ms (38.6 q/s) |
+| english | mlx | **q8 on device** | **441 MiB (55%)** | 1193 MiB | 0.6 s | **34.8 ms** | 462 ms (34.6 q/s) |
+| english | mlx | q4, dequantize on load | 804 MiB | 1413 MiB | 0.7 s | 37.5 ms | 430 ms (37.2 q/s) |
+| english | mlx | **q4 on device** | **228 MiB (28%)** | 1047 MiB | 0.1 s | **35.4 ms** | 481 ms (33.3 q/s) |
+| english | webgpu | fp16 | 891 MiB | 999 MiB | 0.2 s | 54.7 ms | 657 ms (24.4 q/s) |
+| english | webgpu | q8, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 54.6 ms | 656 ms (24.4 q/s) |
+| english | webgpu | **q8 on device** | **460 MiB (52%)** | 569 MiB | 0.2 s | **51.6 ms** | **643 ms (24.9 q/s)** |
+| english | webgpu | q4, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 54.9 ms | 661 ms (24.2 q/s) |
+| english | webgpu | **q4 on device** | **251 MiB (28%)** | 360 MiB | 0.1 s | 54.9 ms | 656 ms (24.4 q/s) |
+| multilingual | mlx | fp16 | 614 MiB | 1338 MiB | 0.6 s | 16.6 ms | 154 ms (103.9 q/s) |
+| multilingual | mlx | q8, dequantize on load | 614 MiB | 1338 MiB | 1.2 s | 16.5 ms | 147 ms (108.8 q/s) |
+| multilingual | mlx | **q8 on device** | **338 MiB (55%)** | 1124 MiB | 1.1 s | 16.6 ms | 169 ms (94.7 q/s) |
+| multilingual | mlx | q4, dequantize on load | 614 MiB | 1338 MiB | 1.2 s | 16.2 ms | 155 ms (103.4 q/s) |
+| multilingual | mlx | **q4 on device** | **175 MiB (28%)** | 950 MiB | 0.6 s | 16.6 ms | 176 ms (90.9 q/s) |
+| multilingual | webgpu | fp16 | 635 MiB | 713 MiB | 0.6 s | 22.8 ms | 240 ms (66.6 q/s) |
+| multilingual | webgpu | q8, dequantize on load | 635 MiB | 713 MiB | 1.1 s | 22.8 ms | 240 ms (66.7 q/s) |
+| multilingual | webgpu | **q8 on device** | **328 MiB (52%)** | 406 MiB | 0.6 s | **21.5 ms** | **233 ms (68.6 q/s)** |
+| multilingual | webgpu | q4, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 241 ms (66.5 q/s) |
+| multilingual | webgpu | **q4 on device** | **179 MiB (28%)** | 257 MiB | 0.6 s | **21.8 ms** | 239 ms (67.1 q/s) |
+
+¹ The dequantize-on-load model is the fp16 model with perturbed weights, so
+41.4 ms is MLX process-to-process noise (single pass), not a real slowdown.
 
 - **Resident weights shrink with the file:** 52–55% of fp16 for q8 and 28%
   for q4, on both backends. The MLX peak falls by 210–390 MiB; the rest of
   its peak is activations and allocator cache of the 16-row batch. WebGPU's
-  peak (every buffer it holds) falls to 57% / 36% of fp16.
-- **Speed:** on MLX one short question is 1.16× faster on English (33.8 vs
-  39.1 ms: batch-1 is memory-bound and `quantized_matmul` reads a quarter to
-  half the bytes) and unchanged on multilingual; 16-question batches are
-  10–12% slower (dequantization in the GEMM is not free once it is
-  compute-bound). On WebGPU quantized weights are now at least as fast as
-  fp16: one question 6% faster for q8 (English 51.3 vs 54.6 ms) and 0–4%
-  for q4 (English q4 54.7 vs 54.6 ms is a tie), 16-question batches 1–2%
-  faster. With backend-webgpu 0.4 they were
-  9–16% slower (English q8 59.4 ms / 748 ms, q4 61.7 / 762 ms; multilingual
-  q8 24.4 / 274 ms, q4 25.4 / 279 ms, measured the same day with the same
-  bench). The WebGPU fp16 and on-device rows were re-measured 2026-09-24
-  with backend-webgpu 0.5 (`QUANT_GEMM_DEFAULT`: a matrix-"vector" kernel for small M,
-  subgroup-matrix tiles that dequantize after the MMAs for larger M; the
-  single question here is M = 93 tokens, the 16 questions M ≈ 1488).
-  Per-Linear GFLOP/s before/after are in the
-  backend-webgpu README. The dequantize-on-load and MLX rows are from the
-  earlier run (those paths did not change).
-- **In a browser** (Chromium in the Claude browser pane on the same M2,
-  `navigator.gpu`, `shader-f16` and `subgroups` but no subgroup matrices;
-  checkpoints served from `localhost` by the web-playground's `serve.ts`; a
-  scratch page loading them with `load(url)`, 3 warmups, P50 of 30 single
-  questions of 48–51 tokens, median of 5 batches of 16):
+  peak (every buffer it holds) falls to 57% / 36% of fp16. The memory
+  numbers are identical to the earlier run under load.
+- **Speed on MLX:**
+  - One short English question is 1.07× faster with q8 (34.8 vs 37.2 ms)
+    and 1.05× with q4. Batch 1 is memory-bound, and `quantized_matmul` reads
+    a quarter to half the bytes.
+  - The previous run, under load, reported 1.16× (33.8 vs 39.1 ms). Its
+    fp16 P50 was a slow draw.
+  - Multilingual single questions are unchanged at 16.6 ms.
+  - 16-question batches are 8–14% slower: dequantizing in the GEMM is not
+    free once the GEMM is compute-bound.
+- **Speed on WebGPU:** quantized weights are at least as fast as fp16.
+  - One question is 6% faster with q8 (English 51.6 vs 54.7 ms, multilingual
+    21.5 vs 22.8 ms). q4 is a tie on English and 4% faster on multilingual.
+  - 16-question batches are 2–3% faster with q8, and q4 ties.
+  - With backend-webgpu 0.4, quantized weights were 9–16% slower (English
+    q8 59.4 ms / 748 ms, q4 61.7 / 762 ms; multilingual q8 24.4 / 274 ms, q4
+    25.4 / 279 ms, measured under load).
+  - Kernel choice (`QUANT_GEMM_DEFAULT`): a matrix-"vector" kernel for
+    small M, and subgroup-matrix tiles that dequantize after the MMAs for
+    larger M. The single question here is M = 93 tokens; the 16 questions are
+    M ≈ 1488.
+  - Per-Linear GFLOP/s are in the backend-webgpu README.
+- **In a browser:**
+  - Setup: Chromium 152 in the Claude browser pane on the same M2, with
+    `navigator.gpu`, `shader-f16` and `subgroups` but no subgroup matrices.
+    The checkpoints (multilingual fp16 from the HF cache, q8/q4 from `laya
+    quantize`) were served from `localhost` by the web-playground's
+    `scripts/serve.ts`.
+  - The test page was a scratch page bundled by the playground's
+    `scripts/build.ts` and loading them with `load(url)`. The Laya Playground
+    UI itself only loads Hub repos.
+  - It ran the same state and questions as the Node rows (91 tokens): 3
+    warmups, 5 s idle, the P50 of 30 single questions, 5 s idle, then the
+    median of 5 batches of 16. Each checkpoint was measured after 15 s idle,
+    and fp16 and q8 were measured twice.
 
   | checkpoint | weights | device memory | 1 question P50 | 16 questions |
   |---|---|---:|---:|---:|
-  | english | fp16 | 891 MiB | 34.6 ms | 596 ms (26.9 q/s) |
-  | english | q8 on device | 460 MiB | 33.1 ms | 522 ms (30.7 q/s) |
-  | english | q4 on device | 251 MiB | 35.7 ms | 545 ms (29.3 q/s) |
-  | multilingual | fp16 | 635 MiB | 19.4 ms | 216 ms (74.2 q/s) |
-  | multilingual | q8 on device | 328 MiB | 20.0 ms (min 15.8) | 202 ms (79.4 q/s) |
-  | multilingual | q4 on device | 179 MiB | 22.0 ms (min 17.1) | 205 ms (77.9 q/s) |
+  | multilingual | fp16 | 635 MiB | 32.0 ms (32.2, 31.8; min 30.1) | 350 ms (45.7 q/s) |
+  | multilingual | q8 on device | 328 MiB | 26.0 ms (26.3, 25.6; min 24.3) | 322 ms (49.7 q/s) |
+  | multilingual | q4 on device | 179 MiB | 26.9 ms (min 24.6) | 332 ms (48.1 q/s) |
 
-  The English fp16 / q8 and multilingual q8 rows are from the final build;
-  the q4 and multilingual fp16 rows from the same session a build earlier
-  (same browser-side kernel choice, older unpack code). Single-question
-  P50s in the browser pane vary by ±2 ms between runs, so one question is a
-  tie (English q8 4% faster in the final run); 16-question batches are
-  5–12% faster quantized.
-  With 0.4's kernel choice the same page measured English q8 at 42.2 ms and
-  1533 ms (without subgroup matrices it fell back to the direct kernel).
-  Loading a checkpoint from an http(s) URL only kept the weights quantized
-  on the device after a fix in `@johnhenry/laya` (the URL loader dropped the
-  `quantized` option and always dequantized).
+  - In the browser, quantized weights are clearly faster: one question
+    is 19% faster with q8 (26.0 vs 32.0 ms), and 16 questions are 8% faster.
+  - The browser is slower than Node/Dawn on the same input (22.8 ms and
+    240 ms for fp16). Without subgroup matrices, the browser uses the tiled
+    WGSL GEMM.
+  - The earlier browser table (English and multilingual; 19.4 ms / 216 ms
+    for multilingual fp16) used a shorter question of 48–51 tokens. It is
+    not comparable, and its English rows were not re-measured.
+  - Loading a checkpoint from an http(s) URL only kept the weights quantized
+    on the device after a fix in `@johnhenry/laya` (the URL loader dropped
+    the `quantized` option and always dequantized).
 - **Load time** drops for the device path on MLX/WebGPU (no host
   dequantization): English q4 loads in 0.1 s against 0.7 s dequantizing.
 
@@ -293,9 +371,10 @@ compressed columns use `gzip -9` and `brotli -q 9 -w 24`.
 
 - **Transfer compression adds only about 5–8%**, for fp16 and quantized files
   alike. The size win comes from the format.
-- **Load time** with `quantized: "dequantize"` is 0.6–1.3 s for q8/q4 on
-  MLX, against 0.4 s for fp16; the host dequantization takes the extra time.
-  Kept on the device (the default on MLX/WebGPU), q4 loads faster than fp16.
+- **Load time** with `quantized: "dequantize"` is 0.7–1.2 s for q8/q4 on
+  MLX. fp16 takes 0.2 s (English) or 0.6 s (multilingual), so the host
+  dequantization accounts for the difference. Kept on the device (the
+  default on MLX/WebGPU), q4 loads as fast as fp16 or faster.
 - **Inference speed and GPU memory**: see the device table above.
 - **Converter time:** about 10 s for q8 and 30 s for q4 on the M2, with a
   peak of about 1.1 GB.
@@ -337,8 +416,10 @@ LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> LAYA_REAL_BACKENDS=m
 QDIR=<dir> node --conditions=source packages/laya/bench/quantized.ts
 # quantized GEMM GFLOP/s vs fp16 on WebGPU
 MODEL=both node --conditions=source packages/backend-webgpu/bench/quantized-gemm.ts
-# latency grid (takes a lock on ~/gpu.lock; about 10 minutes because of cooldowns)
-node --conditions=source packages/backend-webgpu/bench/grid.ts
+# latency grid (hold ~/gpu.lock; one process per batch size, ~15 minutes because of cooldowns)
+for b in 1 3 16; do BACKEND=webgpu,mlx BS=$b node --conditions=source packages/backend-webgpu/bench/grid.ts; done
+# Snake per-decision p50 (cold GPU, 150 steps)
+node --conditions=source examples/snake-terminal/src/cli.ts --backend mlx|webgpu --headless --episodes 1 --steps 150 --seed 101
 # regenerate golden fixtures from Python
 npm run fixtures
 ```

@@ -218,11 +218,15 @@ differ by at most 5e-3; in f32 they agree to 4 decimals.
 
 **What it buys** (M2, f16; [RESULTS.md](RESULTS.md#quantized-checkpoints)):
 device memory after load is 52–55% of fp16 for q8 and 28% for q4 (English on
-MLX: 804 → 441 / 228 MiB). One short question is 1.16× faster on MLX
-(batch 1 is memory-bound); 16-question batches are 10–16% slower there, since
+MLX: 804 → 441 / 228 MiB). One short English question is 1.05–1.07× faster
+on MLX (batch 1 is memory-bound; multilingual is unchanged); 16-question
+batches are 8–14% slower there, since
 dequantizing inside the GEMM costs ALU time once the multiply is
 compute-bound. On WebGPU (backend-webgpu 0.5) quantized weights are as fast
 as fp16 or faster: one question 6% faster for q8 and 0–4% for q4,
-16-question batches 1–2% faster (0.4 was 9–16% slower). Individual Linears
+16-question batches 2–3% faster for q8 and the same speed for q4 (0.4 was 9–16%
+slower). In Chromium (no subgroup matrices) the gain is larger: 19% for
+one multilingual question with q8, 8% for 16. Measured on a quiet M2,
+2026-09-24. Individual Linears
 still lose 3–17% at a few shapes around M = 33 and M = 93–128 (see the
 backend-webgpu README).
