@@ -4,6 +4,7 @@
   "license": "MIT",
   "exports": "./src/index.ts",
   "imports": {
+    "#dawn": "./src/dawn-node.ts",
     "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.2",
     "@webgpu/types": "npm:@webgpu/types@^0.1.74",
     "webgpu": "npm:webgpu@^0.6.1"
