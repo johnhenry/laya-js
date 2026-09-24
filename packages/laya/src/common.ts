@@ -2,6 +2,7 @@
 import type { Backend } from "@johnhenry/tensor-backend";
 import type { AgentConfig, LayaTokenizer } from "@johnhenry/laya-core";
 import type { ConsumingWeights } from "./weights.ts";
+import type { DequantDtype } from "./quant.ts";
 
 export type BackendName = "mlx" | "webgpu" | "cpu";
 export type BackendRequest = "auto" | BackendName;
@@ -28,7 +29,8 @@ export interface Checkpoint {
   agentConfig: AgentConfig;
   encoderConfig: Record<string, unknown>;
   tokenizer: LayaTokenizer & { encodeWithSpecialTokens(text: string): number[] };
-  weights: () => Promise<ConsumingWeights>;
+  /** Reads the weights; `dtype` is what a quantized checkpoint dequantizes to (default "f16"). */
+  weights: (opts?: { dtype?: DequantDtype }) => Promise<ConsumingWeights>;
 }
 
 /** Files fetched from the Hub (resolve_model's allow_patterns minus mlx_config.json). */

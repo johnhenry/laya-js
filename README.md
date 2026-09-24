@@ -4,6 +4,8 @@
 [![CI](https://github.com/johnhenry/laya-js/actions/workflows/ci.yml/badge.svg)](https://github.com/johnhenry/laya-js/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/%40johnhenry%2Flaya.svg)](LICENSE)
 
+Full documentation: [opensource.johnhenry.me/laya-js](https://opensource.johnhenry.me/laya-js/)
+
 Laya typed decisions (choice / score / noul) in JavaScript. It loads the
 published Laya MLX checkpoints (fp16 safetensors from Hugging Face) and runs
 them on **native MLX** (Node and Bun on Apple Silicon, through our own
@@ -16,8 +18,13 @@ the three backends, the ModernBERT encoder, the Hugging Face cache, the
 language detector and the Python-compatible JSON are each usable without
 Laya.
 
-**Status:** 0.1.0 is prepared but not yet published. Nothing below is on npm
-or JSR yet.
+**Try it in your browser** (WebGPU, nothing to install):
+[playground](https://johnhenry.github.io/laya-js/playground/) ·
+[Snake](https://johnhenry.github.io/laya-js/snake/) — or start at
+<https://johnhenry.github.io/laya-js/>.
+
+**Status:** every package is on npm under `@johnhenry/*`. JSR is prepared
+(`jsr.json` per package) but not published yet.
 
 ## Contents
 
@@ -141,7 +148,12 @@ npx @johnhenry/laya-cli predict --state "I was billed twice. Please refund the d
 
 Private: [`laya-fixtures`](./packages/laya-fixtures) (golden data from
 Python) and three [examples](./examples): a terminal Snake driven by Laya
-(Node/Bun), the same game in the browser on WebGPU, and a web playground.
+(Node/Bun), the same game in the browser on WebGPU
+([live](https://johnhenry.github.io/laya-js/snake/)), and a web playground
+([live](https://johnhenry.github.io/laya-js/playground/)). The two browser
+examples are deployed to GitHub Pages by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
+`main`; `node scripts/build-pages.mjs` builds the same site into `_site/`.
 
 ## Backends
 
@@ -181,6 +193,8 @@ All 12 configurations agree with Python on every one of the 63 answers
 checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 `LAYA_REAL=1 npm test -w @johnhenry/laya` (details in the
 [laya README](./packages/laya/README.md#parity)).
+
+**Quantized checkpoints.** `laya quantize --bits 8|4` writes smaller copies that `load()` dequantizes on load. q8 halves the download (english 843 → 435 MB, multilingual 644 → 332 MB) and keeps 63/63 argmax on all three checkpoints (max |Δp| ≤ 0.047 vs fp16). q4 cuts it to 28% (238 / 182 MB) but changes 1–5 of 63 argmaxes per checkpoint. See [docs/RESULTS.md](./docs/RESULTS.md#quantized-checkpoints) and [docs/QUANTIZATION.md](./docs/QUANTIZATION.md).
 
 **Speed on an Apple M2 (fanless).** English checkpoint, f16, median forward-pass time with a cold GPU. The full grid, the thermal caveat and Snake numbers are in [docs/RESULTS.md](./docs/RESULTS.md).
 

@@ -1,5 +1,7 @@
 # Laya Snake (WebGPU, browser)
 
+**Live:** <https://johnhenry.github.io/laya-js/snake/> (GitHub Pages, deployed from `main` by `.github/workflows/pages.yml`).
+
 The [Snake demo](../snake-terminal) in the browser. The game, Hamiltonian
 planner, cycle safety shield and the exact 3-question compact prompt are the
 same code as the terminal demo: `../snake-terminal/src/core`, imported
@@ -55,8 +57,9 @@ background-tab throttling). No console errors.
 - WebGPU only. There is no CPU fallback in this demo, because at about 1 s
   per decision on the CPU it would not be a game. An unsupported browser
   gets an explanation.
-- The Cache API is per origin, so weights cached by the playground (port
-  5173) are not reused here (port 5174).
+- The Cache API is per origin, so locally weights cached by the playground
+  (port 5173) are not reused here (port 5174). On GitHub Pages both demos
+  share the `johnhenry.github.io` origin and one cached copy.
 - The ≈60 ms per decision is WebGPU dispatch/encode bound, with 450+
   dispatches per forward (see backend-webgpu's README). MLX in Node reaches
   ~26–40 ms.

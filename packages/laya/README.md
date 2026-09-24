@@ -58,8 +58,10 @@ disk; a path-looking string (`/`, `./`, `../`, `~`) that does not exist throws
 into the huggingface_hub cache (`model.safetensors`, `rl_agent_config.json`,
 `encoder/config.json`, `tokenizer/tokenizer.json`,
 `tokenizer/tokenizer_config.json`). `offline: true` (or `$HF_HUB_OFFLINE`)
-never touches the network. In browsers a Hub repo goes through the Cache API,
-and a URL or URL path (`/models/tiny/`) is read with `fetch`.
+never touches the network. An `http(s)://` base URL is read with `fetch`, in
+Node and Bun as well as browsers: the configs are fetched and the weights are
+read with Range requests. Nothing is cached. In browsers a Hub repo goes
+through the Cache API, and a URL path (`/models/tiny/`) works too.
 
 Validation and messages follow Python: `subfolder must be a relative path…`,
 `Not a complete Laya checkpoint: … is missing`, `Laya config must specify
@@ -73,6 +75,37 @@ buffer is ignored, as in laya-mlx.
 Weights are opened with `openSafetensors` (the header, then coalesced reads).
 Each tensor is released as soon as the backend has its copy, so the file is
 not held twice.
+
+### Quantized checkpoints
+
+A `model.safetensors` whose `__metadata__` has `laya_quant: "q8" | "q4"` is
+dequantized while loading. It is dequantized to f16, or to f32 when the agent
+computes in f32 (CPU, or `dtype: "f32"`). Loading is tensor by tensor: at
+most one dequantized tensor exists on the host at a time. Nothing else
+changes: GPU memory and speed are those of the float checkpoint, and only the
+download shrinks.
+
+Write quantized checkpoints with `laya quantize` (`@johnhenry/laya-cli`) or
+`quantizeSafetensors`.
+
+| checkpoint | fp16 | q8 | q4 | q8 argmax / max \|Δp\| | q4 argmax / max \|Δp\| |
+|---|---:|---:|---:|---|---|
+| english | 842.6 MB | 434.8 MB | 237.5 MB | 63/63 / 0.043 (webgpu 0.047) | 58/63 / 0.43 |
+| multilingual | 643.8 MB | 332.2 MB | 181.5 MB | 63/63 / 0.038 | 62/63 / 0.60 |
+| typed-decisions | 842.6 MB | 434.8 MB | 237.5 MB | 63/63 / 0.022 | 58/63 / 0.25 |
+
+These were measured on mlx f16 (and webgpu f16 for English) against Python
+`result_fp16`. Details, the q4 flips and the gzip/brotli sizes are in
+[docs/RESULTS.md](https://github.com/johnhenry/laya-js/blob/main/docs/RESULTS.md#quantized-checkpoints).
+The format and hosting notes are in
+[docs/QUANTIZATION.md](https://github.com/johnhenry/laya-js/blob/main/docs/QUANTIZATION.md).
+
+Exports:
+- `quantizeMatrix` / `dequantizeMatrix`: one matrix;
+- `quantizeSafetensors`: a whole file, browser-safe;
+- `quantMetadata`: parses and validates `__metadata__`;
+- `dequantizingWeights`, and `readWeights(src, { dtype })`, which detects
+  quantized files automatically.
 
 ### `LayaAgent`
 
@@ -203,6 +236,11 @@ results. Measured on an Apple M2 (Node 24.9, macOS 27):
   their error is best read relatively.
 
 ## Limitations
+
+- Quantized checkpoints are dequantized on load, so they save download size
+  only, not GPU memory or time. Loading takes about 0.3–0.9 s longer on an
+  M2. Running quantized matmuls on the GPU would need new backend ops.
+  q4 changes some answers; see the table above.
 
 - `embed` does not run texts that tokenize to nothing; it returns the zero
   vector for them. Python computes `sum(h·0) / max(0, 1)`, and an all-masked

@@ -50,7 +50,9 @@ export async function load(modelIdOrPath: string, opts: LoadOptions = {}): Promi
   const backend = typeof req === "string" ? await createBackend(req, device) : req;
   let agent: LayaAgent | undefined;
   try {
-    const weights = await ckpt.weights();
+    // quantized checkpoints dequantize straight to the dtype the agent will compute in (createAgent's rule)
+    const computeDtype = (opts.dtype ?? "f16") === "f16" && backend.name !== "cpu" && backend.supports("f16") ? "f16" : "f32";
+    const weights = await ckpt.weights({ dtype: computeDtype });
     agent = await createAgent({
       backend,
       encoderConfig: ckpt.encoderConfig,
