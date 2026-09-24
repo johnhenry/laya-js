@@ -33,7 +33,7 @@ const up = (shape: number[], s = 0.02, dtype: "f16" | "f32" = "f16") => {
 };
 
 // ---- FFI overhead ------------------------------------------------------------
-const a = up([4], 1, "f32"), c = up([4], 1, "f32");
+const a = await up([4], 1, "f32"), c = await up([4], 1, "f32");
 {
   const N = 10000;
   const us = time("10k tiny adds: build+dispose (per op, us)", 5, () => {
@@ -58,7 +58,7 @@ const a = up([4], 1, "f32"), c = up([4], 1, "f32");
 
 // ---- matmul / sdpa at encoder shapes ------------------------------------------------
 {
-  const x = up([16, 128, 1024], 1), w = up([1024, 1024]);
+  const x = await up([16, 128, 1024], 1), w = await up([1024, 1024]);
   const ms = time("linear f16 [16,128,1024]x[1024,1024]^T", 50, () => {
     const y = b.linear(x, w);
     b.flush(y);
@@ -66,8 +66,8 @@ const a = up([4], 1, "f32"), c = up([4], 1, "f32");
   });
   console.log(`  -> ${(2 * 16 * 128 * 1024 * 1024 / ms / 1e9).toFixed(2)} TFLOP/s`);
   const B = 16, H = 16, L = 128, D = 64;
-  const q = up([B, H, L, D], 1), k = up([B, H, L, D], 1), v = up([B, H, L, D], 1);
-  const mask = b.fromHost(host("bool", [B, 1, 1, L], Array.from({ length: B * L }, (_, i) => (i % L < 100 ? 1 : 0))));
+  const q = await up([B, H, L, D], 1), k = await up([B, H, L, D], 1), v = await up([B, H, L, D], 1);
+  const mask = await b.fromHost(host("bool", [B, 1, 1, L], Array.from({ length: B * L }, (_, i) => (i % L < 100 ? 1 : 0))));
   time("sdpa f16 [16,16,128,64] bool mask", 50, () => {
     const y = b.sdpa(q, k, v, mask, D ** -0.5);
     b.flush(y);
@@ -78,7 +78,7 @@ const a = up([4], 1, "f32"), c = up([4], 1, "f32");
 // ---- one ModernBERT-large encoder layer ----------------------------------------------
 {
   const Dm = 1024, H = 16, Dh = 64, I = 2624;
-  const W = { attnNorm: up([Dm], 1), Wqkv: up([3 * Dm, Dm]), Wo: up([Dm, Dm]), mlpNorm: up([Dm], 1), Wi: up([2 * I, Dm]), Wo2: up([Dm, I]) };
+  const W = { attnNorm: await up([Dm], 1), Wqkv: await up([3 * Dm, Dm]), Wo: await up([Dm, Dm]), mlpNorm: await up([Dm], 1), Wi: await up([2 * I, Dm]), Wo2: await up([Dm, I]) };
   const layer = (x: MlxTensor, mask: MlxTensor): MlxTensor =>
     b.scope(() => {
       const [B, L] = x.shape as [number, number, number];
@@ -91,8 +91,8 @@ const a = up([4], 1, "f32"), c = up([4], 1, "f32");
       return b.add(x1, m);
     });
   for (const [B, L] of [[1, 32], [16, 128]] as const) {
-    const x = up([B, L, Dm], 1);
-    const mask = b.fromHost(host("bool", [B, 1, 1, L], new Array(B * L).fill(1)));
+    const x = await up([B, L, Dm], 1);
+    const mask = await b.fromHost(host("bool", [B, 1, 1, L], new Array(B * L).fill(1)));
     time(`encoder layer eager B=${B} L=${L}`, 30, () => {
       const y = layer(x, mask);
       b.flush(y);

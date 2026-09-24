@@ -23,7 +23,7 @@ import { createWebGpuBackend } from "@johnhenry/backend-webgpu";
 
 const gpu = await createWebGpuBackend();          // requests adapter + device
 console.log(gpu.adapterInfo, gpu.supports("f16")); // e.g. apple / metal-3, true
-const x = gpu.fromHost({ dtype: "f32", shape: [2, 3], data: new Float32Array([1, 2, 3, 4, 5, 6]) });
+const x = await gpu.fromHost({ dtype: "f32", shape: [2, 3], data: new Float32Array([1, 2, 3, 4, 5, 6]) });
 const y = gpu.scope(() => gpu.softmax(gpu.cast(x, "f16"), -1)); // intermediates freed
 console.log(await gpu.read(y));                    // { dtype: "f16", data: Float16Array }
 gpu.destroy();
@@ -111,8 +111,9 @@ gpu.destroy();
   forward, so a steady-state ModernBERT forward creates no bind groups
   (encode cost ≈ 8 µs per dispatch in Node, was ≈ 13 µs).
 - Buffer pool with ¼-power-of-two size classes (at most 25% waste).
-  `fromHost` flushes first only when it reuses a buffer that a pending,
-  unsubmitted pass may still read.
+  `fromHost` copies the host data with `queue.writeBuffer` when called and
+  returns an already-settled Promise; it flushes first only when it reuses
+  a buffer that a pending, unsubmitted pass may still read.
 - Pipeline cache keyed by (kernel, dtypes, specialization). Explicit bind
   group layouts are used, not `layout: "auto"`.
 - Free views: `reshape`, same-dtype `cast`, identity-like `transpose`, and
@@ -144,11 +145,23 @@ Fused `geglu` and `meanPool` are single kernels. Elementwise ops are n-ary
 with broadcast strides (rank ≤ 8), and 1-D launches use 2-D grids, so
 sizes above 16M elements work.
 
+General numerics are all native: comparisons and logical ops are n-ary
+kernels writing bool; `sqrt`, `rsqrt` (`inverseSqrt`), `tanh` (argument
+clamped to ±15), `sigmoid`, `neg` and `abs` are n-ary unary kernels (`neg`
+/ `abs` keep i32); `pow` uses a helper with C/MLX semantics (0⁰ = 1, a
+negative base with an integral exponent, WGSL's `pow` being undefined for
+x < 0); `erf` is the f32 lowering of math-plus tensor-core's canonical erf
+(series below 1, depth-28 continued fraction above, max abs error < 2.5e-7
+over [−8, 8] in the kernel tests; `gelu` keeps its own polynomial erf).
+`min` and `mean` reuse the reduction kernel (f32 accumulation), `argmax` /
+`argmin` are one thread per output (first index on ties), and `cumsum` is
+one thread per scanned lane (sequential along the axis, f32/i32 accumulator).
+
 ## Runtime support
 
 | Runtime | Status |
 |---|---|
-| Node ≥ 24 (Dawn via `webgpu@0.6`) | ✅ Conformance f32 + f16, plus kernel edge tests (`npm test`). |
+| Node ≥ 24 (Dawn via `webgpu@0.6`) | ✅ Conformance f32 + f16 + bf16, plus kernel edge tests (`npm test`). |
 | Bun 1.2 (same Dawn addon) | ✅ Same suites (`npm run test:bun`). The tests use `bun:test` under Bun, because Bun's `node:test` shim registers only the first file. |
 | Deno 2.x (built-in wgpu) | ✅ Same suites (`npm run test:deno`). `navigator.gpu` is used directly and `shader-f16` is available on Apple. |
 | Chrome / Edge ≥ 113 (f16 from 120) | ✅ `demo/` passes in f32 + f16 (verified in Chromium 152 on macOS). |
@@ -228,6 +241,9 @@ L=512 18.8 s.
   to f32 in workgroup memory. Kernel configs are tuned on Apple M2 and are
   untested on discrete or mobile GPUs. No other subgroup (shuffle/reduce) paths.
 - `sort` rows over 4096 elements use a slow per-row insertion sort.
+  `cumsum` scans each lane sequentially, so it is slow for very long axes.
+  NaN handling in comparisons, `min`/`argmax` etc. follows the driver
+  (WGSL may assume no NaNs).
   `matmul` supports batch ≤ 65535. Rank ≤ 8. `sdpa` head dim ≤ 256, with q,
   k and v having the same batch and heads (no GQA). Fully masked rows are
   undefined behaviour, as in the contract.

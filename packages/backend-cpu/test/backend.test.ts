@@ -9,28 +9,29 @@ import { host, toF32 } from "@johnhenry/tensor-backend";
 import { CpuTensor, createCpuBackend, erf, erfc, geluScalar } from "../src/index.ts";
 
 describe("backend-cpu", () => {
-test("supports: f32 reference only", () => {
+test("supports: f32 reference only", async () => {
   const b = createCpuBackend();
   assert.equal(b.supports("f32"), true);
   assert.equal(b.supports("i32"), true);
   assert.equal(b.supports("bool"), true);
   assert.equal(b.supports("f16"), false);
   assert.equal(b.supports("bf16"), false);
-  assert.throws(() => b.cast(b.fromHost(host("f32", [1], [1])), "f16"));
+  const one = await await b.fromHost(host("f32", [1], [1]));
+  assert.throws(() => b.cast(one, "f16"));
 });
 
 test("fromHost widens f16 and bf16 to f32", async () => {
   const b = createCpuBackend();
-  const f16 = b.fromHost(host("f16", [3], [1.5, -2, 0.0999755859375]));
-  const bf16 = b.fromHost(host("bf16", [2], [1.5, -3]));
+  const f16 = await b.fromHost(host("f16", [3], [1.5, -2, 0.0999755859375]));
+  const bf16 = await b.fromHost(host("bf16", [2], [1.5, -3]));
   assert.equal(f16.dtype, "f32");
   assert.deepEqual([...toF32(await b.read(f16))], [1.5, -2, 0.0999755859375]);
   assert.deepEqual([...toF32(await b.read(bf16))], [1.5, -3]);
 });
 
-test("nested scopes keep returned tensors (array and object) and free the rest", () => {
+test("nested scopes keep returned tensors (array and object) and free the rest", async () => {
   const b = createCpuBackend();
-  const x = b.fromHost(host("f32", [2], [1, 2]));
+  const x = await b.fromHost(host("f32", [2], [1, 2]));
   let inner: CpuTensor | undefined, tmp: CpuTensor | undefined;
   const out = b.scope(() => {
     const kept = b.scope(() => {
@@ -73,14 +74,31 @@ test("erf / erfc / gelu match reference values", () => {
 
 test("broadcast, reshape(-1), slice with negative bounds, sort", async () => {
   const b = createCpuBackend();
-  const a = b.fromHost(host("f32", [2, 3], [1, 2, 3, 4, 5, 6]));
+  const a = await b.fromHost(host("f32", [2, 3], [1, 2, 3, 4, 5, 6]));
   const r = b.reshape(a, [-1, 2]);
   assert.deepEqual(r.shape, [3, 2]);
   const s = b.slice(a, [0, -2], [2, 3]);
   assert.deepEqual([...toF32(await b.read(s))], [2, 3, 5, 6]);
-  const m = b.where(b.fromHost(host("bool", [1, 3], [1, 0, 1])), a, b.fromHost(host("f32", [1], [-1])));
+  const [cond, neg1] = await Promise.all([b.fromHost(host("bool", [1, 3], [1, 0, 1])), b.fromHost(host("f32", [1], [-1]))]);
+  const m = b.where(cond, a, neg1);
   assert.deepEqual([...toF32(await b.read(m))], [1, -1, 3, 4, -1, 6]);
-  const srt = b.sort(b.fromHost(host("f32", [2, 2], [3, 1, -1, -5])), 0);
+  const srt = b.sort(await b.fromHost(host("f32", [2, 2], [3, 1, -1, -5])), 0);
   assert.deepEqual([...toF32(await b.read(srt))], [-1, -5, 3, 1]);
+});
+
+test("fromHost is async and copies at call time", async () => {
+  const b = createCpuBackend();
+  const data = new Float32Array([1, 2]);
+  const p = b.fromHost(host("f32", [2], data));
+  assert.ok(p instanceof Promise);
+  data[0] = 9;
+  assert.deepEqual([...toF32(await b.read(await p))], [1, 2]);
+});
+
+test("general numerics: native erf is the double-precision erf rounded to f32", async () => {
+  const b = createCpuBackend();
+  const xs = [-3, -0.5, 0, 1e-3, 0.7, 2.5];
+  const got = toF32(await b.read(b.erf(await b.fromHost(host("f32", [xs.length], xs)))));
+  xs.forEach((x, i) => assert.equal(got[i], Math.fround(erf(x))));
 });
 });

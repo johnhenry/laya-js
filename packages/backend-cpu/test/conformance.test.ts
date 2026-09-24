@@ -4,8 +4,14 @@ import * as nodeTest from "node:test";
 // @ts-ignore -- bun types are not installed
 const bunTest: unknown = (globalThis as { Bun?: unknown }).Bun ? await import("bun:test") : null;
 const { describe, it } = (bunTest ?? nodeTest) as Pick<typeof nodeTest, "describe" | "it">;
-import { loadOpCases, runConformance, type TestApi } from "@johnhenry/tensor-backend/conformance";
+import { loadOpCases, runConformance, withoutOptionalOps, type TestApi } from "@johnhenry/tensor-backend/conformance";
+import { NUMERICS_OPS } from "@johnhenry/tensor-backend";
 import { createCpuBackend } from "../src/index.ts";
 
 // Cast: node:test's `it` wants `() => void | Promise<void>` while TestApi passes `() => unknown`.
-runConformance(() => createCpuBackend(), loadOpCases(), { describe, it: it as unknown as TestApi["it"] });
+const api = { describe, it: it as unknown as TestApi["it"] };
+runConformance(() => createCpuBackend(), loadOpCases(), api);
+// The compose.ts default compositions of the optional numerics ops (cumsum stays native: it has none).
+describe("default compositions (numerics ops hidden)", () => {
+  runConformance(() => withoutOptionalOps(createCpuBackend(), NUMERICS_OPS.filter((o) => o !== "cumsum")), loadOpCases(), api);
+});

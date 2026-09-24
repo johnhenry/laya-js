@@ -1,0 +1,1727 @@
+[
+ {
+  "name": "equal/same-shape",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAvwAAAMAAAADAAADAvwAAAAAAAAA/AAAAPwAAAAAAAABAAAAAwAAAgL8AAAA/AACAvwAAAAAAAADAAACAPwAAgL8AAIC/AAAAPwAAAL8AAAA/AAAAvwAAgD8AAMA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAQAAAwL8AAMA/AAAAQAAAAL8AAAC/AAAAPwAAwD8AAAAAAAAAQAAAAAAAAIC/AAAAwAAAwL8AAADAAADAvwAAAD8AAIC/AAAAwAAAAMAAAAA/AAAAvwAAAMAAAMC/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAAAAAAQAAAAAAAAABAAABAAABAQAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/broadcast",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AADAPwAAgL8AAIA/AAAAAAAAAEAAAMC/AAAAPwAAwL8AAAA/AAAAQAAAAMAAAAAAAAAAQAAAAL8AAAC/AAAAAAAAwL8AAADAAACAvwAAgD8AAIA/AACAPwAAgD8AAMA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AADAPwAAwL8AAABA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AQAAAAABAAEAAQAAAAAAAAEAAAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/i32",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "AwAAAAEAAAABAAAA/////wAAAAA="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AAAAAAMAAAD/////AwAAAP7///8DAAAA/////wAAAAD+////AgAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AAAAAAABAAAAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "notEqual/same-shape",
+  "op": "notEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AACAvwAAgL8AAAAAAAAAQAAAwL8AAADAAADAPwAAAMAAAABAAACAvwAAAAAAAAC/AAAAAAAAAMAAAIC/AAAAAAAAwD8AAABAAAAAAAAAgL8AAMC/AAAAPwAAgL8AAMA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAQAAAwL8AAMC/AACAPwAAwL8AAAC/AADAvwAAAMAAAIC/AAAAwAAAAD8AAIC/AAAAPwAAAAAAAABAAACAPwAAwL8AAAAAAACAvwAAAL8AAAAAAAAAAAAAwL8AAIC/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AQEBAQABAQABAQEBAQEBAQEBAQEBAQEB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "notEqual/broadcast",
+  "op": "notEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AAAAvwAAAD8AAAA/AAAAQAAAgD8AAABAAACAvwAAAL8AAAA/AACAvwAAAMAAAADAAACAvwAAAD8AAAA/AAAAPwAAAAAAAABAAAAAQAAAgD8AAMC/AACAPwAAAAAAAAA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AAAAwAAAgD8AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AQEBAQABAQEBAQEBAQEBAQEBAQABAQAB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "notEqual/i32",
+  "op": "notEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "/f///wAAAAD9/////f////7///8="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "/f//////////////AgAAAAIAAAACAAAAAQAAAP//////////AwAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AAEBAQEBAQEBAQ=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/same-shape",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAvwAAwD8AAIA/AAAAvwAAAMAAAAAAAADAPwAAAEAAAAA/AACAvwAAAAAAAIA/AAAAwAAAgD8AAAAAAAAAvwAAAMAAAAAAAACAvwAAAMAAAMA/AACAPwAAAEAAAMC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAvwAAAEAAAIA/AACAvwAAAD8AAIC/AACAvwAAAD8AAIC/AADAvwAAAL8AAIC/AAAAAAAAAMAAAADAAAAAwAAAAD8AAMC/AAAAPwAAAMAAAIA/AAAAvwAAwD8AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAEAAAEAAAAAAAAAAQAAAAEAAQAAAAAB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/broadcast",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AACAvwAAAMAAAAA/AADAvwAAgD8AAAA/AAAAQAAAwL8AAIC/AAAAvwAAAD8AAMC/AACAPwAAgL8AAAA/AAAAQAAAgL8AAAAAAAAAQAAAwL8AAAA/AAAAAAAAAL8AAMC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AACAvwAAAL8AAMC/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AAEAAQAAAAEAAAAAAAAAAAEAAAEAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/i32",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "/v///wEAAAD9////AAAAAP7///8="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "/f///wAAAAACAAAA/v///wAAAAABAAAAAgAAAP3////+////AAAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AAABAAEBAQAAAQ=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "lessEqual/same-shape",
+  "op": "lessEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAwAAAAMAAAMC/AADAPwAAgD8AAAAAAAAAwAAAAEAAAMC/AAAAPwAAwD8AAAAAAACAPwAAgD8AAADAAAAAPwAAAEAAAMA/AACAvwAAAAAAAMC/AAAAQAAAAMAAAAA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAvwAAAEAAAAAAAAAAwAAAAL8AAAAAAACAvwAAgL8AAMA/AACAvwAAAL8AAIA/AADAPwAAwL8AAADAAAAAPwAAwL8AAAC/AADAPwAAAMAAAMC/AAAAvwAAAD8AAIC/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AQEBAAABAQABAAABAQABAQAAAQABAAEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "lessEqual/broadcast",
+  "op": "lessEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AACAvwAAAD8AAAC/AAAAAAAAgL8AAMA/AADAPwAAwD8AAAC/AACAvwAAAD8AAADAAAAAPwAAAD8AAADAAACAPwAAAD8AAABAAAAAPwAAAEAAAMA/AACAvwAAgL8AAABA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AACAPwAAAMAAAABA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AQEBAQAAAAABAQEBAQEBAQAAAAABAQEB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "lessEqual/i32",
+  "op": "lessEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "//////////8AAAAAAwAAAP////8="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AwAAAAAAAAAAAAAAAwAAAAIAAAD//////f////3////+////AgAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AQEBAQEBAAAAAQ=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greater/same-shape",
+  "op": "greater",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAQAAAwD8AAMC/AAAAAAAAAD8AAMA/AAAAwAAAAEAAAMC/AADAPwAAAEAAAIC/AACAvwAAAMAAAAAAAAAAAAAAAL8AAAC/AAAAAAAAgD8AAABAAAAAvwAAAAAAAAAA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAvwAAgL8AAAA/AAAAAAAAAEAAAAAAAACAPwAAgD8AAADAAACAvwAAAMAAAIA/AAAAAAAAgD8AAMC/AADAvwAAgD8AAMC/AACAvwAAwL8AAADAAAAAvwAAgL8AAMA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AQEAAAABAAEBAQEAAAABAQABAQEBAAEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greater/broadcast",
+  "op": "greater",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AADAvwAAAMAAAIC/AACAvwAAAD8AAAA/AAAAwAAAAAAAAMA/AAAAQAAAwD8AAADAAACAvwAAwL8AAMA/AAAAAAAAwD8AAMC/AACAPwAAAMAAAAA/AAAAvwAAwL8AAABA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AACAvwAAwD8AAABA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAABAQAAAAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greater/i32",
+  "op": "greater",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "//////3///8BAAAA/v///wEAAAA="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "/f///wIAAAABAAAA/f///wMAAAABAAAAAAAAAP////8AAAAAAgAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AQAAAQAAAAEAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greaterEqual/same-shape",
+  "op": "greaterEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AACAPwAAAD8AAADAAAAAAAAAgD8AAAAAAAAAAAAAAEAAAMC/AAAAPwAAgD8AAIA/AAAAwAAAAL8AAMA/AAAAvwAAwD8AAMA/AAAAvwAAgL8AAMA/AAAAPwAAwL8AAAC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AAAAwAAAAEAAAMA/AAAAPwAAwL8AAADAAADAPwAAAEAAAAA/AACAvwAAwD8AAAAAAAAAAAAAgD8AAADAAACAPwAAAL8AAAA/AAAAPwAAAEAAAADAAAAAvwAAgD8AAMA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AQAAAAEBAAEAAQABAAABAAEBAAABAQAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greaterEqual/broadcast",
+  "op": "greaterEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AADAPwAAAD8AAAAAAADAPwAAAAAAAAAAAAAAvwAAwD8AAABAAACAPwAAwD8AAADAAAAAAAAAAAAAAAC/AACAPwAAwD8AAIA/AAAAQAAAgL8AAIC/AAAAQAAAgD8AAMC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1
+    ],
+    "b64": "AAAAwAAAAL8AAABA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     3,
+     4
+    ],
+    "b64": "AQEBAQEBAQEBAAAAAQEBAQEBAQAAAQAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "greaterEqual/i32",
+  "op": "greaterEqual",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     5
+    ],
+    "b64": "/f///wAAAAD/////AwAAAP3///8="
+   },
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "/f///wIAAAACAAAAAQAAAAIAAAADAAAAAwAAAAEAAAACAAAA/f///w=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "AQAAAQAAAAABAQ=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/bool",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAEBAAEAAQAAAAAB"
+   },
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAEAAQEAAAEBAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AQEAAAEBAAAAAQEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalAnd/bool-broadcast",
+  "op": "logicalAnd",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AAEAAAEAAAABAQEBAAEA"
+   },
+   {
+    "dtype": "bool",
+    "shape": [
+     5
+    ],
+    "b64": "AAABAQE="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AAAAAAEAAAABAQAAAAEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalAnd/float",
+  "op": "logicalAnd",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AAAAAAAAgL8AAIA/AAAAvwAAAL8AAIA/AAAAPwAAAL8AAAA/AAAAPwAAgD8AAAC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AAAAvwAAAD8AAAAAAAAAAAAAgD8AAIA/AAAAAAAAgL8AAAAAAACAPwAAAD8AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AAEAAAEBAAEAAQEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalOr/bool-broadcast",
+  "op": "logicalOr",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AQAAAQEAAAAAAQEAAAEB"
+   },
+   {
+    "dtype": "bool",
+    "shape": [
+     5
+    ],
+    "b64": "AQAAAQA="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AQAAAQEBAAABAQEAAAEB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalOr/float",
+  "op": "logicalOr",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AAAAPwAAAD8AAIC/AACAvwAAAD8AAIA/AAAAvwAAAD8AAAC/AACAPwAAAAAAAAC/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AACAvwAAAD8AAAA/AAAAvwAAgL8AAAA/AACAPwAAgD8AAIC/AACAvwAAgD8AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     2,
+     6
+    ],
+    "b64": "AQEBAQEBAQEBAQEB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalNot/bool",
+  "op": "logicalNot",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     3
+    ],
+    "b64": "AQEBAAABAAEBAQAB"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     3
+    ],
+    "b64": "AAAAAQEAAQAAAAEA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "logicalNot/float",
+  "op": "logicalNot",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     7
+    ],
+    "b64": "AAAAAAAAAAAAAAA/AAAAvwAAAL8AAAAAAAAAPw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     7
+    ],
+    "b64": "AQEAAAABAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "sqrt/nonneg",
+  "op": "sqrt",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     8
+    ],
+    "b64": "AAAAAAAAAD4AADRBAABoQQAAekEAACZBAABYQQAAekEAAEBBAAACQQAAWEAAALRAAABsQQAABkEAANhAAACsQAAAIEAAAJRAAADQQAAAUkEAAGxBAAAgQAAAakEAANA/AAB8QQAAaEAAAEBAAAAMQQAAQkEAAGA/AABWQQAA+EAAAMxAAAAwQQAApEAAAMA+AACYQAAAbkEAADRBAAAGQQ=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     8
+    ],
+    "b64": "AAAAAPMEtT6bqVZAarRzQHL7fEBFJU5AqSZrQHL7fEDXs11Alm02QKkm6z8RyhdA8st1QKE2OUDhRiZAvmAUQMJiyj8gowlAKysjQK7cZ0Dyy3VAwmLKP8DAdEArK6M//P19QGq08z/Xs90/h1A9QK7aXkBRd28/UA9qQCArMkCSlyFAlUNUQNziEEBxxBw/GnwLQAPWdkCbqVZAoTY5QA=="
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "rsqrt/positive",
+  "op": "rsqrt",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     8
+    ],
+    "b64": "AABAQAAAHEEAAExBAADkQAAAHEEAAIA/AACkQAAAYEAAAKBAAADQQAAABEEAANA/AAA4QQAAhEAAAOxAAAAaQQAApEAAADJBAAAYQQAA0EAAAIRAAADoQAAAuEAAAExBAAAEQQAAeEAAACJBAABOQQAAnEAAAAhAAABiQQAAyEAAACRBAADAPwAAIkEAAAhAAABmQQAAKEEAAIBAAAB+QQ=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     8
+    ],
+    "b64": "Os0TP6L4oz6BY48+EtC/PqL4oz4AAIA/7SniPnfWCD8u+eQ+q9LIPmpBsj6r0kg/BvuWPmQX/D6fiLw+VQilPu0p4j4MgZk+Xx2mPqvSyD5kF/w+6ya+Ps2E1T6BY48+akGyPlIMAj/156A+4LCOPu3j5z5TnS8/HjuIPs3MzD4E7J8+7AVRP/XnoD5TnS8/hwqHPrMBnj4AAAA/wYCAPg=="
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "pow/positive-base",
+  "op": "pow",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AABwQAAAQEAAAGA/AABoQAAAgD4AAAhAAAAAPwAAeEAAAAhAAABgPwAAEEAAAJA/AAAgQAAAwD4AAGBAAABgPwAAQEAAAABAAABYQAAAMEAAAGBAAAAAQAAAwD8AAHBA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "AADAPwAAAD8AAOA/AAAAvwAAoD8AAADAAAAAwAAAgD4AAEC/AACgvwAAAL8AAMA/AAAAwAAAAMAAAEA/AADAvwAAgD4AAOC/AABAvwAAAD8AAKA/AACgvwAA4D8AAAC/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     6
+    ],
+    "b64": "BmHoQNez3T9Jp0o/MXUGP/IENT6lxGI+AACAQJaWsz/NcxE/Z0CXP6qqKj8tvJg/CdcjPjmO40DMxCNA0WKcPx11qD/vN5g+oZ7NPpVD1D8PMZlA+0TXPmIeAkCkMgQ/"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "pow/broadcast",
+  "op": "pow",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAAgQAAAMEAAAKA/AAAgQAAAQD8AAIA+AACAPgAAEEAAABBAAAAgQAAA4D8AACBA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     4
+    ],
+    "b64": "AACAPwAAwD8AAAAAAACAvw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAAgQHbukUAAAIA/y8zMPgAAQD/+//89AACAPziO4z4AABBAcvt8QAAAgD/LzMw+"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "pow/zero-base",
+  "op": "pow",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3
+    ],
+    "b64": "AAAAAAAAAAAAAAAA"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3
+    ],
+    "b64": "AAAAPwAAgD8AACBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3
+    ],
+    "b64": "AAAAAAAAAAAAAAAA"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "pow/negative-base-integral-exponent",
+  "op": "pow",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AAAAvwAAAEAAAABAAACAPwAAIEAAAMA/AAAAQAAAIMAAAABAAAAAPwAAwD8AACDAAAAAAAAAQMAAAAA/"
+   },
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAEBAAACAPwAAAEAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAEAAAIA/AAAAQAAAAAAAAEBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AACAPwAAgD8AAABBAACAPwAAyEAAABBAAACAPwAAgD8AAIA//v9/PgAAEEAAACDAAAAAAAAAgD/+//89"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05,
+  "nativeOnly": true
+ },
+ {
+  "name": "neg/f32",
+  "op": "neg",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     7
+    ],
+    "b64": "AADwvwAAIMAAAHhAAABYwAAAWEAAAEBAAADAvwAAMMAAAEDAAADgPwAAQL8AAAhAAABQwAAAwD8AAOA/AABAvwAAGMAAAIDAAACAwAAAQMAAALA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     7
+    ],
+    "b64": "AADwPwAAIEAAAHjAAABYQAAAWMAAAEDAAADAPwAAMEAAAEBAAADgvwAAQD8AAAjAAABQQAAAwL8AAOC/AABAPwAAGEAAAIBAAACAQAAAQEAAALC/"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "abs/f32",
+  "op": "abs",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     7
+    ],
+    "b64": "AADwvwAAIMAAAHhAAABYwAAAWEAAAEBAAADAvwAAMMAAAEDAAADgPwAAQL8AAAhAAABQwAAAwD8AAOA/AABAvwAAGMAAAIDAAACAwAAAQMAAALA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     7
+    ],
+    "b64": "AADwPwAAIEAAAHhAAABYQAAAWEAAAEBAAADAPwAAMEAAAEBAAADgPwAAQD8AAAhAAABQQAAAwD8AAOA/AABAPwAAGEAAAIBAAACAQAAAQEAAALA/"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "neg/i32",
+  "op": "neg",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "hv3//74BAABkAQAABQEAAKwAAAAlAAAAuP7//xj///+YAAAA2P7//w=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "egIAAEL+//+c/v//+/7//1T////b////SAEAAOgAAABo////KAEAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "abs/i32",
+  "op": "abs",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "hv3//74BAABkAQAABQEAAKwAAAAlAAAAuP7//xj///+YAAAA2P7//w=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "egIAAL4BAABkAQAABQEAAKwAAAAlAAAASAEAAOgAAACYAAAAKAEAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "tanh/wide",
+  "op": "tanh",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1,
+     16
+    ],
+    "b64": "AACQwAAA3EAAAFjAAADwwAAAaEAAAKA/AADQvwAAxMAAAGhAAACAvwAA2MAAAIBAAAD8wAAAgMAAAHBAAABowAAA4L8AAABAAACsQAAACMAAADBAAADwwAAA8D8AAOzAAAA4wAAAwEAAAORAAAAAvgAAaMAAALzAAACQwAAA7EAAAJA/AAA4QAAAwEAAALjAAACwwAAAEEAAAMRAAAD8QAAAQEAAAKDBAABAwQAAQEEAAKBBAAAAAAAAAD4AAAC+"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1,
+     16
+    ],
+    "b64": "1O9/v9v/fz+3Zn+/9f9/v/yifz8eKVk/fuNsv1//f7/8on8/1fdCv9L/f78M1H8/+/9/vwzUf7+Mt38//KJ/v/39cL+DynY/MP1/P6fMeL+E6n0/9f9/v088dD/z/3+/JmB+vzH/fz/q/38/yaz+vfyif7/4/n+/1O9/v/P/fz9aLk8/JmB+PzH/fz+t/n+/0P1/v+tfej9f/38/+/9/P+i7fj8AAIC/AACAvwAAgD8AAIA/AAAAAMms/j3JrP69"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "sigmoid/wide",
+  "op": "sigmoid",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1,
+     16
+    ],
+    "b64": "AACQwAAA3EAAAFjAAADwwAAAaEAAAKA/AADQvwAAxMAAAGhAAACAvwAA2MAAAIBAAAD8wAAAgMAAAHBAAABowAAA4L8AAABAAACsQAAACMAAADBAAADwwAAA8D8AAOzAAAA4wAAAwEAAAORAAAAAvgAAaMAAALzAAACQwAAA7EAAAJA/AAA4QAAAwEAAALjAAACwwAAAEEAAAMRAAAD8QAAAQEAAAKDBAABAwQAAQEEAAKBBAAAAAAAAAD4AAAC+"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     1,
+     16
+    ],
+    "b64": "kwI0PFq8fz8qhQc9WegQOtxaeT8g/UY/AXcoPugLDzvcWnk/sbKJPkFKmTpBZXs/qDjHOdFXkzwoHno/hqTUPLCZFz7re2E/6NF+P5iA2j0pnnA/WegQOg72XT+TMCQ6c71aPfRdfz9Oy38/UwXwPoak1DzCjzc7kwI0PPTWfz8cQkE/KVRyP/Rdfz/I7E87yl6FOy2XZz/0cH8/Ged/P+bbcz8zpA0xDirONpn/fz8AAIA/AAAAP1b9Bz9TBfA+"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "erf/dense",
+  "op": "erf",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     1,
+     137
+    ],
+    "b64": "AACAwAAAfMAAAHjAAAB0wAAAcMAAAGzAAABowAAAZMAAAGDAAABcwAAAWMAAAFTAAABQwAAATMAAAEjAAABEwAAAQMAAADzAAAA4wAAANMAAADDAAAAswAAAKMAAACTAAAAgwAAAHMAAABjAAAAUwAAAEMAAAAzAAAAIwAAABMAAAADAAAD4vwAA8L8AAOi/AADgvwAA2L8AANC/AADIvwAAwL8AALi/AACwvwAAqL8AAKC/AACYvwAAkL8AAIi/AACAvwAAcL8AAGC/AABQvwAAQL8AADC/AAAgvwAAEL8AAAC/AADgvgAAwL4AAKC+AACAvgAAQL4AAAC+AACAvQAAAAAAAIA9AAAAPgAAQD4AAIA+AACgPgAAwD4AAOA+AAAAPwAAED8AACA/AAAwPwAAQD8AAFA/AABgPwAAcD8AAIA/AACIPwAAkD8AAJg/AACgPwAAqD8AALA/AAC4PwAAwD8AAMg/AADQPwAA2D8AAOA/AADoPwAA8D8AAPg/AAAAQAAABEAAAAhAAAAMQAAAEEAAABRAAAAYQAAAHEAAACBAAAAkQAAAKEAAACxAAAAwQAAANEAAADhAAAA8QAAAQEAAAERAAABIQAAATEAAAFBAAABUQAAAWEAAAFxAAABgQAAAZEAAAGhAAABsQAAAcEAAAHRAAAB4QAAAfEAAAIBAAAAgwQAAwMAAAKDAAACgQAAAwEAAACBBAACAPAAAgLw="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     1,
+     137
+    ],
+    "b64": "AACAvwAAgL///3+///9/v/7/f7/9/3+/+/9/v/j/f7/0/3+/7P9/v+L/f7/R/3+/uP9/v5L/f79a/3+/B/9/v43+f7/d/X+/3fx/v3D7f79o+X+/i/Z/v4vyf7/87H+/VeV/v9/af7+xzH+/nbl/vySgf79ofn+/ElJ/v0EYf79yzX6/aG1+vxHzfb9xWH2/hpZ8vzmle79Ne3q/Uw55v69Sd7+dO3W/S7tyv/vCb782Q2y/DCxov3FtY7+S912/SbtXv5aqUL8luUi/4Nw/v0wONr8iSSu/t4wfv1TcEr97PwW/DoTtvmnozr761K6+p3qNvvIiVr4Nrw++pD6QvQAAAACkPpA9Da8PPvIiVj6neo0++tSuPmnozj4OhO0+ez8FP1TcEj+3jB8/IkkrP0wONj/g3D8/JblIP5aqUD9Ju1c/kvddP3FtYz8MLGg/NkNsP/vCbz9Lu3I/nTt1P69Sdz9TDnk/TXt6Pzmlez+Glnw/cVh9PxHzfT9obX4/cs1+P0EYfz8SUn8/aH5/PySgfz+duX8/scx/P9/afz9V5X8//Ox/P4vyfz+L9n8/aPl/P3D7fz/d/H8/3f1/P43+fz8H/38/Wv9/P5L/fz+4/38/0f9/P+L/fz/s/38/9P9/P/j/fz/7/38//f9/P/7/fz///38///9/PwAAgD8AAIA/AACAvwAAgL8AAIC/AACAPwAAgD8AAIA/uGuQPLhrkLw="
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/last-axis",
+  "op": "argmax",
+  "args": {
+   "axis": -1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     7
+    ],
+    "b64": "AACAPgAAQD8AAIC+AAAAvwAAAD8AAEC/AAAAAAAAgL4AAAAAAAAAvwAAQD8AAEC/AACAPgAAAD8AAAC/AAAAAAAAgD4AAEA/AABAvwAAAD8AAIC+AACAvgAAQL8AAAC/AACAPgAAAD8AAEA/AAAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     4
+    ],
+    "b64": "AQAAAAMAAAADAAAABQAAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/axis0-keepdims",
+  "op": "argmax",
+  "args": {
+   "axis": 0,
+   "keepDims": true
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     3,
+     2
+    ],
+    "b64": "AAAAPwAAgD4AAIC+AAAAvwAAAD8AAIC+AAAAAAAAAD8AAAC/AACAPgAAgL4AAAC/AACAPgAAAAAAAAA/AAAAPwAAAL8AAIA+AAAAvwAAAL8AAIA+AACAvgAAAAAAAAA/AACAvgAAgL4AAAAAAAAAAAAAgD4AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     1,
+     3,
+     2
+    ],
+    "b64": "AAAAAAEAAAACAAAAAgAAAAAAAAADAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/ties-first",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AAAAvwAAgL8AAIC/AAAAAAAAgL8AAAAAAAAAPwAAgL8AAAA/AAAAAAAAAAAAAAA/AAAAAAAAgL8AAAAAAAAAPwAAgL8AAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AwAAAAAAAAADAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/i32",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "/P///8////8jAAAAAgAAACwAAAAGAAAA9P///xUAAAD7////DAAAAPv///8VAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AgAAAAAAAAADAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmin/last-axis",
+  "op": "argmin",
+  "args": {
+   "axis": -1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     7
+    ],
+    "b64": "AAAAvwAAAD8AAAAAAABAPwAAgD4AAEC/AACAvgAAAL8AAIC+AABAvwAAgD4AAAAAAAAAPwAAQD8AAEA/AAAAAAAAAD8AAIA+AABAvwAAgL4AAAC/AACAvgAAAAAAAAC/AABAPwAAAD8AAIA+AABAvw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     4
+    ],
+    "b64": "BQAAAAIAAAAEAAAABgAAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmin/axis0-keepdims",
+  "op": "argmin",
+  "args": {
+   "axis": 0,
+   "keepDims": true
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     5,
+     3,
+     2
+    ],
+    "b64": "AAAAPwAAAL8AAAAAAAAAAAAAAD8AAAC/AAAAvwAAgL4AAAC/AACAPgAAgD4AAIC+AACAPgAAAAAAAIA+AACAvgAAAL8AAAAAAAAAAAAAAD8AAAA/AAAAvwAAgL4AAIA+AACAvgAAgD4AAIC+AAAAPwAAAAAAAAA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     1,
+     3,
+     2
+    ],
+    "b64": "AQAAAAAAAAABAAAAAwAAAAIAAAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmin/ties-first",
+  "op": "argmin",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AAAAvwAAAAAAAAC/AAAAvwAAAAAAAIC/AACAPwAAgD8AAAC/AACAPwAAgD8AAIC/AACAPwAAgD8AAAA/AAAAPwAAAAAAAAA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "BQAAAAUAAAAEAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmin/i32",
+  "op": "argmin",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "3f///+P////X////DAAAAO7////7/////v////7////x////MQAAACAAAADY////"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AgAAAAAAAAADAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/axis1",
+  "op": "mean",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4,
+     5
+    ],
+    "b64": "AADgvwAAwL4AACBAAABQwAAAMMAAAFBAAADAvgAA4D8AAFhAAADgvwAAeMAAAIA+AAAIQAAAWEAAAAA/AAAIwAAAIMAAAEA/AAAwwAAA4L8AAIA+AAB4QAAAcEAAAEDAAADwPwAAgEAAADjAAACAQAAA8D8AANC/AABwQAAA4D8AABDAAAAAvwAAcMAAAFDAAABwQAAAGEAAAIBAAAAYQAAAOEAAAGjAAAAAPgAAcEAAAEC/AABAQAAAcEAAAGjAAAAAvgAAAD8AACjAAAA4QAAA8L8AAKC/AADwvwAAWMAAAAC+AAAAPgAAYEAAAHBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     5
+    ],
+    "b64": "AACQvwAAQL8AAOQ/AABAPgAAuL8AAJg/AADQPwAA/D8AABg/AACQvgAAAL0AADg/AACovwAAvD8AANA+"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "mean/last-keepdims",
+  "op": "mean",
+  "args": {
+   "axis": -1,
+   "keepDims": true
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4,
+     5
+    ],
+    "b64": "AADgvwAAwL4AACBAAABQwAAAMMAAAFBAAADAvgAA4D8AAFhAAADgvwAAeMAAAIA+AAAIQAAAWEAAAAA/AAAIwAAAIMAAAEA/AAAwwAAA4L8AAIA+AAB4QAAAcEAAAEDAAADwPwAAgEAAADjAAACAQAAA8D8AANC/AABwQAAA4D8AABDAAAAAvwAAcMAAAFDAAABwQAAAGEAAAIBAAAAYQAAAOEAAAGjAAAAAPgAAcEAAAEC/AABAQAAAcEAAAGjAAAAAvgAAAD8AACjAAAA4QAAA8L8AAKC/AADwvwAAWMAAAAC+AAAAPgAAYEAAAHBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4,
+     1
+    ],
+    "b64": "AACQvwAAoD8zM/M+Z2bWv83MrD+amYk/zcxMvs3M7D8zM/M+MzMzPzMzc79nZkY/"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "mean/i32",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     4,
+     3
+    ],
+    "b64": "AAAAAAIAAAD4////CQAAAAAAAAD/////+P///wEAAAABAAAAAgAAAAgAAAAGAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3
+    ],
+    "b64": "AABAPwAAMEAAAAC/"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "min/axis2",
+  "op": "min",
+  "args": {
+   "axis": 2,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4,
+     5
+    ],
+    "b64": "AADgvwAAwL4AACBAAABQwAAAMMAAAFBAAADAvgAA4D8AAFhAAADgvwAAeMAAAIA+AAAIQAAAWEAAAAA/AAAIwAAAIMAAAEA/AAAwwAAA4L8AAIA+AAB4QAAAcEAAAEDAAADwPwAAgEAAADjAAACAQAAA8D8AANC/AABwQAAA4D8AABDAAAAAvwAAcMAAAFDAAABwQAAAGEAAAIBAAAAYQAAAOEAAAGjAAAAAPgAAcEAAAEC/AABAQAAAcEAAAGjAAAAAvgAAAD8AACjAAAA4QAAA8L8AAKC/AADwvwAAWMAAAAC+AAAAPgAAYEAAAHBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AABQwAAA4L8AAHjAAAAwwAAAQMAAADjAAABwwAAAUMAAAGjAAABowAAAKMAAAFjA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "min/i32-keepdims",
+  "op": "min",
+  "args": {
+   "axis": 0,
+   "keepDims": true
+  },
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     4,
+     3
+    ],
+    "b64": "AAAAAAIAAAD4////CQAAAAAAAAD/////+P///wEAAAABAAAAAgAAAAgAAAAGAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     1,
+     3
+    ],
+    "b64": "+P///wAAAAD4////"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "cumsum/last-axis",
+  "op": "cumsum",
+  "args": {
+   "axis": -1
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AADAvgAA4D8AAJA/AAAoQAAAgEAAAOA/AACQvwAA8L8AAIC/AABgvwAAAD8AADjAAAA4QAAAaEAAAFBAAADAvgAAcMAAAHBA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AADAvgAAsD8AACBAAACkQAAAEkEAAC5BAACQvwAAQMAAAIDAAACcwAAAjMAAAOjAAAA4QAAA0EAAABxBAAAWQQAAtEAAABZB"
+   }
+  ],
+  "atol": 1e-05,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/axis0",
+  "op": "cumsum",
+  "args": {
+   "axis": 0
+  },
+  "inputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     3,
+     2
+    ],
+    "b64": "AAAQQAAAMMAAACjAAAAQwAAAcEAAAEjAAAB4QAAAEEAAAHhAAABAPwAA8D8AAIA+AADAvgAAQD8AAGC/AAA4wAAAeMAAAOA/AAAAQAAA4L8AAGDAAAAIQAAAgD8AAKA/"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     4,
+     3,
+     2
+    ],
+    "b64": "AAAQQAAAMMAAACjAAAAQwAAAcEAAAEjAAADEQAAAAL8AAKA/AADAvwAAtEAAADjAAAC4QAAAgD4AAMA+AACMwAAA4D8AAJC/AAD4QAAAwL8AAEjAAAAQwAAAMEAAAAA+"
+   }
+  ],
+  "atol": 1e-05,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/i32",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "+P///xAAAADt////+f///w8AAAD6////BgAAAAEAAAD3////EAAAAA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     2,
+     5
+    ],
+    "b64": "+P///wgAAAD1////7v////3////6////AAAAAAEAAAD4////CAAAAA=="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ }
+]

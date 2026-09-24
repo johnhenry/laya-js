@@ -27,7 +27,7 @@ import { loadModernBert, parseModernBertConfig, safetensorsWeights } from "@john
 const backend = createCpuBackend();
 const config = parseModernBertConfig(JSON.parse(await readFile("encoder/config.json", "utf8")));
 const weights = safetensorsWeights(readSafetensors(await readFile("model.safetensors")));
-const encoder = loadModernBert(backend, config, weights); // prefix auto-detected
+const encoder = await loadModernBert(backend, config, weights); // prefix auto-detected; uploads batched
 
 // ids tokenized WITH special tokens, row-major [B, L]; mask 1 = token, 0 = padding
 const vectors = await encoder.embedToHost(inputIds, attentionMask, B, L); // Float32Array [B*H]
@@ -43,20 +43,28 @@ const vectors = await encoder.embedToHost(inputIds, attentionMask, B, L); // Flo
   `global_rope_theta` (160000) / `local_rope_theta` (10000). Also
   `normEps` (1e-5), `normBias`/`attentionBias`/`mlpBias` (false),
   `localAttention` (128), `headDim`.
-- `loadModernBert(backend, config, weights, { dtype?: "f32"|"f16"|"bf16", prefix? }): ModernBert<T>`
+- `loadModernBert(backend, config, weights, { dtype?: "f32"|"f16"|"bf16", prefix? }): Promise<ModernBert<T>>`
   - `weights`: `(name) => HostTensor | undefined` or `{ get(name) }`.
   - Names: laya-mlx `encoder.layers.N.attn.Wqkv.weight`, … or HF
     `model.layers.N.attn.Wqkv.weight`, `model.embeddings.*`, `model.final_norm.*`.
     `prefix` defaults to auto-detection (`encoder.`, `model.`, `""`).
     Layer 0 has no `attn_norm`. Shapes are validated.
+  - Every upload is started before any is awaited (one batch), after the
+    names and shapes are validated; if anything fails, the tensors that
+    did upload are disposed.
   - Call it **outside** `backend.scope` (weights must outlive the scope).
 - `class ModernBert<T>`
-  - `forward(inputIds: Int32Array, attentionMask: Uint8Array, B, L, { onStage? }): T` —
+  - `forward(inputIds: Int32Array, attentionMask: Uint8Array, B, L, { onStage? }): Promise<T>` —
     hidden states `[B, L, H]` in the model dtype. Builds the full and
-    sliding bool masks on the host and uploads them; all intermediates are
-    freed. `onStage(name, t)` sees `"embeddings"`, `"layers.<i>"`,
-    `"final_norm"`; return `true` to keep a stage tensor (you dispose it).
-  - `embed(inputIds, attentionMask, B, L): T` — masked mean pool, `[B, H]` f32
+    sliding bool masks on the host and uploads them (`uploadInputs`); all
+    intermediates are freed. `onStage(name, t)` sees `"embeddings"`,
+    `"layers.<i>"`, `"final_norm"`; return `true` to keep a stage tensor
+    (you dispose it).
+  - `uploadInputs(inputIds, attentionMask, B, L): Promise<EncoderInputs<T>>`
+    (ids, the bool padding mask and the attention masks, uploaded together),
+    `encode(inputs, { onStage? }): T` (the synchronous forward pass on
+    device tensors, e.g. for `compile`) and `disposeInputs(inputs)`.
+  - `embed(inputIds, attentionMask, B, L): Promise<T>` — masked mean pool, `[B, H]` f32
     (laya-mlx `embed_fn_from_agent`, uses `meanPool` from tensor-backend).
   - `embedToHost(...)`: `Promise<Float32Array>`.
   - Building blocks: `embeddings(ids)`, `layer(i, x, mask)`, `finalNorm(x)`.
@@ -68,7 +76,20 @@ const vectors = await encoder.embedToHost(inputIds, attentionMask, B, L); // Flo
   all-masked softmax rows.
 - `safetensorsWeights(file)`: adapts an in-memory
   `@johnhenry/math-plus-safetensors` file (F16 → f16, BF16 → bf16, F32 → f32).
-- `uploadAs(backend, host, dtype)`, `toWeightGetter(src)`, `detectPrefix(get)`.
+- `uploadAs(backend, host, dtype): Promise<T>`, `toWeightGetter(src)`,
+  `detectPrefix(get)`, and the batch-loading helpers `loadInBatch(backend,
+  build, dtype)` (runs a pure weight-tree builder twice: once to validate
+  and start every upload, once with the settled tensors) and
+  `settleUploads(backend, jobs)` (awaits a `Map` of uploads; on failure
+  disposes the ones that succeeded).
+
+### Migrating from 0.1
+
+Uploads are async in `@johnhenry/tensor-backend` 0.2, so everything that
+uploads returns a Promise: `await loadModernBert(...)`, `await
+encoder.forward(...)`, `await encoder.embed(...)`, `await uploadAs(...)`.
+`embedToHost` was already async. To run the encoder synchronously (inside
+`scope` or `compile`), upload first with `uploadInputs` and call `encode`.
 
 ## Accuracy
 

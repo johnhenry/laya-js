@@ -7,12 +7,13 @@
  *   `supports("f16" | "bf16")` is false and `cast` to them throws.
  * - Contiguous row-major storage; `reshape` and same-dtype `cast` share the
  *   buffer (tensors are immutable, so sharing is safe).
- * - Evaluation is eager and synchronous; `read` resolves immediately.
+ * - Evaluation is eager and synchronous; `fromHost` copies at call time and
+ *   `read` resolves immediately (both return Promises, per the contract).
  * - Reductions, softmax, LayerNorm and matmul accumulate in f64.
  */
-import type { Backend, DType, HostTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
+import type { Backend, DType, HostTensor, NumericsOp, Shape, Tensor } from "@johnhenry/tensor-backend";
 import { sizeOf } from "@johnhenry/tensor-backend";
-import { geluScalar } from "./erf.ts";
+import { erf as erfScalar, geluScalar } from "./erf.ts";
 import { gemmNT, transpose2d } from "./gemm.ts";
 
 export { erf, erfc, geluScalar } from "./erf.ts";
@@ -137,7 +138,7 @@ function binaryKernel(op: number, A: Data, oa: number, sa: number, B: Data, ob: 
 }
 
 // ---------------------------------------------------------------- backend
-class CpuBackend implements Backend<CpuTensor> {
+class CpuBackendImpl implements CpuBackend {
   readonly name = "cpu";
   readonly #scopes: Set<CpuTensor>[] = [];
 
@@ -153,7 +154,11 @@ class CpuBackend implements Backend<CpuTensor> {
   }
 
   // ---- transfer / lifetime
-  fromHost(t: HostTensor): CpuTensor {
+  async fromHost(t: HostTensor): Promise<CpuTensor> {
+    return this.#upload(t);
+  }
+
+  #upload(t: HostTensor): CpuTensor {
     const n = sizeOf(t.shape);
     if (t.data.length !== n) throw new RangeError(`backend-cpu: fromHost ${t.data.length} values for shape [${t.shape}]`);
     switch (t.dtype) {
@@ -736,9 +741,160 @@ class CpuBackend implements Backend<CpuTensor> {
     }
     return this.#make([B, D], "f32", out);
   }
+
+  // ---- general numerics (optional ops, native here)
+  #compare(a: CpuTensor, b: CpuTensor, f: (x: number, y: number) => boolean): CpuTensor {
+    const outShape = broadcastShapes(a.shape, b.shape);
+    const out = new Uint8Array(sizeOf(outShape));
+    if (out.length === 0) return this.#make(outShape, "bool", out);
+    const A = a.data, B = b.data;
+    if (sameShape(a.shape, b.shape)) {
+      for (let i = 0; i < out.length; i++) out[i] = f(A[i]!, B[i]!) ? 1 : 0;
+      return this.#make(outShape, "bool", out);
+    }
+    const rank = outShape.length;
+    const sa = broadcastStrides(a.shape, outShape), sb = broadcastStrides(b.shape, outShape);
+    const oa = rowOffsets(outShape, sa), ob = rowOffsets(outShape, sb);
+    const n = rank ? outShape[rank - 1]! : 1;
+    const la = rank ? sa[rank - 1]! : 0, lb = rank ? sb[rank - 1]! : 0;
+    for (let r = 0; r < oa.length; r++) {
+      const a0 = oa[r]!, b0 = ob[r]!, o0 = r * n;
+      for (let j = 0; j < n; j++) out[o0 + j] = f(A[a0 + j * la]!, B[b0 + j * lb]!) ? 1 : 0;
+    }
+    return this.#make(outShape, "bool", out);
+  }
+  equal(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x === y); }
+  notEqual(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x !== y); }
+  less(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x < y); }
+  lessEqual(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x <= y); }
+  greater(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x > y); }
+  greaterEqual(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x >= y); }
+  logicalAnd(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x !== 0 && y !== 0); }
+  logicalOr(a: CpuTensor, b: CpuTensor): CpuTensor { return this.#compare(a, b, (x, y) => x !== 0 || y !== 0); }
+  logicalNot(x: CpuTensor): CpuTensor {
+    const src = x.data, out = new Uint8Array(src.length);
+    for (let i = 0; i < out.length; i++) out[i] = src[i] === 0 ? 1 : 0;
+    return this.#make(x.shape, "bool", out);
+  }
+
+  /** Float-valued unary op, evaluated in f64 and rounded to f32. */
+  #unaryF(x: CpuTensor, f: (v: number) => number): CpuTensor {
+    const src = x.data, out = new Float32Array(src.length);
+    for (let i = 0; i < out.length; i++) out[i] = f(src[i]!);
+    return this.#make(x.shape, "f32", out);
+  }
+  sqrt(x: CpuTensor): CpuTensor { return this.#unaryF(x, Math.sqrt); }
+  rsqrt(x: CpuTensor): CpuTensor { return this.#unaryF(x, (v) => 1 / Math.sqrt(v)); }
+  tanh(x: CpuTensor): CpuTensor { return this.#unaryF(x, Math.tanh); }
+  sigmoid(x: CpuTensor): CpuTensor { return this.#unaryF(x, (v) => (v >= 0 ? 1 / (1 + Math.exp(-v)) : Math.exp(v) / (1 + Math.exp(v)))); }
+  erf(x: CpuTensor): CpuTensor { return this.#unaryF(x, erfScalar); }
+  /** Keeps i32 (two's-complement wrap like MLX); floats stay f32. */
+  #unaryKeep(x: CpuTensor, f: (v: number) => number): CpuTensor {
+    const src = x.data;
+    if (x.dtype === "f32") return this.#unaryF(x, f);
+    const out = new Int32Array(src.length);
+    for (let i = 0; i < out.length; i++) out[i] = f(src[i]!) | 0;
+    return this.#make(x.shape, "i32", out);
+  }
+  neg(x: CpuTensor): CpuTensor { return this.#unaryKeep(x, (v) => -v); }
+  abs(x: CpuTensor): CpuTensor { return this.#unaryKeep(x, Math.abs); }
+
+  pow(a: CpuTensor, b: CpuTensor): CpuTensor {
+    const outShape = broadcastShapes(a.shape, b.shape);
+    const out = new Float32Array(sizeOf(outShape));
+    if (out.length === 0) return this.#make(outShape, "f32", out);
+    const rank = outShape.length;
+    const sa = broadcastStrides(a.shape, outShape), sb = broadcastStrides(b.shape, outShape);
+    const oa = rowOffsets(outShape, sa), ob = rowOffsets(outShape, sb);
+    const n = rank ? outShape[rank - 1]! : 1;
+    const la = rank ? sa[rank - 1]! : 0, lb = rank ? sb[rank - 1]! : 0;
+    const A = a.data, B = b.data;
+    for (let r = 0; r < oa.length; r++) {
+      const a0 = oa[r]!, b0 = ob[r]!, o0 = r * n;
+      for (let j = 0; j < n; j++) out[o0 + j] = Math.pow(A[a0 + j * la]!, B[b0 + j * lb]!);
+    }
+    return this.#make(outShape, "f32", out);
+  }
+
+  #reduceOut(x: CpuTensor, axis: number, keepDims: boolean): { a: number; outer: number; len: number; inner: number; outShape: number[] } {
+    const g = this.#axes(x, axis);
+    const outShape = keepDims ? x.shape.map((d, i) => (i === g.a ? 1 : d)) : x.shape.filter((_, i) => i !== g.a);
+    return { ...g, outShape };
+  }
+
+  #argReduce(x: CpuTensor, axis: number, keepDims: boolean, better: (v: number, best: number) => boolean): CpuTensor {
+    const { outer, len, inner, outShape } = this.#reduceOut(x, axis, keepDims);
+    const src = x.data, out = new Int32Array(outer * inner);
+    for (let o = 0; o < outer; o++) {
+      for (let i = 0; i < inner; i++) {
+        const base = o * len * inner + i;
+        let best = src[base]!, bi = 0;
+        for (let j = 1; j < len; j++) {
+          const v = src[base + j * inner]!;
+          if (better(v, best)) { best = v; bi = j; }
+        }
+        out[o * inner + i] = bi;
+      }
+    }
+    return this.#make(outShape, "i32", out);
+  }
+  argmax(x: CpuTensor, axis: number, keepDims = false): CpuTensor { return this.#argReduce(x, axis, keepDims, (v, b) => v > b || (v !== v && b === b)); }
+  argmin(x: CpuTensor, axis: number, keepDims = false): CpuTensor { return this.#argReduce(x, axis, keepDims, (v, b) => v < b || (v !== v && b === b)); }
+
+  mean(x: CpuTensor, axis: number, keepDims = false): CpuTensor {
+    const { outer, len, inner, outShape } = this.#reduceOut(x, axis, keepDims);
+    const src = x.data, out = new Float32Array(outer * inner);
+    const acc = new Float64Array(inner);
+    for (let o = 0; o < outer; o++) {
+      acc.fill(0);
+      const base = o * len * inner;
+      for (let j = 0; j < len; j++) for (let i = 0; i < inner; i++) acc[i]! += src[base + j * inner + i]!;
+      for (let i = 0; i < inner; i++) out[o * inner + i] = acc[i]! / len;
+    }
+    return this.#make(outShape, "f32", out);
+  }
+
+  min(x: CpuTensor, axis: number, keepDims = false): CpuTensor {
+    const { outer, len, inner, outShape } = this.#reduceOut(x, axis, keepDims);
+    const src = x.data, out = alloc(x.dtype as CpuDType, outer * inner);
+    for (let o = 0; o < outer; o++) {
+      for (let i = 0; i < inner; i++) {
+        const base = o * len * inner + i;
+        let m = Infinity;
+        for (let j = 0; j < len; j++) {
+          const v = src[base + j * inner]!;
+          if (v < m || v !== v) m = v;
+          if (m !== m) break;
+        }
+        out[o * inner + i] = m;
+      }
+    }
+    return this.#make(outShape, x.dtype as CpuDType, out);
+  }
+
+  cumsum(x: CpuTensor, axis: number): CpuTensor {
+    const { outer, len, inner } = this.#axes(x, axis);
+    const dtype: CpuDType = x.dtype === "f32" ? "f32" : "i32";
+    const src = x.data, out = alloc(dtype, src.length);
+    for (let o = 0; o < outer; o++) {
+      for (let i = 0; i < inner; i++) {
+        const base = o * len * inner + i;
+        let acc = 0;
+        for (let j = 0; j < len; j++) {
+          acc += src[base + j * inner]!;
+          if (dtype === "i32") acc |= 0;
+          out[base + j * inner] = acc;
+        }
+      }
+    }
+    return this.#make(x.shape, dtype, out);
+  }
 }
 
+/** The CPU backend: the contract with every optional op implemented natively (except `compile`). */
+export type CpuBackend = Backend<CpuTensor> & Required<Pick<Backend<CpuTensor>, NumericsOp | "geglu" | "meanPool" | "flush" | "destroy">>;
+
 /** Creates an independent CPU backend (no shared global state). */
-export function createCpuBackend(): Backend<CpuTensor> {
-  return new CpuBackend();
+export function createCpuBackend(): CpuBackend {
+  return new CpuBackendImpl();
 }

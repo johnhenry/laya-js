@@ -148,15 +148,56 @@ const FLOATS = new Set<DType>(["f32", "f16", "bf16"]);
  * Uploads a host tensor as `dtype` on `backend`. Float data is converted
  * as needed (via host f32 when the backend cannot store the source dtype).
  */
-export function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostTensor, dtype: DType): T {
+export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostTensor, dtype: DType): Promise<T> {
   if (!FLOATS.has(h.dtype)) return backend.fromHost(h);
   if (!backend.supports(dtype)) throw new Error(`${backend.name} backend does not support ${dtype}`);
   const src = h.dtype === dtype || backend.supports(h.dtype) ? h : { dtype: "f32" as const, shape: h.shape, data: toF32(h) };
-  const t = backend.fromHost(src);
+  const t = await backend.fromHost(src);
   if (t.dtype === dtype) return t;
   const c = backend.cast(t, dtype);
   backend.dispose(t);
   return c;
+}
+
+/**
+ * Awaits a batch of uploads started together. If any fails, the ones that
+ * succeeded are disposed and the first error is rethrown.
+ */
+export async function settleUploads<T extends Tensor, K>(backend: Backend<T>, jobs: Map<K, Promise<T>>): Promise<Map<K, T>> {
+  const keys = [...jobs.keys()];
+  const results = await Promise.allSettled(jobs.values());
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) {
+    for (const r of results) if (r.status === "fulfilled") backend.dispose(r.value);
+    throw failed.reason;
+  }
+  return new Map(keys.map((k, i) => [k, (results[i] as PromiseFulfilledResult<T>).value]));
+}
+
+/**
+ * Two-pass weight loading shared by `loadModernBert` and laya's
+ * `loadDecisionModel`: `build` runs once with an uploader that validates and
+ * starts every upload (so they are all in flight together), then again with
+ * the settled tensors. `build` must be a pure function of `need`.
+ */
+export async function loadInBatch<T extends Tensor, R>(
+  backend: Backend<T>,
+  build: (need: (name: string, h: HostTensor) => T) => R,
+  dtype: DType,
+): Promise<R> {
+  const jobs = new Map<string, Promise<T>>();
+  try {
+    build((name, h) => {
+      if (!jobs.has(name)) jobs.set(name, uploadAs(backend, h, dtype));
+      return undefined as unknown as T;
+    });
+  } catch (e) {
+    // a validation error after some uploads started: free what did upload
+    await settleUploads(backend, jobs).then((m) => m.forEach((t) => backend.dispose(t)), () => {});
+    throw e;
+  }
+  const tensors = await settleUploads(backend, jobs);
+  return build((name) => tensors.get(name)!);
 }
 
 // ------------------------------------------------------------------ masks
@@ -227,6 +268,16 @@ export interface LoadModernBertOptions {
   readonly prefix?: string;
 }
 
+/** Device-side inputs of one encoder batch (`ModernBert.uploadInputs`). */
+export interface EncoderInputs<T> {
+  /** i32 [B, L] */
+  readonly ids: T;
+  /** bool [B, L] padding mask (for pooling) */
+  readonly mask: T;
+  /** bool attention masks per kind (`attentionMasks`); null when no layer uses that kind */
+  readonly masks: Readonly<Record<AttentionKind, T | null>>;
+}
+
 export interface ForwardOptions<T> {
   /**
    * Called with each stage output: "embeddings", "layers.<i>", "final_norm".
@@ -279,25 +330,57 @@ export class ModernBert<T extends Tensor = Tensor> {
   }
 
   /**
-   * Full encoder: inputIds [B*L] (row-major), attentionMask [B*L] (0/1)
-   * → hidden states [B, L, H] in `this.dtype`. Masks are built on the host.
-   * Intermediates are disposed; the caller owns the result.
+   * Uploads one batch's device inputs (token ids and the host-built
+   * attention masks this config needs), all at once. Caller disposes them
+   * (`disposeInputs`).
    */
-  forward(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number, opts: ForwardOptions<T> = {}): T {
+  async uploadInputs(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number): Promise<EncoderInputs<T>> {
     const b = this.backend, c = this.config;
     if (inputIds.length !== B * L) throw new RangeError(`modernbert: inputIds has ${inputIds.length} values, want ${B * L}`);
+    const hm = attentionMasks(attentionMask, B, L, c.localAttention);
+    const jobs = new Map<string, Promise<T>>([
+      ["ids", b.fromHost({ dtype: "i32", shape: [B, L], data: inputIds })],
+      ["mask", b.fromHost({ dtype: "bool", shape: [B, L], data: attentionMask })],
+    ]);
+    if (c.layerTypes.includes("full_attention")) jobs.set("full", b.fromHost(hm.full));
+    if (c.layerTypes.includes("sliding_attention")) jobs.set("sliding", b.fromHost(hm.sliding));
+    const t = await settleUploads(b, jobs);
+    return { ids: t.get("ids")!, mask: t.get("mask")!, masks: { full_attention: t.get("full") ?? null, sliding_attention: t.get("sliding") ?? null } };
+  }
+
+  /** Frees `uploadInputs` results. */
+  disposeInputs(inp: EncoderInputs<T>): void {
+    const b = this.backend;
+    for (const t of [inp.ids, inp.mask, inp.masks.full_attention, inp.masks.sliding_attention]) if (t) b.dispose(t);
+  }
+
+  /**
+   * Full encoder: inputIds [B*L] (row-major), attentionMask [B*L] (0/1)
+   * → hidden states [B, L, H] in `this.dtype`. Masks are built on the host
+   * and uploaded together. Intermediates are disposed; the caller owns the result.
+   */
+  async forward(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number, opts: ForwardOptions<T> = {}): Promise<T> {
+    const inp = await this.uploadInputs(inputIds, attentionMask, B, L);
+    try {
+      return this.encode(inp, opts);
+    } finally {
+      this.disposeInputs(inp);
+    }
+  }
+
+  /**
+   * The encoder on already-uploaded inputs (synchronous, so `compile` can
+   * trace it): → hidden states [B, L, H]. Caller owns the result.
+   */
+  encode(inp: EncoderInputs<T>, opts: ForwardOptions<T> = {}): T {
+    const b = this.backend, c = this.config;
     const kept: T[] = [];
     const emit = (name: string, t: T, last: boolean): void => {
       if (opts.onStage?.(name, t) === true && !last) kept.push(t);
     };
     const out = b.scope(() => {
-      const ids = b.fromHost({ dtype: "i32", shape: [B, L], data: inputIds });
-      const hm = attentionMasks(attentionMask, B, L, c.localAttention);
-      const masks: Record<AttentionKind, T | null> = {
-        full_attention: c.layerTypes.includes("full_attention") ? b.fromHost(hm.full) : null,
-        sliding_attention: c.layerTypes.includes("sliding_attention") ? b.fromHost(hm.sliding) : null,
-      };
-      let x = this.embeddings(ids);
+      const masks = inp.masks;
+      let x = this.embeddings(inp.ids);
       emit("embeddings", x, false);
       for (let i = 0; i < c.numHiddenLayers; i++) {
         const next = this.layer(i, x, masks[c.layerTypes[i]!]!);
@@ -317,18 +400,19 @@ export class ModernBert<T extends Tensor = Tensor> {
    * Mean-pooled sentence vectors over valid tokens (laya-mlx
    * `embed_fn_from_agent`): [B, H] f32. Pass ids tokenized WITH special tokens.
    */
-  embed(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number): T {
+  async embed(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number): Promise<T> {
     const b = this.backend;
-    return b.scope(() => {
-      const h = this.forward(inputIds, attentionMask, B, L);
-      const m = b.fromHost({ dtype: "bool", shape: [B, L], data: attentionMask });
-      return meanPool(b, h, m);
-    });
+    const inp = await this.uploadInputs(inputIds, attentionMask, B, L);
+    try {
+      return b.scope(() => meanPool(b, this.encode(inp), inp.mask));
+    } finally {
+      this.disposeInputs(inp);
+    }
   }
 
   /** `embed` + read back: Float32Array [B * H]. */
   async embedToHost(inputIds: Int32Array, attentionMask: Uint8Array, B: number, L: number): Promise<Float32Array> {
-    const t = this.embed(inputIds, attentionMask, B, L);
+    const t = await this.embed(inputIds, attentionMask, B, L);
     try {
       return toF32(await this.backend.read(t));
     } finally {
@@ -369,55 +453,65 @@ export function detectPrefix(get: WeightGetter): string {
  * Loads encoder weights from `weights` (laya-mlx names `encoder.layers.N.attn.Wqkv.weight`
  * or HF names `model.layers.N.attn.Wqkv.weight`, `model.embeddings...`, `model.final_norm...`).
  * Layer 0 has no attn_norm. Biases are loaded only when the config enables them.
+ * Every tensor's upload starts before any is awaited (one batch); names and
+ * shapes are validated first, so a bad checkpoint rejects without leaking.
  */
-export function loadModernBert<T extends Tensor>(
+export async function loadModernBert<T extends Tensor>(
   backend: Backend<T>,
   config: ModernBertConfig,
   weights: WeightSource,
   opts: LoadModernBertOptions = {},
-): ModernBert<T> {
+): Promise<ModernBert<T>> {
   const dtype = opts.dtype ?? "f32";
   if (!backend.supports(dtype)) throw new Error(`${backend.name} backend does not support ${dtype}`);
   const get = toWeightGetter(weights);
   const prefix = opts.prefix ?? detectPrefix(get);
-  const loaded: T[] = [];
-  const need = (name: string, shape?: readonly number[]): T => {
-    const h = get(prefix + name);
-    if (!h) throw new Error(`modernbert: missing weight ${prefix + name}`);
-    if (shape && (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i]))) {
-      throw new Error(`modernbert: ${prefix + name} has shape [${h.shape}], want [${shape}]`);
-    }
-    const t = uploadAs(backend, h, dtype);
-    loaded.push(t);
-    return t;
-  };
+  // `get` may consume (laya's consumingWeights): look each name up once.
+  const hosts = new Map<string, HostTensor>();
+  const w = await loadInBatch(backend, (upload) => {
+    const need = (name: string, shape?: readonly number[]): T => {
+      const key = prefix + name;
+      let h = hosts.get(key);
+      if (!h) {
+        h = get(key);
+        if (!h) throw new Error(`modernbert: missing weight ${key}`);
+        hosts.set(key, h);
+      }
+      if (shape && (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i]))) {
+        throw new Error(`modernbert: ${key} has shape [${h.shape}], want [${shape}]`);
+      }
+      return upload(key, h);
+    };
+    return buildEncoderWeights(config, need);
+  }, dtype);
+  hosts.clear();
+  return new ModernBert(backend, config, w, dtype);
+}
+
+/** The encoder weight tree; `need(name, shape)` supplies each tensor. */
+function buildEncoderWeights<T>(config: ModernBertConfig, need: (name: string, shape: readonly number[]) => T): ModernBertWeights<T> {
   const maybe = (on: boolean, name: string, shape: readonly number[]): T | null => (on ? need(name, shape) : null);
   const H = config.hiddenSize, I = config.intermediateSize;
   const normW = (p: string): NormWeights<T> => ({ weight: need(`${p}.weight`, [H]), bias: maybe(config.normBias, `${p}.bias`, [H]) });
-  try {
-    const tokEmbeddings = need("embeddings.tok_embeddings.weight", [config.vocabSize, H]);
-    const embNorm = normW("embeddings.norm");
-    const layers: EncoderLayerWeights<T>[] = [];
-    for (let i = 0; i < config.numHiddenLayers; i++) {
-      const p = `layers.${i}`;
-      layers.push({
-        kind: config.layerTypes[i]!,
-        attnNorm: i === 0 ? null : normW(`${p}.attn_norm`),
-        Wqkv: need(`${p}.attn.Wqkv.weight`, [3 * H, H]),
-        WqkvBias: maybe(config.attentionBias, `${p}.attn.Wqkv.bias`, [3 * H]),
-        Wo: need(`${p}.attn.Wo.weight`, [H, H]),
-        WoBias: maybe(config.attentionBias, `${p}.attn.Wo.bias`, [H]),
-        mlpNorm: normW(`${p}.mlp_norm`),
-        Wi: need(`${p}.mlp.Wi.weight`, [2 * I, H]),
-        WiBias: maybe(config.mlpBias, `${p}.mlp.Wi.bias`, [2 * I]),
-        WoMlp: need(`${p}.mlp.Wo.weight`, [H, I]),
-        WoMlpBias: maybe(config.mlpBias, `${p}.mlp.Wo.bias`, [H]),
-      });
-    }
-    const finalNorm = normW("final_norm");
-    return new ModernBert(backend, config, { tokEmbeddings, embNorm, layers, finalNorm }, dtype);
-  } catch (e) {
-    for (const t of loaded) backend.dispose(t);
-    throw e;
+  const tokEmbeddings = need("embeddings.tok_embeddings.weight", [config.vocabSize, H]);
+  const embNorm = normW("embeddings.norm");
+  const layers: EncoderLayerWeights<T>[] = [];
+  for (let i = 0; i < config.numHiddenLayers; i++) {
+    const p = `layers.${i}`;
+    layers.push({
+      kind: config.layerTypes[i]!,
+      attnNorm: i === 0 ? null : normW(`${p}.attn_norm`),
+      Wqkv: need(`${p}.attn.Wqkv.weight`, [3 * H, H]),
+      WqkvBias: maybe(config.attentionBias, `${p}.attn.Wqkv.bias`, [3 * H]),
+      Wo: need(`${p}.attn.Wo.weight`, [H, H]),
+      WoBias: maybe(config.attentionBias, `${p}.attn.Wo.bias`, [H]),
+      mlpNorm: normW(`${p}.mlp_norm`),
+      Wi: need(`${p}.mlp.Wi.weight`, [2 * I, H]),
+      WiBias: maybe(config.mlpBias, `${p}.mlp.Wi.bias`, [2 * I]),
+      WoMlp: need(`${p}.mlp.Wo.weight`, [H, I]),
+      WoMlpBias: maybe(config.mlpBias, `${p}.mlp.Wo.bias`, [H]),
+    });
   }
+  const finalNorm = normW("final_norm");
+  return { tokEmbeddings, embNorm, layers, finalNorm };
 }

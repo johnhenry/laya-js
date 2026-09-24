@@ -47,14 +47,14 @@ interface Activations {
     qtype: decodeTensor(act.inputs.qtype).data as Int32Array,
   };
   for (const dtype of dtypes) {
-    const model = loadDecisionModel(backend, {
+    const model = await loadDecisionModel(backend, {
       encoderConfig: await loadJson("tiny", "encoder", "config.json"),
       agentConfig: await loadJson("tiny", "rl_agent_config.json"),
       weights: safetensorsWeights(file),
       dtype,
     });
     const staged = new Map<string, WebGpuTensor>();
-    const { logits, act: a } = model.forwardTensors(batch, { onStage: (n, t) => (staged.set(n, t), true) });
+    const { logits, act: a } = await model.forwardTensors(batch, { onStage: (n, t) => (staged.set(n, t), true) });
     staged.set("logits", logits);
     staged.set("act", a);
     let worst = 0, worstName = "";
@@ -97,7 +97,7 @@ if (args.includes("--real")) {
     };
     for (const dtype of dtypes) {
       const tl = performance.now();
-      const model = loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
+      const model = await loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
       await backend.sync();
       const loadS = (performance.now() - tl) / 1000;
       let maxLogit = 0, maxAct = 0, agree = 0, total = 0;

@@ -102,7 +102,7 @@ export interface NaryInput {
  * Broadcast inputs use params sh (output shape, rank 8 padded) and st{j}
  * (input strides, 0 on broadcast axes).
  */
-export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind, c: CType): KernelSource {
+export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind, c: CType, helpers = ""): KernelSource {
   const WG = 256;
   const names = ["a", "b", "c"];
   const bindings: BindingSpec[] = ins.map((k, j) => ({ name: `in${j}`, elem: k.kind.st, access: "read" }));
@@ -114,7 +114,7 @@ export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind
     params.push([`o${j}`, "u32"]);
     if (!k.flat) params.push([`st${j}`, "vec8"]);
   });
-  let body = `const WG = ${WG}u;\n${HELPERS}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}\n  if (i >= P.n) { return; }\n`;
+  let body = `const WG = ${WG}u;\n${HELPERS}\n${helpers}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}\n  if (i >= P.n) { return; }\n`;
   if (anyBroadcast) {
     ins.forEach((k, j) => {
       if (!k.flat) body += `  var off${j} = P.o${j};\n`;
@@ -173,10 +173,11 @@ ${dec}${mv}}`;
 // ---------------------------------------------------------------------------
 // Reductions over [outer, R, inner] (one thread per output).
 
-export function reduceKernel(op: "sum" | "max", inp: Kind, out: Kind): KernelSource {
+export function reduceKernel(op: "sum" | "max" | "min" | "mean", inp: Kind, out: Kind): KernelSource {
   const WG = 256;
-  const c: CType = inp.st === "i32" || inp.st === "u32" ? (op === "max" && inp.st === "u32" ? "i32" : "i32") : "f32";
-  const acc = op === "sum" ? "acc = acc + v;" : "acc = max(acc, v);";
+  const c: CType = op !== "mean" && (inp.st === "i32" || inp.st === "u32") ? "i32" : "f32";
+  const acc = op === "sum" || op === "mean" ? "acc = acc + v;" : `acc = ${op}(acc, v);`;
+  const res = op === "mean" ? "acc / f32(P.R)" : "acc";
   const body = `const WG = ${WG}u;\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
   if (i >= P.n) { return; }
   let o = i / P.inner; let inn = i % P.inner;
@@ -186,7 +187,7 @@ export function reduceKernel(op: "sum" | "max", inp: Kind, out: Kind): KernelSou
     let v = ${ld(inp, "inp[base + r * P.inner]", c)};
     ${acc}
   }
-  outp[i] = ${out.st === "u32" ? "select(0u, 1u, acc != 0)" : st(out, "acc", c)};
+  outp[i] = ${out.st === "u32" ? "select(0u, 1u, acc != 0)" : st(out, res, c)};
 }`;
   return {
     key: `reduce:${op}:${kindKey(inp)}:${kindKey(out)}`,
@@ -1229,5 +1230,119 @@ ${stores}}`;
     // Offsets differ per subgroup (derived from local_invocation_index), which is fine:
     // each subgroup executes the matrix ops in subgroup-uniform control flow.
     directives: ["diagnostic(off, chromium.subgroup_matrix_uniformity)"],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// General numerics (optional contract ops).
+
+/**
+ * erf, the f32 lowering of math-plus tensor-core's canonical erf (issue #122;
+ * derived from @johnhenry/backend-cpu's double-precision erf): Maclaurin
+ * series (10 terms) for |x| < 1, erfc by the even contraction of Laplace's
+ * continued fraction (depth 28, exp(-z²) split to keep z² exact) above,
+ * flushed to 0 beyond 10.1. Truncation error < 2^-24 relative
+ * (math-plus ERF_F32_PARAMS); ≈1e-7 absolute overall in f32.
+ */
+export const ERF_HELPERS = /* wgsl */ `
+fn erf_mp_series(x: f32) -> f32 {
+  let x2 = x * x;
+  var term = x;
+  var sum = x;
+  for (var n = 1; n <= 10; n = n + 1) {
+    let nf = f32(n);
+    term = term * (-x2 / nf);
+    sum = sum + term / (2.0 * nf + 1.0);
+  }
+  return 1.1283791670955126 * sum;
+}
+fn erf_mp_erfc(z: f32) -> f32 {
+  if (z > 10.1) { return 0.0; }
+  let t = 2.0 * z * z + 1.0;
+  var f = 0.0;
+  for (var n = 28; n >= 1; n = n - 1) {
+    let nf = f32(n);
+    f = ((2.0 * nf - 1.0) * (2.0 * nf)) / (t + 4.0 * nf - f);
+  }
+  let s = round(z * 64.0) / 64.0;
+  let e = exp(-s * s) * exp(-(z - s) * (z + s));
+  return (e * 0.5641895835477563 * 2.0 * z) / (t - f);
+}
+fn erf_mp(x: f32) -> f32 {
+  let ax = abs(x);
+  if (ax < 1.0) { return erf_mp_series(x); }
+  return sign(x) * (1.0 - erf_mp_erfc(ax));
+}`;
+
+/**
+ * pow with C/MLX semantics: x^0 = 1, 0^y = 0 (y > 0) or inf (y < 0), a
+ * negative base is defined for integral exponents (sign from parity), NaN
+ * otherwise. WGSL's builtin pow is undefined for x < 0.
+ */
+export const POW_HELPERS = /* wgsl */ `
+fn pow_(a: f32, b: f32) -> f32 {
+  if (b == 0.0) { return 1.0; }
+  var infBits = 0x7f800000u;
+  var nanBits = 0x7fc00000u;
+  if (a == 0.0) { return select(0.0, bitcast<f32>(infBits), b < 0.0); }
+  let r = exp2(b * log2(abs(a)));
+  if (a > 0.0) { return r; }
+  if (b != floor(b)) { return bitcast<f32>(nanBits); }
+  let half = b * 0.5;
+  return select(r, -r, half != floor(half));
+}`;
+
+/** Index (i32) of the first max/min along R of [outer, R, inner]: one thread per output. */
+export function argReduceKernel(op: "argmax" | "argmin", inp: Kind): KernelSource {
+  const WG = 256;
+  const c: CType = inp.st === "i32" || inp.st === "u32" ? "i32" : "f32";
+  const better = op === "argmax" ? "v > best" : "v < best";
+  const body = `const WG = ${WG}u;\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
+  if (i >= P.n) { return; }
+  let o = i / P.inner; let inn = i % P.inner;
+  let base = P.off + o * P.R * P.inner + inn;
+  var best = ${ld(inp, "inp[base]", c)};
+  var bi = 0u;
+  for (var r = 1u; r < P.R; r++) {
+    let v = ${ld(inp, "inp[base + r * P.inner]", c)};
+    if (${better}) { best = v; bi = r; }
+  }
+  outp[i] = i32(bi);
+}`;
+  return {
+    key: `${op}:${kindKey(inp)}`,
+    bindings: [
+      { name: "inp", elem: inp.st, access: "read" },
+      { name: "outp", elem: "i32", access: "read_write" },
+    ],
+    params: [["n", "u32"], ["R", "u32"], ["inner", "u32"], ["off", "u32"]],
+    body,
+    f16: needsF16(inp),
+  };
+}
+
+/** Inclusive prefix sum along R of [outer, R, inner]: one thread per (outer, inner) lane, f32/i32 accumulator. */
+export function cumsumKernel(inp: Kind, out: Kind): KernelSource {
+  const WG = 256;
+  const c: CType = out.st === "i32" ? "i32" : "f32";
+  const body = `const WG = ${WG}u;\n${out.bf16 ? HELPERS : ""}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
+  if (i >= P.n) { return; }
+  let o = i / P.inner; let inn = i % P.inner;
+  let base = o * P.R * P.inner + inn;
+  var acc = ${c}(0);
+  for (var r = 0u; r < P.R; r++) {
+    acc = acc + ${ld(inp, "inp[P.off + base + r * P.inner]", c)};
+    outp[base + r * P.inner] = ${st(out, "acc", c)};
+  }
+}`;
+  return {
+    key: `cumsum:${kindKey(inp)}:${kindKey(out)}`,
+    bindings: [
+      { name: "inp", elem: inp.st, access: "read" },
+      { name: "outp", elem: out.st, access: "read_write" },
+    ],
+    params: [["n", "u32"], ["R", "u32"], ["inner", "u32"], ["off", "u32"]],
+    body,
+    f16: needsF16(inp, out),
   };
 }

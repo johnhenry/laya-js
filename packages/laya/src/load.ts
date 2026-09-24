@@ -53,7 +53,7 @@ export async function load(modelIdOrPath: string, opts: LoadOptions = {}): Promi
     // quantized checkpoints dequantize straight to the dtype the agent will compute in (createAgent's rule)
     const computeDtype = (opts.dtype ?? "f16") === "f16" && backend.name !== "cpu" && backend.supports("f16") ? "f16" : "f32";
     const weights = await ckpt.weights({ dtype: computeDtype });
-    agent = createAgent({
+    agent = await createAgent({
       backend,
       encoderConfig: ckpt.encoderConfig,
       agentConfig: ckpt.agentConfig,

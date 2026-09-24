@@ -61,7 +61,7 @@ for (const m of MODELS) {
     const padId = tok.special.pad_token![1];
     const backend = createCpuBackend();
     const file = readSafetensors(await readFile(`${fx.model_dir}/model.safetensors`));
-    const model = loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file) });
+    const model = await loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file) });
     const loadS = (performance.now() - t0) / 1000;
 
     let logitAbs = 0, actAbs = 0, actRel = 0, agree = 0, total = 0, tokens = 0;

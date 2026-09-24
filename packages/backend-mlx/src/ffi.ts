@@ -74,6 +74,27 @@ const SYMBOLS = {
   mlx_take_along_axis: { args: ["h", "h", "h", "i32", "h"], ret: "i32" },
   mlx_expand_dims: { args: ["h", "h", "i32", "h"], ret: "i32" },
   mlx_contiguous: { args: ["h", "h", "bool", "h"], ret: "i32" },
+  // general numerics
+  mlx_equal: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_not_equal: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_less: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_less_equal: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_greater: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_greater_equal: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_logical_and: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_logical_or: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_logical_not: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_sqrt: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_rsqrt: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_power: { args: ["h", "h", "h", "h"], ret: "i32" },
+  mlx_negative: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_abs: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_tanh: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_sigmoid: { args: ["h", "h", "h"], ret: "i32" },
+  mlx_argmax_axis: { args: ["h", "h", "i32", "bool", "h"], ret: "i32" },
+  mlx_argmin_axis: { args: ["h", "h", "i32", "bool", "h"], ret: "i32" },
+  mlx_mean_axis: { args: ["h", "h", "i32", "bool", "h"], ret: "i32" },
+  mlx_min_axis: { args: ["h", "h", "i32", "bool", "h"], ret: "i32" },
   mlx_fast_layer_norm: { args: ["h", "h", "h", "h", "f32", "h"], ret: "i32" },
   mlx_fast_rope: { args: ["h", "h", "i32", "bool", "optf", "f32", "i32", "h", "h"], ret: "i32" },
   // compile
@@ -87,8 +108,12 @@ const SYMBOLS = {
 /** ABI-specific symbols: mlx-c < 0.6 (MLX 0.32.1) vs mlx-c >= 0.6 (MLX 0.32.2). */
 const ABI_OLD: Record<string, Sym> = {
   mlx_detail_compile_clear_cache: { args: [], ret: "i32" },
+  // (res, a, axis, reverse, inclusive, stream)
+  mlx_cumsum: { args: ["h", "h", "i32", "bool", "bool", "h"], ret: "i32" },
 };
 const ABI_NEW: Record<string, Sym> = {
+  // (res, a, axis, reverse, inclusive, mlx_optional_dtype, stream)
+  mlx_cumsum_axis: { args: ["h", "h", "i32", "bool", "bool", "optf", "h"], ret: "i32" },
   mlx_detail_compile_cache: { args: ["h"], ret: "i32" },
   mlx_detail_compile_clear_cache: { args: ["h"], ret: "i32" },
   mlx_compile_cache_free: { args: ["h"], ret: "i32" },
@@ -103,6 +128,8 @@ export type Native = { [K in keyof typeof SYMBOLS]: Fn } & {
   mlx_detail_compile_clear_cache: Fn;
   mlx_detail_compile_cache?: Fn;
   mlx_compile_cache_free?: Fn;
+  /** Inclusive/reverse cumsum along an axis, over both mlx-c ABIs. */
+  cumsum(res: number, a: number, axis: number, reverse: boolean, inclusive: boolean, stream: number): number;
   /** mlx-c ≥ 0.6 (MLX 0.32.2) added `bool force_fused` to sdpa. */
   readonly sdpaForceFused: boolean;
   readonly runtime: "bun" | "node";
@@ -225,6 +252,11 @@ export function openNative(path: string): Native {
   let n = cache.get(path);
   if (!n) {
     n = isBun ? openBun(path) : openNode(path);
+    const raw = n as unknown as Record<string, Fn>;
+    // mlx-c >= 0.6 renamed mlx_cumsum(res, a, axis, ...) to mlx_cumsum_axis(..., optional dtype, s).
+    n.cumsum = n.sdpaForceFused
+      ? (res, a, axis, reverse, inclusive, s) => raw.mlx_cumsum_axis!(res, a, axis, reverse, inclusive, 0n, s)
+      : (res, a, axis, reverse, inclusive, s) => raw.mlx_cumsum!(res, a, axis, reverse, inclusive, s);
     cache.set(path, n);
     installExitHook(n);
   }

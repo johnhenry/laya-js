@@ -22,16 +22,19 @@ Runs anywhere JavaScript runs: Node ≥ 24, Bun ≥ 1.2, Deno and browsers. No n
 import { createCpuBackend } from "@johnhenry/backend-cpu";
 
 const cpu = createCpuBackend();
-const x = cpu.fromHost({ dtype: "f32", shape: [2, 3], data: new Float32Array([1, 2, 3, 4, 5, 6]) });
+const x = await cpu.fromHost({ dtype: "f32", shape: [2, 3], data: new Float32Array([1, 2, 3, 4, 5, 6]) });
 const y = cpu.scope(() => cpu.softmax(cpu.scale(x, 2), -1)); // intermediates freed
 console.log(await cpu.read(y));
 ```
 
 ## API
 
-- `createCpuBackend(): Backend<CpuTensor>` — independent instance; implements
-  every required op plus the optional `geglu`, `meanPool`, `flush` (no-op)
-  and `destroy`.
+- `createCpuBackend(): CpuBackend` — independent instance; implements
+  every required op plus the optional `geglu`, `meanPool`, `flush` (no-op),
+  `destroy`, and every general-numerics op natively (comparisons, logical
+  ops, `sqrt`, `rsqrt`, `pow`, `neg`, `abs`, `tanh`, `sigmoid`, `erf`,
+  `argmax`, `argmin`, `mean`, `min`, `cumsum`). `CpuBackend` is
+  `Backend<CpuTensor>` with those optional members required.
 - `class CpuTensor` — `shape`, `dtype`, `data` (row-major `Float32Array` |
   `Int32Array` | `Uint8Array`; may be shared between tensors, never mutate),
   `disposed`.
@@ -45,7 +48,13 @@ console.log(await cpu.read(y));
 - Storage: f32 for all floats. `fromHost` widens f16 (`Float16Array`) and
   bf16 (raw `Uint16Array` bits) to f32; i32 → `Int32Array`; bool → `Uint8Array`.
 - `supports("f16" | "bf16")` is **false**; `cast(x, "f16" | "bf16")` throws.
-- Eager and synchronous; `read` resolves immediately with a copy.
+- Eager and synchronous. `fromHost` copies the host data when called and
+  returns an already-resolved Promise; `read` resolves immediately with a copy.
+- General numerics are computed in f64 and rounded to f32 once: `erf` is the
+  double-precision `erf` above (the algorithm math-plus tensor-core adopted
+  as its canonical erf), `sigmoid` avoids overflow for x ≪ 0, `argmax` /
+  `argmin` return the first index on ties (NaN counts as the maximum and the
+  minimum, like NumPy), `neg` / `abs` keep i32, and `cumsum` of i32 or bool is i32.
 - `reshape` and same-dtype `cast` share the buffer (no copy).
 - Reductions, softmax, LayerNorm, attention and matmul accumulate in f64,
   then round to f32 once. GELU is exact erf GELU.

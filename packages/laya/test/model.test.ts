@@ -29,7 +29,7 @@ test("tiny checkpoint: every stage matches MLX within 1e-5 (CPU backend)", async
   const agentConfig = await loadJson<Record<string, unknown>>("tiny", "rl_agent_config.json");
   const file = readSafetensors(await readFile(fixturePath("tiny", "model.safetensors")));
   const backend = createCpuBackend();
-  const model = loadDecisionModel(backend, { encoderConfig, agentConfig, weights: safetensorsWeights(file) });
+  const model = await loadDecisionModel(backend, { encoderConfig, agentConfig, weights: safetensorsWeights(file) });
 
   const ids = decodeTensor(act.inputs.input_ids), mask = decodeTensor(act.inputs.attention_mask);
   const mpos = decodeTensor(act.inputs.marker_pos), mmask = decodeTensor(act.inputs.marker_mask);
@@ -42,7 +42,7 @@ test("tiny checkpoint: every stage matches MLX within 1e-5 (CPU backend)", async
     qtype: decodeTensor(act.inputs.qtype).data as Int32Array,
   };
   const staged = new Map<string, CpuTensor>();
-  const { logits, act: actT } = model.forwardTensors(batch, { onStage: (name, t) => (staged.set(name, t), true) });
+  const { logits, act: actT } = await model.forwardTensors(batch, { onStage: (name, t) => (staged.set(name, t), true) });
   staged.set("logits", logits);
   staged.set("act", actT);
   assert.deepEqual([...staged.keys()].sort(), Object.keys(act.stages).sort(), "stage names");
@@ -82,7 +82,7 @@ test("forward() returns host logits/act with nAct and frees intermediates", asyn
   const act = await loadJson<Activations>("tiny", "activations.json");
   const file = readSafetensors(await readFile(fixturePath("tiny", "model.safetensors")));
   const backend = createCpuBackend();
-  const model = loadDecisionModel(backend, {
+  const model = await loadDecisionModel(backend, {
     encoderConfig: await loadJson("tiny", "encoder", "config.json"),
     agentConfig: await loadJson("tiny", "rl_agent_config.json"),
     weights: safetensorsWeights(file),
@@ -109,13 +109,29 @@ test("loadDecisionModel rejects missing weights and wrong shapes", async () => {
   const file = readSafetensors(await readFile(fixturePath("tiny", "model.safetensors")));
   const get = safetensorsWeights(file);
   const encoderConfig = await loadJson<Record<string, unknown>>("tiny", "encoder", "config.json");
-  const backend = createCpuBackend();
-  assert.throws(
+  // Count live uploads: a rejected load must free every tensor it uploaded.
+  const cpu = createCpuBackend();
+  const live = new Set<CpuTensor>();
+  const backend = new Proxy(cpu, {
+    get(t, p) {
+      if (p === "fromHost") return async (h: Parameters<typeof cpu.fromHost>[0]) => { const x = await t.fromHost(h); live.add(x); return x; };
+      if (p === "dispose") return (x: CpuTensor) => { live.delete(x); t.dispose(x); };
+      const v = Reflect.get(t, p, t) as unknown;
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  await assert.rejects(
     () => loadDecisionModel(backend, { encoderConfig, agentConfig: { head_layers: 3 }, weights: get }),
     /missing weight head\.layers\.2/,
   );
-  assert.throws(
+  assert.equal(live.size, 0, "encoder uploads freed after a head validation error");
+  await assert.rejects(
     () => loadDecisionModel(backend, { encoderConfig, agentConfig: { head_layers: 2, act_costs: { a: 1, b: 2 } }, weights: get }),
     /act_head\.layers\.2\.weight has shape \[2,256\], want \[3,256\]/,
   );
+  assert.equal(live.size, 0);
+  const ok = await loadDecisionModel(backend, { encoderConfig, agentConfig: await loadJson("tiny", "rl_agent_config.json"), weights: get });
+  assert.ok(live.size > 0);
+  ok.dispose();
+  assert.equal(live.size, 0, "dispose frees every weight and constant");
 });

@@ -33,7 +33,7 @@ const b = createMlxBackend();
 console.log(`runtime ${b.info.runtime} | ${b.info.mlxcAbi}`);
 for (const dtype of dtypes) {
   const t0 = performance.now();
-  const model = loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
+  const model = await loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
   b.flush(); // weights resident
   const loadMs = performance.now() - t0;
   // single short question latency (B=1, the shortest item), measured first

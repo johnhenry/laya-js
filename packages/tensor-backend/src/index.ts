@@ -5,12 +5,18 @@
  * Design rules:
  * - Backends are passed explicitly; there is no global default.
  * - Ops are synchronous and return opaque handles. Backends may evaluate
- *   lazily (MLX graphs, queued WebGPU passes); only `read` is async.
- * - Masks and index tensors are built on the host and uploaded — the
- *   interface has no comparison/iota ops on purpose.
+ *   lazily (MLX graphs, queued WebGPU passes). Device transfers are async
+ *   in both directions: `fromHost` and `read` return Promises, so a
+ *   transfer is never silently synchronous (math-plus RFC 0001 §12 Q2).
+ * - Masks and index tensors are usually built on the host and uploaded;
+ *   the optional "general numerics" ops (comparisons, `argmax`, `cumsum`,
+ *   …) exist for device-side code, not for the transformer hot path.
  * - Fused ops (`linear`, `layerNorm`, `rope`, `sdpa`, `gelu`) are
- *   required so each backend can use its fastest kernel. `geglu` and
- *   `meanPool` have default compositions in `./compose.ts`.
+ *   required so each backend can use its fastest kernel. Every optional op
+ *   is called through its `./compose.ts` helper (`geglu(b, x)`,
+ *   `sqrt(b, x)`, …), which uses the native kernel when the backend has
+ *   one and a default composition otherwise (`cumsum` has none; see
+ *   `NUMERICS_OPS`).
  * - dtype names match @johnhenry/math-plus-tensor-core ("f32", "f16", ...),
  *   so a HostTensor feeds `Tensor.fromTypedArray` without a copy.
  */
@@ -46,11 +52,14 @@ export interface Backend<T extends Tensor = Tensor> {
 
   // ---- transfer / lifetime ------------------------------------------------
   /**
-   * Accepts every DType. A backend may widen to a supported storage dtype
-   * (e.g. f16 → f32 on the CPU reference); the returned `.dtype` reflects storage.
+   * Uploads a host tensor. Accepts every DType. A backend may widen to a
+   * supported storage dtype (e.g. f16 → f32 on the CPU reference); the
+   * resulting `.dtype` reflects storage. Async like `read`: do not mutate
+   * `t.data` until the Promise settles. Batch independent uploads and
+   * await them together (`Promise.all`) rather than one at a time.
    */
-  fromHost(t: HostTensor): T;
-  /** Materializes and copies to host. The only async op. */
+  fromHost(t: HostTensor): Promise<T>;
+  /** Materializes and copies to host. */
   read(t: T): Promise<HostTensor>;
   /** Frees a tensor now. Idempotent. */
   dispose(t: T): void;
@@ -137,6 +146,53 @@ export interface Backend<T extends Tensor = Tensor> {
   meanPool?(x: T, mask: T): T;
   /** Wrap a pure function of tensors for graph compilation (MLX). */
   compile?<A extends T[], R>(fn: (...args: A) => R): (...args: A) => R;
+
+  // ---- optional general numerics (call through compose.ts) ----------------
+  // Elementwise ops broadcast like numpy. Comparisons and logical ops return
+  // bool; integer inputs of float-valued ops compute in f32. Results for
+  // NaN inputs are backend-defined (WebGPU may assume no NaNs).
+  /** a == b → bool. */
+  equal?(a: T, b: T): T;
+  /** a != b → bool. */
+  notEqual?(a: T, b: T): T;
+  /** a < b → bool. */
+  less?(a: T, b: T): T;
+  /** a <= b → bool. */
+  lessEqual?(a: T, b: T): T;
+  /** a > b → bool. */
+  greater?(a: T, b: T): T;
+  /** a >= b → bool. */
+  greaterEqual?(a: T, b: T): T;
+  /** Nonzero-is-true AND → bool. */
+  logicalAnd?(a: T, b: T): T;
+  /** Nonzero-is-true OR → bool. */
+  logicalOr?(a: T, b: T): T;
+  /** Nonzero-is-true NOT → bool. */
+  logicalNot?(x: T): T;
+  sqrt?(x: T): T;
+  /** 1 / √x. */
+  rsqrt?(x: T): T;
+  /** aᵇ (float result). A negative base is defined for integral exponents (MLX/C `pow`). */
+  pow?(a: T, b: T): T;
+  /** −x; keeps f32/f16/bf16/i32. */
+  neg?(x: T): T;
+  /** |x|; keeps f32/f16/bf16/i32. */
+  abs?(x: T): T;
+  tanh?(x: T): T;
+  /** 1 / (1 + e⁻ˣ). */
+  sigmoid?(x: T): T;
+  /** Error function, accurate to f32 (≈1e-7 absolute). */
+  erf?(x: T): T;
+  /** Index (i32) of the first maximum along `axis`. */
+  argmax?(x: T, axis: number, keepDims?: boolean): T;
+  /** Index (i32) of the first minimum along `axis`. */
+  argmin?(x: T, axis: number, keepDims?: boolean): T;
+  /** Mean along `axis` (f32 accumulation; integer input → f32). */
+  mean?(x: T, axis: number, keepDims?: boolean): T;
+  /** Minimum along `axis`; keeps dtype. */
+  min?(x: T, axis: number, keepDims?: boolean): T;
+  /** Inclusive prefix sum along `axis`; floats keep dtype, i32/bool → i32. */
+  cumsum?(x: T, axis: number): T;
 }
 
 export * from "./host.ts";

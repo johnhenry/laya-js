@@ -16,7 +16,7 @@ const fx = await loadReal("english");
 const encoderConfig = JSON.parse(await readFile(`${fx.model_dir}/encoder/config.json`, "utf8"));
 const tok = await loadJson<{ special: Record<string, [string, number]> }>("tables", "tokenizer-english.json");
 const file = readSafetensors(await readFile(`${fx.model_dir}/model.safetensors`));
-const model = loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype: "f16" });
+const model = await loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype: "f16" });
 const items = fx.cases.flatMap((c) => c.items);
 const short = items.reduce((a, c) => (c.ids.length < a.ids.length ? c : a));
 const batch = collateItems([short], tok.special.pad_token![1]);
@@ -25,7 +25,7 @@ await b.sync();
 let enc = 0, gpu = 0, tot = 0; const n = 20; const d0 = b.rt.stats.dispatches, s0 = b.rt.stats.submits;
 for (let i = 0; i < n; i++) {
   const t0 = performance.now();
-  const { logits, act } = model.forwardTensors(batch);
+  const { logits, act } = await model.forwardTensors(batch);
   const t1 = performance.now();
   b.flush();
   await b.sync();
