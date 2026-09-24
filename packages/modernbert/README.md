@@ -44,7 +44,13 @@ const vectors = await encoder.embedToHost(inputIds, attentionMask, B, L); // Flo
   `normEps` (1e-5), `normBias`/`attentionBias`/`mlpBias` (false),
   `localAttention` (128), `headDim`.
 - `loadModernBert(backend, config, weights, { dtype?: "f32"|"f16"|"bf16", prefix? }): Promise<ModernBert<T>>`
-  - `weights`: `(name) => HostTensor | undefined` or `{ get(name) }`.
+  - `weights`: `(name) => HostWeight | undefined` or `{ get(name) }`, where a
+    `HostWeight` is a `HostTensor` or, for the Linear weights (`Wqkv`, `Wo`,
+    `Wi`, `mlp.Wo`) and the token embedding, a tensor-backend
+    `HostQuantized` (int8/int4 + per-group scales). Quantized matrices are
+    uploaded with `uploadQuantized` and stay quantized on backends with the
+    native quantized ops (MLX, WebGPU); the forward pass calls
+    `linearAny` / `embeddingAny`. A quantized norm or bias is rejected.
   - Names: laya-mlx `encoder.layers.N.attn.Wqkv.weight`, … or HF
     `model.layers.N.attn.Wqkv.weight`, `model.embeddings.*`, `model.final_norm.*`.
     `prefix` defaults to auto-detection (`encoder.`, `model.`, `""`).
@@ -76,7 +82,10 @@ const vectors = await encoder.embedToHost(inputIds, attentionMask, B, L); // Flo
   all-masked softmax rows.
 - `safetensorsWeights(file)`: adapts an in-memory
   `@johnhenry/math-plus-safetensors` file (F16 → f16, BF16 → bf16, F32 → f32).
-- `uploadAs(backend, host, dtype): Promise<T>`, `toWeightGetter(src)`,
+- Weight types: `HostWeight`, `DeviceWeight<T>` (`T | QuantizedTensor<T>`),
+  `MatrixWeight<T>`; `isHostQuantized(h)`, `disposeWeight(backend, w)`,
+  `hasQuantizedWeights(model)`.
+- `uploadAs(backend, host, dtype): Promise<T>` (a `HostQuantized` resolves to a `QuantizedTensor`), `toWeightGetter(src)`,
   `detectPrefix(get)`, and the batch-loading helpers `loadInBatch(backend,
   build, dtype)` (runs a pure weight-tree builder twice: once to validate
   and start every upload, once with the settled tensors) and
