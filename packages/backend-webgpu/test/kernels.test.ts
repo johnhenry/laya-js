@@ -428,7 +428,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
   t.it("createWebGpuBackend({ device, adapter }) detects subgroup matrices like a backend that requested its own device; sleepThresholdMs is applied", async () => {
     const own = await get();
     const adapter = (await requestAdapter(undefined, true))!;
-    const device = await adapter.requestDevice({ requiredFeatures: [...adapter.features].filter((f) => f === "chromium-experimental-subgroup-matrix" || f === "shader-f16") as GPUFeatureName[] });
+    const device = await adapter.requestDevice({ requiredFeatures: [...adapter.features].filter((f: string) => f === "chromium-experimental-subgroup-matrix" || f === "shader-f16") as GPUFeatureName[] });
     const withAdapter = await createWebGpuBackend({ device, adapter, sleepThresholdMs: 15 });
     assert.equal(withAdapter.hasSubgroupMatrix, own.hasSubgroupMatrix);
     assert.equal(withAdapter.rt.sleepThresholdMs, 15);
