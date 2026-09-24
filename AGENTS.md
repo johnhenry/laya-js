@@ -152,8 +152,9 @@ manual `workflow_dispatch`, `dry_run` defaults to true).
    when the binaries change. The `native` job rebuilds it on macOS and
    publishes it with provenance if that version is new.
 
-Secrets: `NPM_TOKEN` (a short-lived granular token, set 2026-09-23; replace it
-when it expires). Better: configure npm trusted publishing (`npm trust github
-<pkg> --file release.yml --repo johnhenry/laya-js --allow-publish`, run by a
-2FA-enabled account; a bypass-2FA token can't) and drop the secret.
+Auth: npm **trusted publishing** (OIDC). Every package on npm trusts
+`johnhenry/laya-js` → `.github/workflows/release.yml` (set up 2026-09-24 with
+`npm trust github`), so no `NPM_TOKEN` secret is used. New packages need
+`npm trust github <pkg> --file release.yml --repo johnhenry/laya-js --allow-publish`
+(run by a 2FA-enabled account) after their first publish.
 JSR: not published yet (packages must be created on jsr.io first).
