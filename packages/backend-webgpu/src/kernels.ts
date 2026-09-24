@@ -341,9 +341,15 @@ export interface QuantSpec {
   sym: boolean;
   /** Storage kind of the scales / biases. */
   scale: Kind;
+  /**
+   * Round each dequantized weight to f16 before the multiply (f16
+   * activations): the same weights host dequantization uploads, so f16
+   * results track the dequantize-on-load model.
+   */
+  r16?: boolean;
 }
 
-export const quantKey = (q: QuantSpec | null | undefined): string => (q ? `q${q.bits}${q.sym ? "s" : "a"}g${q.g}${kindKey(q.scale)}` : "");
+export const quantKey = (q: QuantSpec | null | undefined): string => (q ? `q${q.bits}${q.sym ? "s" : "a"}g${q.g}${kindKey(q.scale)}${q.r16 ? "r" : ""}` : "");
 
 /** Bindings that replace `B` for a quantized weight (in this order). */
 export function quantBindings(q: QuantSpec): BindingSpec[] {
@@ -379,7 +385,8 @@ export function quantHelper(q: QuantSpec): string {
 fn qw4(row: u32, k: u32) -> vec4<f32> {
   ${v}
   let gi = ${gi};
-  return fma(v, vec4<f32>(f32(QS[gi])), vec4<f32>(${b}));
+  let d = fma(v, vec4<f32>(f32(QS[gi])), vec4<f32>(${b}));
+  return ${q.r16 ? "vec4<f32>(vec4<f16>(d))" : "d"};
 }
 `;
 }
@@ -407,7 +414,7 @@ ${ENTRY(WG)} {
     bindings: [...quantBindings(q), { name: "ids", elem: "i32", access: "read" }, { name: "outp", elem: out.st, access: "read_write" }],
     params: [["n", "u32"], ["K", "u32"], ["V", "u32"], ["oi", "u32"]],
     body: (out.bf16 ? HELPERS : "") + body,
-    f16: needsF16(q.scale, out),
+    f16: needsF16(q.scale, out, ...(q.r16 ? [{ st: "f16" as const }] : [])),
   };
 }
 
@@ -617,7 +624,7 @@ ${store}}`;
     ["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"],
     ["bsh", "vec8"], ["ast", "vec8"], ["bst", "vec8"],
   ];
-  return { key, bindings, params, body, f16: needsF16(a, out, ...(quant ? [quant.scale] : [b]), ...(bias ? [bias] : [])) };
+  return { key, bindings, params, body, f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])) };
 }
 
 /**
@@ -665,7 +672,7 @@ ${s}}`;
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, out, ...(quant ? [quant.scale] : [b]), ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
   };
 }
 
@@ -721,13 +728,18 @@ export function gemmSkinnyKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind,
     s += `  for (var k8 = ks; k8 < K8; k8 += ${KS}u) {\n    let gi = (k8 * 8u) / ${q.g}u;\n`;
     for (let i = 0; i < TM; i++) {
       s += `    let a${i}l = ${f4(a, `A[ar${i} + 2u * k8]`)}; let a${i}h = ${f4(a, `A[ar${i} + 2u * k8 + 1u]`)};\n`;
-      if (aff) s += `    let sa${i} = dot(a${i}l + a${i}h, vec4<f32>(1.0));\n`;
+      if (aff && !q.r16) s += `    let sa${i} = dot(a${i}l + a${i}h, vec4<f32>(1.0));\n`;
     }
     for (let j = 0; j < TN; j++) {
       if (wpr === 1) s += `    { let w = QW[wb${j} + k8]; let ql = ${unpack("w", 0, 4, q.sym)}; let qh = ${unpack("w", 16, 4, q.sym)};\n`;
       else s += `    { let w0 = QW[wb${j} + 2u * k8]; let w1 = QW[wb${j} + 2u * k8 + 1u]; let ql = ${unpack("w0", 0, 8, q.sym)}; let qh = ${unpack("w1", 0, 8, q.sym)};\n`;
       s += `      let sc = f32(QS[sb${j} + gi]);${aff ? ` let bi = f32(QB[sb${j} + gi]);` : ""}\n`;
-      for (let i = 0; i < TM; i++) s += `      c${i}_${j} += sc * (dot(a${i}l, ql) + dot(a${i}h, qh))${aff ? ` + bi * sa${i}` : ""};\n`;
+      if (q.r16) {
+        // weights rounded to f16 (as host dequantization does), then plain dots
+        const d = (v: string) => `vec4<f32>(vec4<f16>(fma(${v}, vec4<f32>(sc), vec4<f32>(${aff ? "bi" : "0.0"}))))`;
+        s += `      let wl = ${d("ql")}; let wh = ${d("qh")};\n`;
+        for (let i = 0; i < TM; i++) s += `      c${i}_${j} += dot(a${i}l, wl) + dot(a${i}h, wh);\n`;
+      } else for (let i = 0; i < TM; i++) s += `      c${i}_${j} += sc * (dot(a${i}l, ql) + dot(a${i}h, qh))${aff ? ` + bi * sa${i}` : ""};\n`;
       s += `    }\n`;
     }
     s += `  }\n`;
@@ -802,7 +814,7 @@ ${s}}`;
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, out, ...(quant ? [quant.scale] : [b]), ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
   };
 }
 
@@ -1481,7 +1493,7 @@ ${epilogue}}`;
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["kc", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, out, ...(quant ? [quant.scale] : [b]), ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
     enables: ["chromium_experimental_subgroup_matrix"],
     // Offsets differ per subgroup (derived from local_invocation_index), which is fine:
     // each subgroup executes the matrix ops in subgroup-uniform control flow.

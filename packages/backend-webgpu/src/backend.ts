@@ -959,14 +959,14 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     return { shape: [N, K], bits, groupSize, mode, dtype, native: true, w, scales: up(h.scales), biases: h.biases ? up(h.biases) : null };
   }
 
-  private quantSpec(scales: WebGpuTensor, biases: WebGpuTensor | null, opts: QuantizedLinearOptions): { spec: QuantSpec; bufs: GPUBuffer[] } {
+  private quantSpec(scales: WebGpuTensor, biases: WebGpuTensor | null, opts: QuantizedLinearOptions, r16 = false): { spec: QuantSpec; bufs: GPUBuffer[] } {
     const sym = opts.mode === "symmetric";
     if (!sym && !biases) throw new Error("webgpu: affine quantized weights need biases");
     if (opts.groupSize % 4) throw new Error("webgpu: quantized group size must be a multiple of 4");
     this.live(scales);
     if (biases) this.live(biases);
     return {
-      spec: { bits: opts.bits, g: opts.groupSize, sym, scale: this.kind(scales.dtype) },
+      spec: { bits: opts.bits, g: opts.groupSize, sym, scale: this.kind(scales.dtype), ...(r16 ? { r16 } : {}) },
       bufs: [scales.storage.buffer, ...(sym ? [] : [biases!.storage.buffer])],
     };
   }
@@ -979,7 +979,8 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     const K = x.shape[x.shape.length - 1]!;
     const N = scales.shape[0]!;
     if (w.shape[0] !== N || (w.shape[1]! * 32) / opts.bits !== K) throw new Error(`quantizedLinear: x [${x.shape}] vs packed w [${w.shape}] (q${opts.bits})`);
-    const q = this.quantSpec(scales, biases, opts);
+    // f16 activations: round each weight to f16 like host dequantization does
+    const q = this.quantSpec(scales, biases, opts, this.kind(x.dtype).st === "f16");
     q.bufs.unshift(w.storage.buffer);
     const M = x.size / K;
     const xc = x.offset % 4 ? this.copyContig(x) : x;
