@@ -4,8 +4,9 @@
  * koffi on Node).
  *
  * Semantics: every op appends a node to MLX's lazy graph and returns
- * immediately (one FFI call per op); `read` evaluates and copies to the
- * host; `flush` evaluates without copying. Fused ops map to `mlx.fast`
+ * immediately (one FFI call per op); `fromHost` copies the host buffer into
+ * an MLX allocation at call time and resolves; `read` evaluates and copies
+ * to the host; `flush` evaluates without copying. Fused ops map to `mlx.fast`
  * kernels; `compile` maps to `mlx_compile`.
  */
 import type { Backend, DType, HostData, HostTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
@@ -44,6 +45,29 @@ export interface MlxBackend extends Backend<MlxTensor> {
   destroy(): void;
   geglu(x: MlxTensor): MlxTensor;
   meanPool(x: MlxTensor, mask: MlxTensor): MlxTensor;
+  // general numerics: all native (mlx-c)
+  equal(a: MlxTensor, b: MlxTensor): MlxTensor;
+  notEqual(a: MlxTensor, b: MlxTensor): MlxTensor;
+  less(a: MlxTensor, b: MlxTensor): MlxTensor;
+  lessEqual(a: MlxTensor, b: MlxTensor): MlxTensor;
+  greater(a: MlxTensor, b: MlxTensor): MlxTensor;
+  greaterEqual(a: MlxTensor, b: MlxTensor): MlxTensor;
+  logicalAnd(a: MlxTensor, b: MlxTensor): MlxTensor;
+  logicalOr(a: MlxTensor, b: MlxTensor): MlxTensor;
+  logicalNot(x: MlxTensor): MlxTensor;
+  sqrt(x: MlxTensor): MlxTensor;
+  rsqrt(x: MlxTensor): MlxTensor;
+  pow(a: MlxTensor, b: MlxTensor): MlxTensor;
+  neg(x: MlxTensor): MlxTensor;
+  abs(x: MlxTensor): MlxTensor;
+  tanh(x: MlxTensor): MlxTensor;
+  sigmoid(x: MlxTensor): MlxTensor;
+  erf(x: MlxTensor): MlxTensor;
+  argmax(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
+  argmin(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
+  mean(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
+  min(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
+  cumsum(x: MlxTensor, axis: number): MlxTensor;
   compile<A extends MlxTensor[], R>(fn: (...args: A) => R): (...args: A) => R;
   /** Synchronous `read`. */
   readSync(t: MlxTensor): HostTensor;
@@ -266,7 +290,12 @@ class MlxBackendImpl implements MlxBackend {
     return dtype in MLX_DTYPE;
   }
 
-  fromHost(t: HostTensor): MlxTensor {
+  async fromHost(t: HostTensor): Promise<MlxTensor> {
+    return this.upload(t);
+  }
+
+  /** The copy behind `fromHost` (synchronous: mlx_array_new_data copies immediately). */
+  private upload(t: HostTensor): MlxTensor {
     const shape = [...t.shape];
     let size = 1;
     for (const d of shape) size *= d;
@@ -559,6 +588,66 @@ class MlxBackendImpl implements MlxBackend {
     });
   }
 
+  // ---- general numerics ------------------------------------------------------
+
+  private bin(fn: (res: number, a: number, b: number, s: number) => number, a: MlxTensor, b: MlxTensor, op: string, dtype?: DType): MlxTensor {
+    return this.out(fn(this.base, this.h(a), this.h(b), this.stream), op, undefined, dtype);
+  }
+  private un(fn: (res: number, a: number, s: number) => number, x: MlxTensor, op: string, dtype?: DType): MlxTensor {
+    return this.out(fn(this.base, this.h(x), this.stream), op, undefined, dtype);
+  }
+  /** Float-valued unary op; integer/bool input is computed in f32 (MLX would keep some ints). */
+  private unF(fn: (res: number, a: number, s: number) => number, x: MlxTensor, op: string): MlxTensor {
+    if (isFloat(x.dtype)) return this.un(fn, x, op, x.dtype);
+    const f = this.take(this.n.mlx_astype(this.base, this.h(x), MLX_DTYPE.f32, this.stream), op);
+    try {
+      return this.out(fn(this.base, f, this.stream), op, undefined, "f32");
+    } finally {
+      this.n.mlx_array_free(f);
+    }
+  }
+  private axisOp(fn: (res: number, a: number, axis: number, keep: boolean, s: number) => number, x: MlxTensor, axis: number, keepDims: boolean, op: string): number {
+    return this.take(fn(this.base, this.h(x), axis, keepDims, this.stream), op);
+  }
+
+  equal(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_equal, a, b, "equal", "bool"); }
+  notEqual(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_not_equal, a, b, "notEqual", "bool"); }
+  less(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_less, a, b, "less", "bool"); }
+  lessEqual(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_less_equal, a, b, "lessEqual", "bool"); }
+  greater(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_greater, a, b, "greater", "bool"); }
+  greaterEqual(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_greater_equal, a, b, "greaterEqual", "bool"); }
+  logicalAnd(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_logical_and, a, b, "logicalAnd", "bool"); }
+  logicalOr(a: MlxTensor, b: MlxTensor): MlxTensor { return this.bin(this.n.mlx_logical_or, a, b, "logicalOr", "bool"); }
+  logicalNot(x: MlxTensor): MlxTensor { return this.un(this.n.mlx_logical_not, x, "logicalNot", "bool"); }
+  sqrt(x: MlxTensor): MlxTensor { return this.unF(this.n.mlx_sqrt, x, "sqrt"); }
+  rsqrt(x: MlxTensor): MlxTensor { return this.unF(this.n.mlx_rsqrt, x, "rsqrt"); }
+  tanh(x: MlxTensor): MlxTensor { return this.unF(this.n.mlx_tanh, x, "tanh"); }
+  sigmoid(x: MlxTensor): MlxTensor { return this.unF(this.n.mlx_sigmoid, x, "sigmoid"); }
+  erf(x: MlxTensor): MlxTensor { return this.unF(this.n.mlx_erf, x, "erf"); }
+  neg(x: MlxTensor): MlxTensor { return this.un(this.n.mlx_negative, x, "neg"); }
+  abs(x: MlxTensor): MlxTensor { return this.un(this.n.mlx_abs, x, "abs"); }
+  pow(a: MlxTensor, b: MlxTensor): MlxTensor {
+    if (isFloat(a.dtype) || isFloat(b.dtype)) return this.bin(this.n.mlx_power, a, b, "pow");
+    return this.scope(() => this.bin(this.n.mlx_power, this.cast(a, "f32"), b, "pow", "f32"));
+  }
+  argmax(x: MlxTensor, axis: number, keepDims = false): MlxTensor { return this.argIdx(this.n.mlx_argmax_axis, x, axis, keepDims, "argmax"); }
+  argmin(x: MlxTensor, axis: number, keepDims = false): MlxTensor { return this.argIdx(this.n.mlx_argmin_axis, x, axis, keepDims, "argmin"); }
+  /** MLX arg-reductions return uint32; the contract says i32. */
+  private argIdx(fn: (res: number, a: number, axis: number, keep: boolean, s: number) => number, x: MlxTensor, axis: number, keepDims: boolean, op: string): MlxTensor {
+    const u = this.axisOp(fn, x, axis, keepDims, op);
+    try {
+      return this.out(this.n.mlx_astype(this.base, u, MLX_DTYPE.i32, this.stream), op, undefined, "i32");
+    } finally {
+      this.n.mlx_array_free(u);
+    }
+  }
+  mean(x: MlxTensor, axis: number, keepDims = false): MlxTensor { return this.wrap(this.axisOp(this.n.mlx_mean_axis, x, axis, keepDims, "mean")); }
+  min(x: MlxTensor, axis: number, keepDims = false): MlxTensor { return this.wrap(this.axisOp(this.n.mlx_min_axis, x, axis, keepDims, "min")); }
+  cumsum(x: MlxTensor, axis: number): MlxTensor {
+    if (x.dtype === "bool") return this.scope(() => this.cumsum(this.cast(x, "i32"), axis));
+    return this.out(this.n.cumsum(this.base, this.h(x), axis, false, true, this.stream), "cumsum");
+  }
+
   // ---- compile ---------------------------------------------------------------
 
   compile<A extends MlxTensor[], R>(fn: (...args: A) => R): (...args: A) => R {
@@ -655,6 +744,10 @@ function handleBuffer(hs: number[]): Uint32Array {
     buf[2 * i + 1] = Math.floor(hs[i]! / TWO32);
   }
   return buf;
+}
+
+function isFloat(d: DType): boolean {
+  return d === "f32" || d === "f16" || d === "bf16";
 }
 
 function floatOr(d: DType): DType {

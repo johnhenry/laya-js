@@ -14,7 +14,7 @@ default, or on the CPU.
 import { createMlxBackend } from "@johnhenry/backend-mlx";
 
 const mlx = createMlxBackend(); // { device: "gpu" } by default
-const x = mlx.fromHost({ dtype: "f16", shape: [2, 3], data: new Float16Array([1, 2, 3, 4, 5, 6]) });
+const x = await mlx.fromHost({ dtype: "f16", shape: [2, 3], data: new Float16Array([1, 2, 3, 4, 5, 6]) });
 const y = mlx.scope(() => mlx.softmax(mlx.scale(x, 2), -1)); // lazy graph; intermediates freed
 console.log(await mlx.read(y)); // evaluates on the GPU, then copies to the host
 mlx.dispose(y);
@@ -62,7 +62,7 @@ bun add @johnhenry/backend-mlx
 `libCandidates()` lists every path that was tried, and `backend.info`
 reports which library loaded and which ABI it has. At load time the backend
 detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
-`force_fused`, compile-cache API).
+`force_fused`, compile-cache API, `cumsum` → `cumsum_axis` with an optional dtype).
 
 ## API
 
@@ -75,7 +75,14 @@ detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
   - `compiledGelu`. Default `true`. On the GPU, `gelu` is an
     `mlx_compile`d shapeless kernel, like `mlx.nn.gelu`.
 - The full `Backend` interface is implemented, including the optional
-  `flush`, `destroy`, `geglu`, `meanPool` and `compile`. Extras:
+  `flush`, `destroy`, `geglu`, `meanPool`, `compile` and every
+  general-numerics op, each one mlx-c call (`mlx_equal`, `mlx_less`, …,
+  `mlx_logical_and`, `mlx_sqrt`, `mlx_rsqrt`, `mlx_power`, `mlx_negative`,
+  `mlx_abs`, `mlx_tanh`, `mlx_sigmoid`, `mlx_erf`, `mlx_argmax_axis`,
+  `mlx_argmin_axis`, `mlx_mean_axis`, `mlx_min_axis`, `mlx_cumsum_axis`).
+  MLX's uint32 arg-reduction results are cast to i32, integer inputs of
+  float-valued ops (and of `pow`) are cast to f32 first, and `cumsum` of
+  bool runs on i32, as the contract specifies. Extras:
   `readSync(t)`, `memory()` (MLX active and peak bytes), `liveTensors()`
   and `info`.
 - `libCandidates()`, `resolveLib()`, `mlxPlatformSupported()` and
@@ -125,7 +132,9 @@ detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
   Shapes (2) and (3) cannot be broadcast.`, and the backend stays usable.
 - **Copies.**
   - `fromHost` makes exactly one copy, from the JS buffer into an MLX
-    unified-memory buffer (`mlx_array_new_data`). For fp16 safetensors,
+    unified-memory buffer (`mlx_array_new_data`), when it is called; the
+    returned Promise is already settled, so awaiting a batch of uploads costs
+    one microtask. For fp16 safetensors,
     that means one disk read into a `Buffer`, a zero-copy `Float16Array`
     view and one copy into MLX.
   - `read` makes one copy out (`memcpy` into the result array).
