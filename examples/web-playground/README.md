@@ -1,5 +1,7 @@
 # Laya Playground (WebGPU, browser)
 
+**Live:** <https://johnhenry.github.io/laya-js/playground/> (GitHub Pages, deployed from `main` by `.github/workflows/pages.yml`).
+
 A single-page app that runs Laya typed decisions in the browser with
 [`@johnhenry/laya`](../../packages/laya) on the WebGPU backend (f16 when the
 adapter has `shader-f16`).
@@ -56,6 +58,17 @@ the bundle references a Node-only or native module**, such as
 `scripts/serve.ts` is a dependency-free static server (Node or Bun). The
 snake-web example reuses both scripts.
 
+### GitHub Pages
+
+`node scripts/build-pages.mjs` (from the repo root) builds this app and
+snake-web and assembles `_site/` (`/` landing page, `/playground/`,
+`/snake/`). `.github/workflows/pages.yml` runs it on every push to `main`
+and deploys to <https://johnhenry.github.io/laya-js/>. Every asset URL is
+relative (`./main.js`, relative chunk imports), so the `/laya-js/` prefix
+needs no configuration; the script fails if an HTML or CSS file uses a
+root-absolute URL. Weights still come from huggingface.co, whose `resolve`
+URLs and CDN redirects send `access-control-allow-origin` for any origin.
+
 ## Verified (Apple M2, Chromium in the Claude browser pane and headless Chrome)
 
 - Multilingual download 647 MB in 34–38 s, and 1.1 s from the cache after a reload.
@@ -69,8 +82,9 @@ snake-web example reuses both scripts.
 
 ## Limits
 
-- The Cache API is per origin. The playground (port 5173) and snake-web
-  (port 5174) each keep their own copy of the weights.
+- The Cache API is per origin. Locally, the playground (port 5173) and
+  snake-web (port 5174) each keep their own copy of the weights; on GitHub
+  Pages both live on `johnhenry.github.io` and share one copy.
 - The first run after loading compiles the WebGPU pipelines.
 - A downloaded file is buffered into a Blob before it is cached (see
   hf-cache's limitations), so the browser briefly needs about the checkpoint

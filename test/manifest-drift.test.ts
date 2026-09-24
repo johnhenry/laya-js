@@ -87,6 +87,32 @@ test("every committed jsr.json matches what sync-jsr-configs.mjs generates", () 
   }
 });
 
+test("every package-internal `#` import in a JSR package maps to a published .ts source in jsr.json", () => {
+  // Regression: JSR publishes src/, but with no jsr.json mapping Deno fell back to
+  // package.json `imports` and resolved `#dawn` to dist/dawn-node.js (not published):
+  // `Module not found ".../dist/dawn-node.js"` in the release dry-run.
+  const srcFiles = (dir: string): string[] =>
+    readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
+      .filter((f) => f.endsWith(".ts"))
+      .map((f) => join(dir, f));
+  for (const dir of PACKAGE_DIRS as string[]) {
+    const jsr = jsrConfigFor(dir) as { imports?: Record<string, string>; publish: { include: string[] } };
+    const pkgImports = readJson<{ imports?: Record<string, unknown> }>(`${dir}/package.json`).imports ?? {};
+    const used = new Set<string>();
+    for (const f of srcFiles(`${dir}/src`)) {
+      for (const m of readFileSync(join(ROOT, f), "utf8").matchAll(/(?:from\s+|import\s*\(\s*)["'](#[^"']+)["']/g)) used.add(m[1]!);
+    }
+    for (const spec of used) {
+      assert.ok(spec in pkgImports, `${dir}: ${spec} is imported by src/ but missing from package.json "imports"`);
+      const target = jsr.imports?.[spec];
+      assert.ok(target, `${dir}: ${spec} has no jsr.json import mapping -- JSR would resolve it through package.json to dist/`);
+      assert.match(target!, /^\.\/src\/.+\.ts$/, `${dir}: jsr.json maps ${spec} to ${target}, not a published src/*.ts file`);
+      assert.ok(existsSync(join(ROOT, dir, target!)), `${dir}: jsr.json maps ${spec} to missing file ${target}`);
+      assert.ok(jsr.publish.include.includes("src"), `${dir}: src/ is not in jsr.json publish.include`);
+    }
+  }
+});
+
 test("every package has README.md and CHANGELOG.md; published ones ship LICENSE (and NOTICE when listed)", () => {
   const rootLicense = readFileSync(join(ROOT, "LICENSE"), "utf8");
   const apacheLicense = readFileSync(join(ROOT, "LICENSE-APACHE-2.0"), "utf8");

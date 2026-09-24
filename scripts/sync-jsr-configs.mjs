@@ -83,9 +83,28 @@ function buildExports(pkg) {
   return out;
 }
 
+/**
+ * Package-internal `#` imports (package.json `imports`, e.g. backend-webgpu's
+ * `#dawn`) map to their top-level `source` target. Without this, Deno/JSR
+ * falls back to package.json and resolves the `default` condition — a
+ * `dist/` file JSR does not publish (the release dry-run failed with
+ * `Module not found ".../dist/dawn-node.js"`). The top-level `source` is
+ * the Node/Bun/Deno implementation; a nested `browser.source` stays an npm
+ * bundler concern (JSR import maps cannot be conditional).
+ */
+export function internalImports(pkg) {
+  const out = {};
+  for (const [key, entry] of Object.entries(pkg.imports ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    const target = typeof entry === "string" ? entry : typeof entry?.source === "string" ? entry.source : sourceTarget(entry);
+    if (!target || !target.endsWith(".ts")) throw new Error(`${pkg.name}: import ${key} has no TypeScript source target`);
+    out[key] = target;
+  }
+  return out;
+}
+
 function buildImports(pkg, onJsr) {
   const deps = { ...pkg.dependencies, ...pkg.optionalDependencies, ...pkg.peerDependencies };
-  const imports = {};
+  const imports = internalImports(pkg);
   for (const [name, range] of Object.entries(deps).sort(([a], [b]) => a.localeCompare(b))) {
     const jsr = onJsr.has(name) || EXTERNAL_JSR_PREFIXES.some((p) => name.startsWith(p));
     imports[name] = jsr ? `jsr:${name}@${range}` : `npm:${name}@${range}`;

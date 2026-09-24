@@ -5,3 +5,4 @@ dist/
 # large, regenerable fixtures (tiny ones are committed)
 packages/laya-fixtures/data/large/
 .todos/
+_site/

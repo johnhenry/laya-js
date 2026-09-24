@@ -1,0 +1,61 @@
+name: Pages
+
+# Builds the two browser examples (web-playground, snake-web) into one static
+# site and deploys it to https://johnhenry.github.io/laya-js/:
+#   /           landing page (scripts/pages/index.html)
+#   /playground/  examples/web-playground
+#   /snake/       examples/snake-web
+# The apps use relative asset URLs, so the /laya-js/ project-site prefix
+# needs no base-path configuration. Weights are fetched from huggingface.co
+# at runtime (CORS allows any origin), so nothing large is deployed.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; don't cancel an in-progress production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - run: npm ci
+
+      - name: Build the examples and assemble the site
+        run: node scripts/build-pages.mjs --out _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
