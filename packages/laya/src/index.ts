@@ -13,7 +13,17 @@ export {
   type ShortlistMeta,
   type ShortlistOptions,
 } from "./shortlist.ts";
-export { readWeights, consumingWeights, dequantizingWeights, readAllTensors, sanitizeName, type ConsumingWeights, type ReadWeightsOptions } from "./weights.ts";
+export {
+  readWeights,
+  consumingWeights,
+  dequantizingWeights,
+  hostQuantized,
+  readAllTensors,
+  sanitizeName,
+  type ConsumingWeights,
+  type QuantizedLoad,
+  type ReadWeightsOptions,
+} from "./weights.ts";
 export {
   quantizeMatrix,
   dequantizeMatrix,

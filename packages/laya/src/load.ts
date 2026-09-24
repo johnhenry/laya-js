@@ -6,6 +6,7 @@
  * koffi or libmlxc.
  */
 import type { Backend } from "@johnhenry/tensor-backend";
+import { hasNativeQuantized } from "@johnhenry/tensor-backend";
 import { readCheckpoint, createBackend } from "#io";
 import { parseModernBertConfig } from "@johnhenry/modernbert";
 import { createAgent, validateConfig, type AgentOptions, type Dtype, type LayaAgent } from "./agent.ts";
@@ -28,6 +29,13 @@ export interface LoadOptions extends AgentOptions {
   fetch?: typeof fetch;
   /** Where the temperature-clamping warning goes (default console.warn). */
   warn?: (message: string) => void;
+  /**
+   * Quantized checkpoints only. "device" (default): keep the int8/int4
+   * weights quantized on the backend (less device memory) when it has native
+   * quantized kernels (MLX, WebGPU); otherwise, as with "dequantize", rebuild
+   * float weights on the host while loading (the CPU backend always does).
+   */
+  quantized?: "device" | "dequantize";
 }
 
 /**
@@ -37,6 +45,7 @@ export interface LoadOptions extends AgentOptions {
 export async function load(modelIdOrPath: string, opts: LoadOptions = {}): Promise<LayaAgent> {
   if (opts.dtype !== undefined && opts.dtype !== "f16" && opts.dtype !== "f32") throw new Error(`dtype must be one of ["f16", "f32"]`);
   if (opts.device !== undefined && !["gpu", "metal", "cpu"].includes(opts.device)) throw new Error("MLX device must be 'gpu', 'metal', or 'cpu'");
+  if (opts.quantized !== undefined && opts.quantized !== "device" && opts.quantized !== "dequantize") throw new Error(`quantized must be "device" or "dequantize"`);
   const batchSize = opts.batchSize ?? 16;
   if (typeof batchSize !== "number" || !Number.isInteger(batchSize) || batchSize < 1) throw new Error("batch_size must be a positive integer");
   const pad = opts.padToMultiple ?? null;
@@ -52,7 +61,8 @@ export async function load(modelIdOrPath: string, opts: LoadOptions = {}): Promi
   try {
     // quantized checkpoints dequantize straight to the dtype the agent will compute in (createAgent's rule)
     const computeDtype = (opts.dtype ?? "f16") === "f16" && backend.name !== "cpu" && backend.supports("f16") ? "f16" : "f32";
-    const weights = await ckpt.weights({ dtype: computeDtype });
+    const quantized = (opts.quantized ?? "device") === "device" && hasNativeQuantized(backend) ? "device" : "dequantize";
+    const weights = await ckpt.weights({ dtype: computeDtype, quantized });
     agent = await createAgent({
       backend,
       encoderConfig: ckpt.encoderConfig,

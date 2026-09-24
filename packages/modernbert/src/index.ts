@@ -7,8 +7,8 @@
  * which follows Hugging Face ModernBERT. Uses only Backend ops, so every
  * backend gets the encoder for free; masks are built on the host.
  */
-import type { Backend, DType, HostTensor, Tensor } from "@johnhenry/tensor-backend";
-import { geglu, meanPool, toF32 } from "@johnhenry/tensor-backend";
+import type { Backend, DType, HostQuantized, HostTensor, QuantizedTensor, Tensor } from "@johnhenry/tensor-backend";
+import { disposeQuantized, embeddingAny, geglu, isQuantized, linearAny, meanPool, toF32, uploadQuantized } from "@johnhenry/tensor-backend";
 
 // ------------------------------------------------------------------ config
 export type AttentionKind = "full_attention" | "sliding_attention";
@@ -110,9 +110,29 @@ export function parseModernBertConfig(json: Json): ModernBertConfig {
 }
 
 // ------------------------------------------------------------------ weights
+/**
+ * A checkpoint weight on the host: a plain tensor, or (for Linear weights and
+ * the token embedding) a quantized matrix that stays quantized on the device
+ * (`uploadQuantized`: packed when the backend has native quantized ops).
+ */
+export type HostWeight = HostTensor | HostQuantized;
+/** A weight on the device: a tensor, or a `QuantizedTensor` for a quantized matrix. */
+export type DeviceWeight<T extends Tensor> = T | QuantizedTensor<T>;
 /** Looks up a checkpoint tensor by name; `undefined` when absent. */
-export type WeightGetter = (name: string) => HostTensor | undefined;
-export type WeightSource = WeightGetter | { get(name: string): HostTensor | undefined };
+export type WeightGetter = (name: string) => HostWeight | undefined;
+export type WeightSource = WeightGetter | { get(name: string): HostWeight | undefined };
+
+/** Whether a host weight is a quantized matrix (`HostQuantized`). */
+export function isHostQuantized(h: HostWeight): h is HostQuantized {
+  return "bits" in h && "scales" in h;
+}
+
+/** Frees a device weight (tensor or quantized matrix). */
+export function disposeWeight<T extends Tensor>(backend: Backend<T>, w: DeviceWeight<T> | null | undefined): void {
+  if (!w) return;
+  if (isQuantized(w)) disposeQuantized(backend, w);
+  else backend.dispose(w);
+}
 
 /** Structural subset of @johnhenry/math-plus-safetensors' SafetensorsFile. */
 export interface SafetensorsLike {
@@ -147,8 +167,16 @@ const FLOATS = new Set<DType>(["f32", "f16", "bf16"]);
 /**
  * Uploads a host tensor as `dtype` on `backend`. Float data is converted
  * as needed (via host f32 when the backend cannot store the source dtype).
+ * A quantized matrix goes through `uploadQuantized` (values dequantize to `dtype`).
  */
-export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostTensor, dtype: DType): Promise<T> {
+export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostQuantized, dtype: DType): Promise<QuantizedTensor<T>>;
+export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostTensor, dtype: DType): Promise<T>;
+export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostWeight, dtype: DType): Promise<DeviceWeight<T>>;
+export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostWeight, dtype: DType): Promise<DeviceWeight<T>> {
+  if (isHostQuantized(h)) {
+    if (!backend.supports(dtype)) throw new Error(`${backend.name} backend does not support ${dtype}`);
+    return uploadQuantized(backend, h, dtype);
+  }
   if (!FLOATS.has(h.dtype)) return backend.fromHost(h);
   if (!backend.supports(dtype)) throw new Error(`${backend.name} backend does not support ${dtype}`);
   const src = h.dtype === dtype || backend.supports(h.dtype) ? h : { dtype: "f32" as const, shape: h.shape, data: toF32(h) };
@@ -163,29 +191,30 @@ export async function uploadAs<T extends Tensor>(backend: Backend<T>, h: HostTen
  * Awaits a batch of uploads started together. If any fails, the ones that
  * succeeded are disposed and the first error is rethrown.
  */
-export async function settleUploads<T extends Tensor, K>(backend: Backend<T>, jobs: Map<K, Promise<T>>): Promise<Map<K, T>> {
+export async function settleUploads<T extends Tensor, K, U extends DeviceWeight<T> = T>(backend: Backend<T>, jobs: Map<K, Promise<U>>): Promise<Map<K, U>> {
   const keys = [...jobs.keys()];
   const results = await Promise.allSettled(jobs.values());
   const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
   if (failed) {
-    for (const r of results) if (r.status === "fulfilled") backend.dispose(r.value);
+    for (const r of results) if (r.status === "fulfilled") disposeWeight(backend, r.value);
     throw failed.reason;
   }
-  return new Map(keys.map((k, i) => [k, (results[i] as PromiseFulfilledResult<T>).value]));
+  return new Map(keys.map((k, i) => [k, (results[i] as PromiseFulfilledResult<U>).value]));
 }
 
 /**
  * Two-pass weight loading shared by `loadModernBert` and laya's
  * `loadDecisionModel`: `build` runs once with an uploader that validates and
  * starts every upload (so they are all in flight together), then again with
- * the settled tensors. `build` must be a pure function of `need`.
+ * the settled tensors. `build` must be a pure function of `need`. A
+ * quantized host weight yields a `QuantizedTensor`.
  */
 export async function loadInBatch<T extends Tensor, R>(
   backend: Backend<T>,
-  build: (need: (name: string, h: HostTensor) => T) => R,
+  build: (need: (name: string, h: HostWeight) => DeviceWeight<T>) => R,
   dtype: DType,
 ): Promise<R> {
-  const jobs = new Map<string, Promise<T>>();
+  const jobs = new Map<string, Promise<DeviceWeight<T>>>();
   try {
     build((name, h) => {
       if (!jobs.has(name)) jobs.set(name, uploadAs(backend, h, dtype));
@@ -193,7 +222,7 @@ export async function loadInBatch<T extends Tensor, R>(
     });
   } catch (e) {
     // a validation error after some uploads started: free what did upload
-    await settleUploads(backend, jobs).then((m) => m.forEach((t) => backend.dispose(t)), () => {});
+    await settleUploads(backend, jobs).then((m) => m.forEach((t) => disposeWeight(backend, t)), () => {});
     throw e;
   }
   const tensors = await settleUploads(backend, jobs);
@@ -235,23 +264,26 @@ export interface NormWeights<T> {
   readonly bias: T | null;
 }
 
+/** A Linear weight (or embedding table): a tensor, or a quantized matrix. */
+export type MatrixWeight<T> = T | QuantizedTensor<T & Tensor>;
+
 export interface EncoderLayerWeights<T> {
   readonly kind: AttentionKind;
   /** null for layer 0 (Identity). */
   readonly attnNorm: NormWeights<T> | null;
-  readonly Wqkv: T;
+  readonly Wqkv: MatrixWeight<T>;
   readonly WqkvBias: T | null;
-  readonly Wo: T;
+  readonly Wo: MatrixWeight<T>;
   readonly WoBias: T | null;
   readonly mlpNorm: NormWeights<T>;
-  readonly Wi: T;
+  readonly Wi: MatrixWeight<T>;
   readonly WiBias: T | null;
-  readonly WoMlp: T;
+  readonly WoMlp: MatrixWeight<T>;
   readonly WoMlpBias: T | null;
 }
 
 export interface ModernBertWeights<T> {
-  readonly tokEmbeddings: T;
+  readonly tokEmbeddings: MatrixWeight<T>;
   readonly embNorm: NormWeights<T>;
   readonly layers: readonly EncoderLayerWeights<T>[];
   readonly finalNorm: NormWeights<T>;
@@ -303,7 +335,7 @@ export class ModernBert<T extends Tensor = Tensor> {
   /** Token embeddings + LayerNorm: ids i32 [B, L] → [B, L, H]. */
   embeddings(ids: T): T {
     const b = this.backend, w = this.weights;
-    return b.scope(() => b.layerNorm(b.embedding(w.tokEmbeddings, ids), w.embNorm.weight, w.embNorm.bias, this.config.normEps));
+    return b.scope(() => b.layerNorm(embeddingAny(b, w.tokEmbeddings, ids), w.embNorm.weight, w.embNorm.bias, this.config.normEps));
   }
 
   /** One pre-norm encoder layer; `mask` is the upload of the matching kind from `attentionMasks`. */
@@ -313,14 +345,14 @@ export class ModernBert<T extends Tensor = Tensor> {
       const [B, L, H] = x.shape as [number, number, number];
       const nh = c.numAttentionHeads, hd = c.headDim;
       const h = w.attnNorm ? b.layerNorm(x, w.attnNorm.weight, w.attnNorm.bias, c.normEps) : x;
-      const qkv = b.transpose(b.reshape(b.linear(h, w.Wqkv, w.WqkvBias), [B, L, 3, nh, hd]), [2, 0, 3, 1, 4]);
+      const qkv = b.transpose(b.reshape(linearAny(b, h, w.Wqkv, w.WqkvBias), [B, L, 3, nh, hd]), [2, 0, 3, 1, 4]);
       const [q, k, v] = b.split(qkv, 3, 0).map((t) => b.reshape(t, [B, nh, L, hd])) as [T, T, T];
       const base = c.ropeBase[w.kind];
       const att = b.sdpa(b.rope(q, base), b.rope(k, base), v, mask, hd ** -0.5);
       const merged = b.reshape(b.transpose(att, [0, 2, 1, 3]), [B, L, H]);
-      const x1 = b.add(x, b.linear(merged, w.Wo, w.WoBias));
-      const m = b.linear(b.layerNorm(x1, w.mlpNorm.weight, w.mlpNorm.bias, c.normEps), w.Wi, w.WiBias);
-      return b.add(x1, b.linear(geglu(b, m), w.WoMlp, w.WoMlpBias));
+      const x1 = b.add(x, linearAny(b, merged, w.Wo, w.WoBias));
+      const m = linearAny(b, b.layerNorm(x1, w.mlpNorm.weight, w.mlpNorm.bias, c.normEps), w.Wi, w.WiBias);
+      return b.add(x1, linearAny(b, geglu(b, m), w.WoMlp, w.WoMlpBias));
     });
   }
 
@@ -423,9 +455,7 @@ export class ModernBert<T extends Tensor = Tensor> {
   /** Frees all weight tensors. */
   dispose(): void {
     const b = this.backend, w = this.weights;
-    const free = (t: T | null | undefined) => {
-      if (t) b.dispose(t);
-    };
+    const free = (t: MatrixWeight<T> | null | undefined) => disposeWeight(b, t);
     const norm = (n: NormWeights<T> | null) => {
       if (n) {
         free(n.weight);
@@ -443,6 +473,12 @@ export class ModernBert<T extends Tensor = Tensor> {
   }
 }
 
+/** Whether any encoder weight is held quantized on the device. */
+export function hasQuantizedWeights<T extends Tensor>(m: ModernBert<T>): boolean {
+  const w = m.weights;
+  return isQuantized(w.tokEmbeddings) || w.layers.some((l) => [l.Wqkv, l.Wo, l.Wi, l.WoMlp].some((t) => isQuantized(t)));
+}
+
 /** Detects the encoder parameter prefix ("encoder.", "model." or ""). */
 export function detectPrefix(get: WeightGetter): string {
   for (const p of ["encoder.", "model.", ""]) if (get(`${p}embeddings.tok_embeddings.weight`)) return p;
@@ -455,6 +491,9 @@ export function detectPrefix(get: WeightGetter): string {
  * Layer 0 has no attn_norm. Biases are loaded only when the config enables them.
  * Every tensor's upload starts before any is awaited (one batch); names and
  * shapes are validated first, so a bad checkpoint rejects without leaking.
+ * The Linear weights and the token embedding may be quantized (`HostQuantized`):
+ * they stay quantized on the device (see `uploadQuantized`); anything else
+ * must be a plain tensor.
  */
 export async function loadModernBert<T extends Tensor>(
   backend: Backend<T>,
@@ -467,9 +506,9 @@ export async function loadModernBert<T extends Tensor>(
   const get = toWeightGetter(weights);
   const prefix = opts.prefix ?? detectPrefix(get);
   // `get` may consume (laya's consumingWeights): look each name up once.
-  const hosts = new Map<string, HostTensor>();
+  const hosts = new Map<string, HostWeight>();
   const w = await loadInBatch(backend, (upload) => {
-    const need = (name: string, shape?: readonly number[]): T => {
+    const need = (name: string, shape: readonly number[], matrix = false): DeviceWeight<T> => {
       const key = prefix + name;
       let h = hosts.get(key);
       if (!h) {
@@ -477,23 +516,26 @@ export async function loadModernBert<T extends Tensor>(
         if (!h) throw new Error(`modernbert: missing weight ${key}`);
         hosts.set(key, h);
       }
-      if (shape && (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i]))) {
+      if (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i])) {
         throw new Error(`modernbert: ${key} has shape [${h.shape}], want [${shape}]`);
       }
+      if (!matrix && isHostQuantized(h)) throw new Error(`modernbert: ${key} cannot be quantized (only Linear weights and the token embedding)`);
       return upload(key, h);
     };
-    return buildEncoderWeights(config, need);
+    return buildEncoderWeights<T>(config, need);
   }, dtype);
   hosts.clear();
   return new ModernBert(backend, config, w, dtype);
 }
 
-/** The encoder weight tree; `need(name, shape)` supplies each tensor. */
-function buildEncoderWeights<T>(config: ModernBertConfig, need: (name: string, shape: readonly number[]) => T): ModernBertWeights<T> {
+/** The encoder weight tree; `need(name, shape, matrix)` supplies each tensor (quantized only when `matrix`). */
+function buildEncoderWeights<T extends Tensor>(config: ModernBertConfig, needAny: (name: string, shape: readonly number[], matrix?: boolean) => DeviceWeight<T>): ModernBertWeights<T> {
+  const need = (name: string, shape: readonly number[]) => needAny(name, shape) as T;
+  const mat = (name: string, shape: readonly number[]) => needAny(name, shape, true);
   const maybe = (on: boolean, name: string, shape: readonly number[]): T | null => (on ? need(name, shape) : null);
   const H = config.hiddenSize, I = config.intermediateSize;
   const normW = (p: string): NormWeights<T> => ({ weight: need(`${p}.weight`, [H]), bias: maybe(config.normBias, `${p}.bias`, [H]) });
-  const tokEmbeddings = need("embeddings.tok_embeddings.weight", [config.vocabSize, H]);
+  const tokEmbeddings = mat("embeddings.tok_embeddings.weight", [config.vocabSize, H]);
   const embNorm = normW("embeddings.norm");
   const layers: EncoderLayerWeights<T>[] = [];
   for (let i = 0; i < config.numHiddenLayers; i++) {
@@ -501,14 +543,14 @@ function buildEncoderWeights<T>(config: ModernBertConfig, need: (name: string, s
     layers.push({
       kind: config.layerTypes[i]!,
       attnNorm: i === 0 ? null : normW(`${p}.attn_norm`),
-      Wqkv: need(`${p}.attn.Wqkv.weight`, [3 * H, H]),
+      Wqkv: mat(`${p}.attn.Wqkv.weight`, [3 * H, H]),
       WqkvBias: maybe(config.attentionBias, `${p}.attn.Wqkv.bias`, [3 * H]),
-      Wo: need(`${p}.attn.Wo.weight`, [H, H]),
+      Wo: mat(`${p}.attn.Wo.weight`, [H, H]),
       WoBias: maybe(config.attentionBias, `${p}.attn.Wo.bias`, [H]),
       mlpNorm: normW(`${p}.mlp_norm`),
-      Wi: need(`${p}.mlp.Wi.weight`, [2 * I, H]),
+      Wi: mat(`${p}.mlp.Wi.weight`, [2 * I, H]),
       WiBias: maybe(config.mlpBias, `${p}.mlp.Wi.bias`, [2 * I]),
-      WoMlp: need(`${p}.mlp.Wo.weight`, [H, I]),
+      WoMlp: mat(`${p}.mlp.Wo.weight`, [H, I]),
       WoMlpBias: maybe(config.mlpBias, `${p}.mlp.Wo.bias`, [H]),
     });
   }

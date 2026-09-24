@@ -12,6 +12,8 @@
  *   <dir>/<model>-q8 (written by `laya quantize`) instead of the Hub repo and
  *   compares with the same float references: q8 must keep every choice and
  *   argmax with max |Δp| ≤ 0.05; q4 is reported only (it may flip close calls).
+ *   LAYA_REAL_QUANT_MODE=device (default; weights stay quantized on MLX/WebGPU)
+ *   or dequantize (float weights rebuilt on the host) picks `load`'s `quantized`.
  * Take ~/gpu.lock around this run (AGENTS.md rule 6).
  */
 // @ts-ignore -- bun types are not installed
@@ -31,6 +33,8 @@ const configs = (env.LAYA_REAL_BACKENDS ?? CONFIGS.join(",")).split(",");
 const HOURS = 3600_000;
 const quants = env.LAYA_REAL_QUANT ? env.LAYA_REAL_QUANT.split(",") : [""];
 const quantDir = env.LAYA_REAL_QUANT_DIR ?? "";
+const quantMode = (env.LAYA_REAL_QUANT_MODE ?? "device") as "device" | "dequantize";
+if (quantMode !== "device" && quantMode !== "dequantize") throw new Error("LAYA_REAL_QUANT_MODE must be device or dequantize");
 if (enabled && env.LAYA_REAL_QUANT && !quantDir) throw new Error("LAYA_REAL_QUANT needs LAYA_REAL_QUANT_DIR (the parent of <model>-q8 / <model>-q4)");
 
 interface Cmp {
@@ -42,6 +46,8 @@ interface Cmp {
   argmaxAgree: number;
   maxAbs: number;
   worst: string;
+  /** "<case> <qid> want→got" for every argmax disagreement */
+  flips: string[];
 }
 
 function argmaxOf(a: any): string {
@@ -59,6 +65,7 @@ function compare(got: PredictResult, want: PredictResult, into: Cmp, where: stri
     into.questions++;
     if (JSON.stringify(g) === JSON.stringify(w)) into.exact++;
     if (argmaxOf(g) === argmaxOf(w)) into.argmaxAgree++;
+    else into.flips.push(`${where} ${qid} ${argmaxOf(w)}→${argmaxOf(g)}`);
     if (w.choice !== undefined) {
       into.choiceTotal++;
       if (g.choice === w.choice) into.choiceAgree++;
@@ -97,16 +104,17 @@ for (const m of models) {
   for (const quant of quants) for (const cfg of configs) {
     const [backend, dtype] = cfg.split("-") as ["mlx" | "webgpu", "f32" | "f16"];
     const tol = dtype === "f32" ? 1e-4 : 0.02;
-    const label = quant ? `${m} ${quant}` : m;
+    const label = quant ? `${m} ${quant} (${quantMode})` : m;
     const ref = `Python result_${dtype === "f32" ? "fp32" : "fp16"}`;
     const bar = quant === "q4" ? "reported only" : quant === "q8" ? "≤ 0.05, identical choices and argmax" : `≤ ${tol}, identical choices`;
     const name = `real ${label} on ${backend} ${dtype}: 63 questions vs ${ref} (${bar})`;
     test(name, async () => {
       const fx = fixtures.get(m)!;
       const t0 = performance.now();
-      const agent = await load(quant ? `${quantDir}/${m}-${quant}` : REPOS[m], { offline: true, backend, dtype, warn: () => {} });
+      const agent = await load(quant ? `${quantDir}/${m}-${quant}` : REPOS[m], { offline: true, backend, dtype, warn: () => {}, ...(quant ? { quantized: quantMode } : {}) });
       const loadMs = performance.now() - t0;
-      const cmp: Cmp = { questions: 0, choiceAgree: 0, choiceTotal: 0, exact: 0, argmaxAgree: 0, maxAbs: 0, worst: "" };
+      if (quant) assert.equal(agent.model.quantizedOnDevice, quantMode === "device", `weights quantized on the device: ${agent.model.quantizedOnDevice}`);
+      const cmp: Cmp = { questions: 0, choiceAgree: 0, choiceTotal: 0, exact: 0, argmaxAgree: 0, maxAbs: 0, worst: "", flips: [] };
       const t1 = performance.now();
       try {
         for (const c of fx.cases) {
@@ -133,7 +141,7 @@ for (const m of models) {
           `| ${label} | ${backend} ${dtype} | ${cmp.choiceAgree}/${cmp.choiceTotal} | ${cmp.argmaxAgree}/${cmp.questions} | ${cmp.exact}/${cmp.questions} | ` +
           `${cmp.maxAbs.toExponential(2)} | ${Number.isNaN(embRel) ? "—" : embRel.toExponential(2)} | ${(loadMs / 1000).toFixed(1)} s | ${(runMs / 1000).toFixed(1)} s |`;
         matrix.push(line);
-        console.log(line + (cmp.worst ? `\n    worst: ${cmp.worst}` : ""));
+        console.log(line + (cmp.worst ? `\n    worst: ${cmp.worst}` : "") + (cmp.flips.length ? `\n    argmax flips: ${cmp.flips.join("; ")}` : ""));
         assert.equal(cmp.questions, 63);
         if (quant === "q4") return; // reported, not asserted
         if (quant === "q8") {
@@ -157,7 +165,7 @@ test("real english on cpu f32: one small case vs Python result_fp32 (LAYA_REAL_C
   const fx = fixtures.get("english") ?? (await loadReal("english"));
   const c = [...fx.cases].sort((a, b) => a.items.reduce((n, i) => n + i.ids.length, 0) - b.items.reduce((n, i) => n + i.ids.length, 0))[0]!;
   const agent = await load(REPOS.english, { offline: true, backend: "cpu", warn: () => {} });
-  const cmp: Cmp = { questions: 0, choiceAgree: 0, choiceTotal: 0, exact: 0, argmaxAgree: 0, maxAbs: 0, worst: "" };
+  const cmp: Cmp = { questions: 0, choiceAgree: 0, choiceTotal: 0, exact: 0, argmaxAgree: 0, maxAbs: 0, worst: "", flips: [] };
   const t0 = performance.now();
   try {
     compare(await agent.predict(c.state as any, c.questions as any), c.result_fp32, cmp, c.case);

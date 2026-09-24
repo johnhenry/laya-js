@@ -100,6 +100,11 @@ const SYMBOLS = {
   mlx_min_axis: { args: ["h", "h", "i32", "bool", "h"], ret: "i32" },
   mlx_fast_layer_norm: { args: ["h", "h", "h", "h", "f32", "h"], ret: "i32" },
   mlx_fast_rope: { args: ["h", "h", "i32", "bool", "optf", "f32", "i32", "h", "h"], ret: "i32" },
+  // quantized: (res, x, w, scales, biases, transpose, optional_int group_size, optional_int bits, mode, stream) — same in both ABIs
+  mlx_quantized_matmul: { args: ["h", "h", "h", "h", "h", "bool", "optf", "optf", "buf", "h"], ret: "i32" },
+  // (res, w, scales, biases, optional_int group_size, optional_int bits, mode, global_scale, optional_dtype, stream).
+  // `global_scale` arrived with MLX 0.31 bindings (mlx-c 1370f59): both supported bundles have it.
+  mlx_dequantize: { args: ["h", "h", "h", "h", "optf", "optf", "buf", "h", "optf", "h"], ret: "i32" },
   // compile
   mlx_closure_new_func_payload: { args: ["h", "usize", "h"], ret: "h" },
   mlx_closure_free: { args: ["h"], ret: "i32" },

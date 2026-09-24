@@ -21,6 +21,15 @@ test("the numerics fixtures cover every optional numerics op, in their own file"
   const ops = new Set(numerics.map((c) => c.op));
   for (const op of NUMERICS_OPS) assert.ok(ops.has(op), `no case for ${op}`);
   assert.deepEqual([...NATIVE_ONLY_OPS], ["cumsum"]);
+  const quantized = await loadOpCases(OP_CASE_FILES[2]!);
   const all = await loadOpCases();
-  assert.equal(all.length, (await loadOpCases(OP_CASE_FILES[0]!)).length + numerics.length, "loadOpCases() loads both files");
+  assert.equal(all.length, (await loadOpCases(OP_CASE_FILES[0]!)).length + numerics.length + quantized.length, "loadOpCases() loads every file");
+});
+
+test("the quantized fixtures cover q8/q4 × symmetric/affine, linear and embedding, and partial groups", async () => {
+  const cases = await loadOpCases(OP_CASE_FILES[2]!);
+  const combos = new Set(cases.map((c) => `${c.op}:${(c.args as any).bits}:${(c.args as any).mode}`));
+  for (const op of ["quantizedLinear", "quantizedEmbedding"])
+    for (const bits of [8, 4]) for (const mode of ["symmetric", "affine"]) assert.ok(combos.has(`${op}:${bits}:${mode}`), `${op} q${bits} ${mode}`);
+  assert.ok(cases.some((c) => /partial last group/.test(c.name)));
 });

@@ -60,12 +60,16 @@ runConformance(() => createMyBackend(), loadOpCases(), { describe, it: it as unk
   `where`, `scale`, `exp`, `log`, `relu`, `gelu`. Reductions: `sum`, `max`,
   `softmax`, `sort`. Linear algebra and fused kernels: `matmul`, `linear`,
   `layerNorm`, `embedding`, `gatherRows`, `rope`, `sdpa`. Optional:
-  `geglu`, `meanPool`, `compile`, and the general-numerics ops below.
+  `geglu`, `meanPool`, `compile`, the general-numerics ops and the
+  quantized-weight ops below.
 - **Types** — `DType` (`"f32" | "f16" | "bf16" | "i32" | "bool"`), `Shape`,
-  `HostData`, `HostTensor`, `Tensor`.
+  `HostData`, `HostTensor`, `Tensor`; for quantized weights `QuantBits`,
+  `QuantMode`, `QuantizedLinearOptions`, `HostQuantized`, `QuantizedTensor`.
 - **Host helpers** — `host(dtype, shape, data?)`, `allocHost`, `sizeOf`,
   `toF32`, `f32ToBf16Bits` / `bf16BitsToF32`, `toMathPlusArgs` (a
-  `HostTensor` in the argument shape of math-plus `Tensor.fromTypedArray`).
+  `HostTensor` in the argument shape of math-plus `Tensor.fromTypedArray`);
+  `packQuantized` / `unpackQuantized` / `validateQuantized` / `quantGroups`
+  for `HostQuantized`.
 - **Optional-op helpers** (`compose.ts`) — `geglu(b, x)`, `meanPool(b, x, mask)`
   and one helper per general-numerics op. Each calls the native op when the
   backend has it and a default composition from required ops otherwise.
@@ -92,15 +96,42 @@ runConformance(() => createMyBackend(), loadOpCases(), { describe, it: it as unk
 
   Integer inputs of float-valued ops compute in f32. NaN handling is
   backend-defined (WebGPU may assume no NaNs).
+- **Quantized weights** (optional, since 0.3). A matrix W [out, in] stored as
+  8- or 4-bit integers with float scales (and, affine, biases) per group of
+  `groupSize` values along the input dim (the last group may be partial):
+  `"symmetric"` w = q·scale (q signed), `"affine"` w = q·scale + bias
+  (q unsigned). `HostQuantized.data` is the laya-js checkpoint layout: one
+  byte per 8-bit value, or two 4-bit values per byte with the even column in
+  the low nibble, which read as little-endian u32 words is MLX's packing
+  (`in · bits` must be a multiple of 32).
+
+  | Helper (`compose.ts`) | Native op (a backend has all three or none) | Default composition |
+  | --- | --- | --- |
+  | `uploadQuantized(b, h, dtype)` → `QuantizedTensor` | `fromHostQuantized(h, dtype)` (may resolve to null: "not this configuration") | q values uploaded as `dtype` floats [out, in], scales/biases as `dtype` |
+  | `quantizedLinear(b, x, q, bias?)` = x · dequant(W)ᵀ (+ bias), f32 accumulation, x's dtype | `quantizedLinear(x, w, scales, biases, { bits, groupSize, mode }, bias?)` | dequantize on the device (f32, rounded once), then `linear` |
+  | `quantizedEmbedding(b, q, ids)` = rows of dequant(W) in `q.dtype` | `quantizedEmbedding(w, scales, biases, opts, ids)` | gather rows of q / scales / biases, dequantize them |
+
+  `QuantizedTensor.native` says which layout the tensors are in (the native
+  ops only accept what their own `fromHostQuantized` returned). Also
+  `disposeQuantized`, `dequantize` (composed layout), `isQuantized`,
+  `hasNativeQuantized(b)`, `linearAny` / `embeddingAny` (plain or quantized
+  weight) and `QUANTIZED_OPS`. The composition is correct on every backend
+  but saves no memory; a loader that only wants float weights on such a
+  backend should dequantize on the host instead (as `@johnhenry/laya` does).
 - **`@johnhenry/tensor-backend/conformance`** — `loadOpCases(url?)`,
   `runConformance(make, cases, { describe, it })`, `withoutOptionalOps(b, ops?)`
   (hides optional ops so the suite checks the default compositions),
   `callOp`, `decodeTensor`, `assertClose`, `OP_CASE_FILES`,
-  `REDUCED_TOLERANCE`. `loadOpCases()` loads both bundled files:
+  `REDUCED_TOLERANCE`, `caseQuantized`. `loadOpCases()` loads the three bundled files:
   `fixtures/ops.json` (49 cases over 30 ops, from laya-mlx's
-  `scripts/dump_js_fixtures.py`) and `fixtures/ops-numerics.json` (54 cases
-  over the 22 general-numerics ops, from `scripts/gen_numerics_cases.py`),
-  both generated with Python MLX 0.32.2 on Metal. Every case runs in f32; unless marked
+  `scripts/dump_js_fixtures.py`), `fixtures/ops-numerics.json` (54 cases
+  over the 22 general-numerics ops, from `scripts/gen_numerics_cases.py`)
+  and `fixtures/ops-quantized.json` (26 `quantizedLinear` /
+  `quantizedEmbedding` cases: q8/q4 × symmetric/affine, M from 1 to 130,
+  groups of 16/32/64/128 and partial last groups, from
+  `scripts/gen_quantized_cases.py`), all generated with Python MLX 0.32.2 on
+  Metal. Quantized cases upload their weight through `uploadQuantized`, so
+  `withoutOptionalOps(b, QUANTIZED_OPS)` checks the composition. Every case runs in f32; unless marked
   `f32Only`, it also runs in f16 (tolerance floor 2e-2) and bf16 (5e-2,
   for bf16's 8-bit mantissa) when the backend `supports` them. Cases marked
   `nativeOnly` (outside a composition's domain) are skipped when the op
@@ -118,6 +149,21 @@ against NumPy (or `math.erf`), and writes `fixtures/ops-numerics.json`.
 Float inputs are exactly representable in bf16, so the f16/bf16 runs see
 the same inputs as the f32 run (no rounding-induced comparison or argmax
 flips). Never hand-edit the JSON.
+
+`scripts/gen_quantized_cases.py` (same command) writes
+`fixtures/ops-quantized.json`: affine weights come from `mx.quantize`,
+references are float64 NumPy, cross-checked against `mx.quantized_matmul`
+wherever MLX has the configuration (16 of 26 cases).
+
+## Migrating from 0.2
+
+Nothing breaks: 0.3 only adds the optional quantized-weight ops, their
+types and helpers, and a third conformance fixture file. Backends that do
+not implement the ops pass the new cases through the default composition
+(`loadOpCases()` now returns them too; tests that count cases per file
+should include `OP_CASE_FILES[2]`). To implement them, add all three of
+`fromHostQuantized`, `quantizedLinear` and `quantizedEmbedding`, and run the
+conformance suite both natively and with `withoutOptionalOps(b, QUANTIZED_OPS)`.
 
 ## Migrating from 0.1
 
@@ -160,8 +206,12 @@ optional general-numerics ops serve device-side code elsewhere.
 - `sdpa` takes a bool mask only (true = attend); additive float masks are
   not part of the contract. Fully masked rows are undefined behaviour.
 - `loadOpCases()` without an argument reads the bundled JSON with `node:fs`;
-  from JSR or in a browser, fetch `fixtures/ops.json` and
-  `fixtures/ops-numerics.json` yourself and pass the concatenated cases.
+  from JSR or in a browser, fetch `fixtures/ops.json`,
+  `fixtures/ops-numerics.json` and `fixtures/ops-quantized.json` yourself and
+  pass the concatenated cases.
+- Quantized weights: 4 and 8 bits only, groups along the input dim only, and
+  `in · bits` must be a multiple of 32. The default composition keeps the
+  integer values as floats, so it saves no device memory.
 - Changing this contract means updating every backend in the repo.
 
 ## Family

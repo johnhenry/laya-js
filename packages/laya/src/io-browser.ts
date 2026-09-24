@@ -44,7 +44,7 @@ export async function readCheckpoint(modelIdOrPath: string, opts: ResolveOptions
     tokenizer: loadTokenizer(tokJson, tokConfig),
     weights: async (w) => {
       const src = await fetchFile(modelIdOrPath, prefix + "model.safetensors", pinned);
-      return readWeights(src, { ...(opts.fetch ? { fetch: opts.fetch } : {}), ...(w?.dtype ? { dtype: w.dtype } : {}) });
+      return readWeights(src, { ...(opts.fetch ? { fetch: opts.fetch } : {}), ...(w?.dtype ? { dtype: w.dtype } : {}), ...(w?.quantized ? { quantized: w.quantized } : {}) });
     },
   };
 }

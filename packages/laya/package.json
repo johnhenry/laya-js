@@ -69,8 +69,8 @@
     "@johnhenry/tensor-backend": "^0.2.0"
   },
   "peerDependencies": {
-    "@johnhenry/backend-mlx": "^0.2.0 || ^0.3.0",
-    "@johnhenry/backend-webgpu": "^0.2.0 || ^0.3.0"
+    "@johnhenry/backend-mlx": "^0.2.0 || ^0.3.0 || ^0.4.0",
+    "@johnhenry/backend-webgpu": "^0.2.0 || ^0.3.0 || ^0.4.0"
   },
   "peerDependenciesMeta": {
     "@johnhenry/backend-mlx": {

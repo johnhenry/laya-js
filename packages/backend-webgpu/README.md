@@ -68,7 +68,8 @@ gpu.destroy();
     sleep; raise the threshold if latency matters more than CPU.
 - `isWebGpuAvailable(): Promise<boolean>`: use it to skip tests.
 - `WebGpuBackend` implements every required op plus `geglu`, `meanPool`,
-  `flush` and `destroy`. Extras:
+  `flush`, `destroy` and the quantized-weight trio of tensor-backend 0.3
+  (below). Extras:
   - `adapterInfo`: vendor, architecture, device, description, source, features, limits.
   - `sync()`: wait for submitted work.
   - `tuneGemm(shapes, { dtype?, rounds? })`: measures every applicable
@@ -98,6 +99,18 @@ gpu.destroy();
   - Exported classes and types: `Runtime`, `Storage`, `KernelSource`,
     `BindingSpec`, `ParamSpec`, `ParamType`, `CompiledKernel` and
     `RuntimeStats`.
+- **Quantized weights** (native): `fromHostQuantized` uploads a laya-js
+  q8/q4 matrix unchanged — the packed bytes as a `u32` storage buffer, the
+  per-group scales / biases as f16 (f32 without `shader-f16`).
+  `quantizedLinear` runs the same Linear kernels as fp16 weights (skinny for
+  small M, subgroup-matrix with split-K, direct, tiled): their B-operand
+  loads go through one WGSL helper that unpacks 4 values from a word
+  (sign-extended for symmetric), applies `fma(q, scale, bias)` in f32 and
+  stages the tile, so accumulation stays f32. `quantizedEmbedding` is a
+  dequantizing gather. Any group size that is a multiple of 4 works,
+  including a partial last group; other group sizes resolve to null (the
+  default composition). Use them through `uploadQuantized` /
+  `quantizedLinear` / `quantizedEmbedding` from `@johnhenry/tensor-backend`.
 - `WebGpuTensor` has `shape`, `dtype`, `storage` (a refcounted `GPUBuffer`),
   `offset` (element offset: views share storage) and `disposed`.
 - `getGpu({ unsafe? })` / `requestAdapter(powerPreference?, unsafe?)` give

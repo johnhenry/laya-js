@@ -5,15 +5,21 @@
  * (laya_mlx/model.py). Tensor-in / numbers-out; prompts, collation and
  * result formatting live in @johnhenry/laya-core.
  */
-import type { Backend, DType, HostTensor, Tensor } from "@johnhenry/tensor-backend";
-import { toF32 } from "@johnhenry/tensor-backend";
+import type { Backend, DType, Tensor } from "@johnhenry/tensor-backend";
+import { embeddingAny, isQuantized, linearAny, toF32 } from "@johnhenry/tensor-backend";
 import {
   attentionMasks,
+  disposeWeight,
+  hasQuantizedWeights,
+  isHostQuantized,
   loadInBatch,
   loadModernBert,
   parseModernBertConfig,
   settleUploads,
   toWeightGetter,
+  type DeviceWeight,
+  type HostWeight,
+  type MatrixWeight,
   type ModernBert,
   type ModernBertConfig,
   type NormWeights,
@@ -24,26 +30,27 @@ import type { AgentConfig, Batch, BatchOutputs } from "@johnhenry/laya-core";
 /** PyTorch nn.LayerNorm / MLX nn.LayerNorm default. */
 const HEAD_EPS = 1e-5;
 
+/** Linear weights (and `typeEmb`) may be quantized matrices (`MatrixWeight`). */
 export interface HeadLayerWeights<T> {
   readonly norm1: NormWeights<T>;
   readonly norm2: NormWeights<T>;
-  readonly inProj: T;
+  readonly inProj: MatrixWeight<T>;
   readonly inProjBias: T;
-  readonly outProj: T;
+  readonly outProj: MatrixWeight<T>;
   readonly outProjBias: T;
-  readonly linear1: T;
+  readonly linear1: MatrixWeight<T>;
   readonly linear1Bias: T;
-  readonly linear2: T;
+  readonly linear2: MatrixWeight<T>;
   readonly linear2Bias: T;
 }
 
 export interface DecisionWeights<T> {
   readonly head: readonly HeadLayerWeights<T>[];
-  readonly typeEmb: T;
+  readonly typeEmb: MatrixWeight<T>;
   /** scorer = LayerNorm → Linear(D, D) → GELU → Linear(D, 1) */
-  readonly scorer: { readonly norm: NormWeights<T>; readonly w1: T; readonly b1: T; readonly w2: T; readonly b2: T };
+  readonly scorer: { readonly norm: NormWeights<T>; readonly w1: MatrixWeight<T>; readonly b1: T; readonly w2: MatrixWeight<T>; readonly b2: T };
   /** act_head = Linear(D + 4, 256) → GELU → Linear(256, nAct) */
-  readonly act: { readonly w1: T; readonly b1: T; readonly w2: T; readonly b2: T };
+  readonly act: { readonly w1: MatrixWeight<T>; readonly b1: T; readonly w2: MatrixWeight<T>; readonly b2: T };
   /**
    * f32 [1] constants of the forward pass (masked-logit fill −1e4, entropy
    * floor 1e-9, option-count scale 255), uploaded with the weights so
@@ -120,11 +127,11 @@ export class DecisionModel<T extends Tensor = Tensor> {
       const [B, L, D] = x.shape as [number, number, number];
       const nh = this.headHeads, hd = D / nh;
       const h = b.layerNorm(x, w.norm1.weight, w.norm1.bias, HEAD_EPS);
-      const qkv = b.transpose(b.reshape(b.linear(h, w.inProj, w.inProjBias), [B, L, 3, nh, hd]), [2, 0, 3, 1, 4]);
+      const qkv = b.transpose(b.reshape(linearAny(b, h, w.inProj, w.inProjBias), [B, L, 3, nh, hd]), [2, 0, 3, 1, 4]);
       const [q, k, v] = b.split(qkv, 3, 0).map((t) => b.reshape(t, [B, nh, L, hd])) as [T, T, T];
       const att = b.reshape(b.transpose(b.sdpa(q, k, v, mask, hd ** -0.5), [0, 2, 1, 3]), [B, L, D]);
-      const x1 = b.add(x, b.linear(att, w.outProj, w.outProjBias));
-      const f = b.linear(b.relu(b.linear(b.layerNorm(x1, w.norm2.weight, w.norm2.bias, HEAD_EPS), w.linear1, w.linear1Bias)), w.linear2, w.linear2Bias);
+      const x1 = b.add(x, linearAny(b, att, w.outProj, w.outProjBias));
+      const f = linearAny(b, b.relu(linearAny(b, b.layerNorm(x1, w.norm2.weight, w.norm2.bias, HEAD_EPS), w.linear1, w.linear1Bias)), w.linear2, w.linear2Bias);
       return b.add(x1, f);
     });
   }
@@ -198,7 +205,7 @@ export class DecisionModel<T extends Tensor = Tensor> {
       const encOut = enc.finalNorm(x);
       if (!owned) b.dispose(x);
       emit("encoder.final_norm", encOut);
-      let h = b.add(encOut, b.reshape(b.embedding(w.typeEmb, inp.qtype), [B, 1, D]));
+      let h = b.add(encOut, b.reshape(embeddingAny(b, w.typeEmb, inp.qtype), [B, 1, D]));
       emit("type_emb_added", h);
       for (let j = 0; j < w.head.length; j++) {
         h = this.headLayer(j, h, inp.headMask);
@@ -207,7 +214,7 @@ export class DecisionModel<T extends Tensor = Tensor> {
       // markers = h[arange(B)[:, None], maximum(marker_pos, 0)]
       const markers = b.gatherRows(h, inp.markerPos);
       const s = w.scorer;
-      const scored = b.linear(b.gelu(b.linear(b.layerNorm(markers, s.norm.weight, s.norm.bias, HEAD_EPS), s.w1, s.b1)), s.w2, s.b2);
+      const scored = linearAny(b, b.gelu(linearAny(b, b.layerNorm(markers, s.norm.weight, s.norm.bias, HEAD_EPS), s.w1, s.b1)), s.w2, s.b2);
       const logits = b.where(inp.markerMask, b.cast(b.reshape(scored, [B, M]), "f32"), cst.maskedLogit);
       // action features [top1, top1 - top2, entropy / log(k), k / 255], k = max(#markers, 2)
       const p = b.softmax(logits, -1);
@@ -221,7 +228,7 @@ export class DecisionModel<T extends Tensor = Tensor> {
       const cls = b.cast(b.reshape(b.slice(h, [0, 0, 0], [B, 1, D]), [B, D]), "f32");
       const pooled = b.cast(b.concat([cls, features], -1), this.dtype);
       const a = w.act;
-      const act = b.cast(b.linear(b.gelu(b.linear(pooled, a.w1, a.b1)), a.w2, a.b2), "f32");
+      const act = b.cast(linearAny(b, b.gelu(linearAny(b, pooled, a.w1, a.b1)), a.w2, a.b2), "f32");
       return [logits, act, ...kept];
     });
     return { logits: out[0]!, act: out[1]! };
@@ -282,6 +289,13 @@ export class DecisionModel<T extends Tensor = Tensor> {
     return this.readOutputs(await this.forwardTensors(batch, opts));
   }
 
+  /** Whether any weight is held quantized on the device (a quantized checkpoint loaded with `quantized: "device"`). */
+  get quantizedOnDevice(): boolean {
+    const w = this.weights;
+    const qs = [w.typeEmb, w.scorer.w1, w.scorer.w2, w.act.w1, w.act.w2, ...w.head.flatMap((l) => [l.inProj, l.outProj, l.linear1, l.linear2])];
+    return hasQuantizedWeights(this.encoder) || qs.some((t) => isQuantized(t));
+  }
+
   /** Frees all weights (encoder included). */
   dispose(): void {
     this.encoder.dispose();
@@ -312,12 +326,12 @@ export async function loadDecisionModel<T extends Tensor>(backend: Backend<T>, o
   const nh = Math.max(1, Math.floor(D / 64));
   if (D % nh) throw new Error("Decision head dimensions must be divisible by its head count");
 
-  const hosts = new Map<string, HostTensor>();
-  const f32 = (v: number): HostTensor => ({ dtype: "f32", shape: [1], data: Float32Array.of(v) });
+  const hosts = new Map<string, HostWeight>();
+  const f32 = (v: number) => ({ dtype: "f32" as const, shape: [1], data: Float32Array.of(v) });
   const [encoder, heads, consts] = await Promise.allSettled([
     loadModernBert(backend, config, get, { dtype, prefix: "encoder." }),
     loadInBatch(backend, (upload) => {
-      const need = (names: string[], shape: number[]): T => {
+      const need = (names: string[], shape: number[], matrix = false): DeviceWeight<T> => {
         for (const n of names) {
           const h = hosts.get(n) ?? get(n);
           if (!h) continue;
@@ -325,11 +339,12 @@ export async function loadDecisionModel<T extends Tensor>(backend: Backend<T>, o
           if (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i])) {
             throw new Error(`DecisionModel: ${n} has shape [${h.shape}], want [${shape}]`);
           }
+          if (!matrix && isHostQuantized(h)) throw new Error(`DecisionModel: ${n} cannot be quantized (only Linear weights and type_emb)`);
           return upload(n, h);
         }
         throw new Error(`DecisionModel: missing weight ${names[0]}`);
       };
-      return buildHeadWeights(D, headLayers, nAct, need);
+      return buildHeadWeights<T>(D, headLayers, nAct, need);
     }, dtype),
     // f32 whatever the model dtype
     settleUploads(backend, new Map([
@@ -350,12 +365,14 @@ export async function loadDecisionModel<T extends Tensor>(backend: Backend<T>, o
   return new DecisionModel(backend, encoder.value, { ...heads.value, constants }, dtype, nAct);
 }
 
-function buildHeadWeights<T>(
+function buildHeadWeights<T extends Tensor>(
   D: number,
   headLayers: number,
   nAct: number,
-  need: (names: string[], shape: number[]) => T,
+  needAny: (names: string[], shape: number[], matrix?: boolean) => DeviceWeight<T>,
 ): Omit<DecisionWeights<T>, "constants"> {
+  const need = (names: string[], shape: number[]) => needAny(names, shape) as T;
+  const mat = (names: string[], shape: number[]) => needAny(names, shape, true);
   const seq = (prefix: string, i: number, what: string) => [`${prefix}.layers.${i}.${what}`, `${prefix}.${i}.${what}`];
   const head: HeadLayerWeights<T>[] = [];
   for (let j = 0; j < headLayers; j++) {
@@ -363,28 +380,28 @@ function buildHeadWeights<T>(
     head.push({
       norm1: { weight: need([`${p}.norm1.weight`], [D]), bias: need([`${p}.norm1.bias`], [D]) },
       norm2: { weight: need([`${p}.norm2.weight`], [D]), bias: need([`${p}.norm2.bias`], [D]) },
-      inProj: need([`${p}.self_attn.in_proj.weight`, `${p}.self_attn.in_proj_weight`], [3 * D, D]),
+      inProj: mat([`${p}.self_attn.in_proj.weight`, `${p}.self_attn.in_proj_weight`], [3 * D, D]),
       inProjBias: need([`${p}.self_attn.in_proj.bias`, `${p}.self_attn.in_proj_bias`], [3 * D]),
-      outProj: need([`${p}.self_attn.out_proj.weight`], [D, D]),
+      outProj: mat([`${p}.self_attn.out_proj.weight`], [D, D]),
       outProjBias: need([`${p}.self_attn.out_proj.bias`], [D]),
-      linear1: need([`${p}.linear1.weight`], [4 * D, D]),
+      linear1: mat([`${p}.linear1.weight`], [4 * D, D]),
       linear1Bias: need([`${p}.linear1.bias`], [4 * D]),
-      linear2: need([`${p}.linear2.weight`], [D, 4 * D]),
+      linear2: mat([`${p}.linear2.weight`], [D, 4 * D]),
       linear2Bias: need([`${p}.linear2.bias`], [D]),
     });
   }
-  const typeEmb = need(["type_emb.weight"], [3, D]);
+  const typeEmb = mat(["type_emb.weight"], [3, D]);
   const scorer = {
     norm: { weight: need(seq("scorer", 0, "weight"), [D]), bias: need(seq("scorer", 0, "bias"), [D]) },
-    w1: need(seq("scorer", 1, "weight"), [D, D]),
+    w1: mat(seq("scorer", 1, "weight"), [D, D]),
     b1: need(seq("scorer", 1, "bias"), [D]),
-    w2: need(seq("scorer", 3, "weight"), [1, D]),
+    w2: mat(seq("scorer", 3, "weight"), [1, D]),
     b2: need(seq("scorer", 3, "bias"), [1]),
   };
   const act = {
-    w1: need(seq("act_head", 0, "weight"), [256, D + 4]),
+    w1: mat(seq("act_head", 0, "weight"), [256, D + 4]),
     b1: need(seq("act_head", 0, "bias"), [256]),
-    w2: need(seq("act_head", 2, "weight"), [nAct, 256]),
+    w2: mat(seq("act_head", 2, "weight"), [nAct, 256]),
     b2: need(seq("act_head", 2, "bias"), [nAct]),
   };
   return { head, typeEmb, scorer, act };
@@ -392,7 +409,7 @@ function buildHeadWeights<T>(
 
 /** Frees decision-head weights (and the constants, when present). */
 function disposeWeights<T extends Tensor>(b: Backend<T>, w: Omit<DecisionWeights<T>, "constants"> & Partial<Pick<DecisionWeights<T>, "constants">>): void {
-  const free = (...ts: (T | null)[]) => ts.forEach((t) => t && b.dispose(t));
+  const free = (...ts: (MatrixWeight<T> | null)[]) => ts.forEach((t) => disposeWeight(b, t));
   for (const l of w.head) {
     free(l.norm1.weight, l.norm1.bias, l.norm2.weight, l.norm2.bias, l.inProj, l.inProjBias, l.outProj, l.outProjBias);
     free(l.linear1, l.linear1Bias, l.linear2, l.linear2Bias);
