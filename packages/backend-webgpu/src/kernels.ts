@@ -951,17 +951,19 @@ export function ropeKernel(x: Kind, out: Kind): KernelSource {
   const WG = 256;
   const X = (e: string) => ld(x, `X[P.off + ${e}]`, "f32");
   const body = `const WG = ${WG}u;\n${HELPERS}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
+  // One thread per rotation pair (d, d + D/2): P.n is the number of pairs.
   if (i >= P.n) { return; }
   let half = P.D / 2u;
-  let d = i % P.D;
-  let l = (i / P.D) % P.L;
-  let j = d % half;
+  let row = i / half;
+  let j = i % half;
+  let l = row % P.L;
   let c = CS[l * half + j];
   let s = CS[P.L * half + l * half + j];
-  var y: f32;
-  if (d < half) { y = ${X("i")} * c - ${X("i + half")} * s; }
-  else { y = ${X("i")} * c + ${X("i - half")} * s; }
-  outp[i] = ${st(out, "y", "f32")};
+  let o = row * P.D + j;
+  let x0 = ${X("o")};
+  let x1 = ${X("o + half")};
+  outp[o] = ${st(out, "x0 * c - x1 * s", "f32")};
+  outp[o + half] = ${st(out, "x1 * c + x0 * s", "f32")};
 }`;
   return {
     key: `rope:${kindKey(x)}:${kindKey(out)}`,

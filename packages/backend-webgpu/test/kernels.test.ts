@@ -134,6 +134,26 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     }
   });
 
+  t.it("buffer reuse: a host upload into a buffer freed while pending work still reads it; repeated chains hit the bind-group cache", async () => {
+    const bk = await get();
+    const [M, N, K] = [70, 96, 64];
+    const x1 = rnd(M * K), x2 = rnd(M * K), w = rnd(N * K, 0.1);
+    const W = await up(bk, [N, K], w);
+    const X1 = await up(bk, [M, K], x1);
+    const Y1 = bk.linear(X1, W); // enqueued, not submitted
+    bk.dispose(X1); // back to the pool while Y1's dispatch is pending
+    const X2 = await up(bk, [M, K], x2); // reuses X1's buffer: must not clobber Y1's input
+    const Y2 = bk.linear(X2, W);
+    close(await rd(bk, Y1), refLinear(x1, w, null, M, N, K), 1e-4, 1e-4, "Y1 after reuse");
+    close(await rd(bk, Y2), refLinear(x2, w, null, M, N, K), 1e-4, 1e-4, "Y2");
+    const chain = () => bk.scope(() => bk.gelu(bk.add(bk.linear(X2, W), bk.linear(X2, W))));
+    for (let i = 0; i < 3; i++) bk.dispose(chain());
+    const before = bk.rt.stats.bindGroups;
+    for (let i = 0; i < 5; i++) bk.dispose(chain());
+    await bk.sync();
+    assert.equal(bk.rt.stats.bindGroups, before, "steady-state chain creates no bind groups");
+  });
+
   t.it("strided copies: collapsed 5-D transpose (vector and scalar inner loops), concat", async () => {
     const bk = await get();
     for (const hd of [8, 6]) {

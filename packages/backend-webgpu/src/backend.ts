@@ -57,6 +57,8 @@ export class WebGpuTensor implements Tensor {
 export interface WebGpuBackendOptions {
   /** Dispatches per command buffer before an automatic submit (default 128). */
   maxBatch?: number;
+  /** Dispatches in the first submit after the GPU went idle (default 24), so the GPU starts while the rest is encoded. */
+  firstBatch?: number;
   /** Idle bytes kept in the buffer pool (default 1 GiB). */
   maxPooledBytes?: number;
   /** Override the GEMM tile configuration (benchmarking). */
@@ -145,7 +147,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     this.hasF16 = opts.f16;
     this.hasSubgroupMatrix = opts.subgroupMatrix ?? false;
     this.ownsDevice = opts.ownsDevice;
-    this.rt = new Runtime(device, opts.maxBatch ?? 128, opts.maxPooledBytes ?? 2 ** 30);
+    this.rt = new Runtime(device, opts.maxBatch ?? 128, opts.maxPooledBytes ?? 2 ** 30, opts.firstBatch ?? 24);
     this.gemmConfig = opts.gemm ?? GEMM_DEFAULT;
     this.rt.sleepWhileWaiting = opts.sleepWhileWaiting ?? adapterInfo.source !== "navigator.gpu";
   }
@@ -280,9 +282,15 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       case "i32":
         data = d instanceof Int32Array ? d : Int32Array.from(d as ArrayLike<number>);
         break;
-      case "bool":
-        data = Uint32Array.from(d as ArrayLike<number>, (v) => (v ? 1 : 0));
+      case "bool": {
+        // A plain loop: Uint32Array.from with a map callback is ~10× slower
+        // (the B×L×L sliding-window masks reach millions of elements).
+        const out = new Uint32Array(n);
+        const src = d as ArrayLike<number>;
+        for (let i = 0; i < n; i++) out[i] = src[i] ? 1 : 0;
+        data = out;
         break;
+      }
     }
     const bytes = Math.max(4, n * this.bytesPer(h.dtype));
     const { buffer, bytes: cls, writeHazard } = this.rt.acquire(bytes);
@@ -780,7 +788,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     if (!n) return out;
     const tab = this.ropeTable(L, D, base);
     const xk = this.kind(x.dtype), ok = this.kind(out.dtype);
-    this.run(`rope:${keyOf(xk, ok)}`, () => ropeKernel(xk, ok), [x.storage.buffer, tab.buffer, out.storage.buffer], { n, D, L, off: x.offset }, this.flatGroups(n));
+    this.run(`rope:${keyOf(xk, ok)}`, () => ropeKernel(xk, ok), [x.storage.buffer, tab.buffer, out.storage.buffer], { n: n / 2, D, L, off: x.offset }, this.flatGroups(n / 2));
     return out;
   }
 
