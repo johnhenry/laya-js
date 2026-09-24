@@ -352,7 +352,16 @@ export interface GemmConfig {
    * matrices and subgroup size 32): the first with minM < M ≤ maxM wins;
    * null/absent/empty disables.
    */
-  sg?: (SgGemmConfig & { minM: number; maxM?: number })[] | null;
+  sg?: (SgGemmConfig & {
+    minM: number;
+    maxM?: number;
+    /** Only when the grid has at least this many workgroups (ceil(M/BM)·ceil(N/BN)). */
+    minGroups?: number;
+    /** Only when the padded rows ceil(M/BM)·BM are at most maxPad·M. */
+    maxPad?: number;
+    /** Not when the workgroup count is within [lo, hi] (a poor last wave). */
+    skipGroups?: readonly [number, number];
+  })[] | null;
 }
 /** Tuned on Apple M2 (10-core GPU) via Dawn/Metal: see bench/gemm.ts. */
 export const GEMM_DEFAULT: GemmConfig = {
@@ -362,7 +371,27 @@ export const GEMM_DEFAULT: GemmConfig = {
     { maxM: 40, WX: 16, TN: 4, WY: 4, KS: 4, KP4: 0 },
     { maxM: 64, WX: 8, TN: 4, WY: 8, KS: 4, KP4: 0 },
   ],
-  // 2 subgroups, each a 32×32 block (4×4 fragments): best or tied for M = 65…1488 on M2.
+  // Tuned on M2 with bench/linear-shapes.ts over the Laya Linear shapes:
+  // - 64×64 tiles, 2 subgroups side by side, each 64×32 (8×4 fragments: fewer
+  //   fragment loads per MMA): ≈1.95 TFLOP/s for large M (32×64: ≈1.75), but
+  //   only with enough workgroups, little row padding, and not ~1 wave + a
+  //   small tail (57–79 workgroups on the 10-core M2).
+  // - else 32×64 tiles (2 subgroups × 4×4 fragments), split-K 2 for grids
+  //   under 48 workgroups (N = 768, M ≈ 65–96).
+  sg: [
+    { minM: 64, BM: 64, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0, minGroups: 48, skipGroups: [57, 79], maxPad: 1.1 },
+    { minM: 64, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0, splitK: [{ maxGroups: 47, S: 2 }] },
+  ],
+};
+
+/** The 0.2.0 defaults (before per-shape tuning), kept for benchmarks. */
+export const GEMM_V020: GemmConfig = {
+  tiled: { BM: 64, BN: 64, BK: 16, TM: 4, TN: 4 },
+  direct: { TM: 4, TN: 8, WX: 4, WY: 16 },
+  skinny: [
+    { maxM: 40, WX: 16, TN: 4, WY: 4, KS: 4, KP4: 0 },
+    { maxM: 64, WX: 8, TN: 4, WY: 8, KS: 4, KP4: 0 },
+  ],
   sg: [{ minM: 64, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2 }],
 };
 
@@ -951,17 +980,21 @@ export function ropeKernel(x: Kind, out: Kind): KernelSource {
   const WG = 256;
   const X = (e: string) => ld(x, `X[P.off + ${e}]`, "f32");
   const body = `const WG = ${WG}u;\n${HELPERS}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
+  // One thread per rotation pair (d, d + D/2): P.n is the number of pairs.
   if (i >= P.n) { return; }
   let half = P.D / 2u;
-  let d = i % P.D;
-  let l = (i / P.D) % P.L;
-  let j = d % half;
+  let row = i / half;
+  let j = i % half;
+  let l = row % P.L;
   let c = CS[l * half + j];
   let s = CS[P.L * half + l * half + j];
-  var y: f32;
-  if (d < half) { y = ${X("i")} * c - ${X("i + half")} * s; }
-  else { y = ${X("i")} * c + ${X("i - half")} * s; }
-  outp[i] = ${st(out, "y", "f32")};
+  let o = row * P.D + j;
+  let x0 = ${X("o")};
+  let x1 = ${X("o + half")};
+  // Explicit fma: the contraction Metal chose for the 0.2.0 one-element-per-
+  // thread kernel; keeps f16 results bit-identical to it (and MLX parity).
+  outp[o] = ${st(out, "fma(-x1, s, x0 * c)", "f32")};
+  outp[o + half] = ${st(out, "fma(x0, s, x1 * c)", "f32")};
 }`;
   return {
     key: `rope:${kindKey(x)}:${kindKey(out)}`,
@@ -1145,91 +1178,200 @@ export interface SgGemmConfig {
   /** Subgroups per workgroup along M and N. */
   WM: number;
   WN: number;
+  /** Double-buffer the staged K panels (one barrier per panel instead of two; slower on M2). Default false. */
+  db?: boolean;
+  /**
+   * Split-K: when M ≤ maxM and the grid has at most maxGroups workgroups
+   * (both default ∞), split K into S chunks written as f32 partials and
+   * summed in a fixed order (plus bias, rounded once) by a second kernel.
+   * First match wins. Raises the workgroup count of small grids.
+   */
+  splitK?: { maxM?: number; maxGroups?: number; S: number }[];
+  /** Epilogue: "frag" (default; one 8×8 fragment at a time, small scratch) or "block" (whole block, one barrier). */
+  epi?: "frag" | "block";
+  /** Row padding (floats) of the staged panels (default 4). */
+  pad?: number;
+  /** f16 operands: load 8 halves per thread as vec4<u32> (needs K and offsets % 8 == 0). Default true. */
+  wide?: boolean;
 }
 
-export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SgGemmConfig): KernelSource {
+/**
+ * Subgroup-matrix Linear (transB, K % 4 == 0): each subgroup owns a
+ * (BM/WM)×(BN/WN) block of 8×8 f32 result fragments. K panels of BK are
+ * converted to f32 and staged in workgroup memory (Dawn only offers f16
+ * fragments with f16 accumulation, which would break parity); the next
+ * panel is fetched into registers while the current one is multiplied and,
+ * with `db`, stored into the other half of a double buffer, so each panel
+ * costs one barrier. The epilogue spills each subgroup's whole block to
+ * workgroup memory once and stores it row-contiguously (bias added,
+ * rounded once). With `split` (split-K), workgroup z covers K range
+ * [z·P.kc, (z+1)·P.kc) and writes f32 partials at z·M·N (no bias).
+ */
+export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SgGemmConfig, split = false, wide = false): KernelSource {
   const { BM, BN, BK, WM, WN } = cfg;
+  const db = cfg.db ?? false;
+  const epi = cfg.epi ?? "frag";
   const SG = 32, WG = WM * WN * SG;
-  const FM = BM / WM / 8, FN = BN / WN / 8; // fragments per subgroup
+  const SBM = BM / WM, SBN = BN / WN; // per-subgroup block
+  const FM = SBM / 8, FN = SBN / 8; // fragments per subgroup
   if (FM % 1 || FN % 1 || BK % 8) throw new Error("gemmSg: bad tile config");
-  const BKP = BK + 4; // padded row stride (floats) of the staged tiles
+  if (split && bias) throw new Error("gemmSg: split-K partials take no bias");
+  if (wide && (a.st !== "f16" || b.st !== "f16")) throw new Error("gemmSg: wide loads need f16 operands");
+  const BKP = BK + (cfg.pad ?? 4); // padded row stride (floats) of the staged tiles
+  // V elements per global load: vec4<f16>/<f32> (4), or 8 f16 as vec4<u32> (wide).
+  const V = wide ? 8 : 4;
+  const elem = (k: Kind) => (wide ? "vec4<u32>" : `vec4<${k.st}>`);
   const bindings: BindingSpec[] = [
-    { name: "A", elem: `vec4<${a.st}>`, access: "read" },
-    { name: "B", elem: `vec4<${b.st}>`, access: "read" },
+    { name: "A", elem: elem(a), access: "read" },
+    { name: "B", elem: elem(b), access: "read" },
   ];
   if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
   bindings.push({ name: "C", elem: out.st, access: "read_write" });
   const f4 = (k: Kind, e: string) => (k.st === "f32" ? e : `vec4<f32>(${e})`);
-  const K4 = BK / 4;
-  // Cooperative tile loads, software-pipelined: the next K panel is fetched into
-  // registers (vec4 per thread) while the subgroups multiply the current one.
+  const KV = BK / V; // loads per staged row
+  const TILE = (BM + BN) * BKP; // one A+B panel
   const BOFF = BM * BKP;
-  const NA = Math.ceil((BM * K4) / WG), NB = Math.ceil((BN * K4) / WG);
-  // guard for the last partial round when rows·BK/4 isn't a multiple of WG
-  const guard = (rows: number, v: number) => ((v + 1) * WG > rows * K4 ? `if (lid + ${v * WG}u < ${rows * K4}u) ` : "");
-  const regs = (p: string, n: number) => Array.from({ length: n }, (_, v) => `  var ${p}${v} = vec4<f32>(0.0);\n`).join("");
+  const NA = Math.ceil((BM * KV) / WG), NB = Math.ceil((BN * KV) / WG);
+  // guard for the last partial round when rows·KV isn't a multiple of WG
+  const guard = (rows: number, v: number) => ((v + 1) * WG > rows * KV ? `if (lid + ${v * WG}u < ${rows * KV}u) ` : "");
+  const regs = (p: string, n: number) =>
+    Array.from({ length: n }, (_, v) => `  var ${p}${v} = vec4<f32>(0.0);\n${wide ? `  var ${p}${v}h = vec4<f32>(0.0);\n` : ""}`).join("");
+  const load = (p: string, v: number, name: string, kind: Kind, idx: string) =>
+    wide
+      ? `let u = ${name}[${idx}]; ${p}${v} = vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); ${p}${v}h = vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w));`
+      : `${p}${v} = ${f4(kind, `${name}[${idx}]`)};`;
+  const zero = (p: string, v: number) => `${p}${v} = vec4<f32>(0.0);${wide ? ` ${p}${v}h = vec4<f32>(0.0);` : ""}`;
   const fetch = (p: string, n: number, name: string, kind: Kind, base: string, lim: string, gbase: string, rows: number) =>
-    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let gr = ${base} + t / ${K4}u; let kk = k0n / 4u + t % ${K4}u;
-      ${p}${v} = vec4<f32>(0.0);
-      if (gr < ${lim} && kk < K4) { ${p}${v} = ${f4(kind, `${name}[${gbase} + gr * K4 + kk]`)}; } }\n`).join("");
-  const stash = (p: string, n: number, S: number, rows: number) =>
-    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S}u + (t / ${K4}u) * ${BKP}u + (t % ${K4}u) * 4u;
-      Sh[o] = ${p}${v}.x; Sh[o + 1u] = ${p}${v}.y; Sh[o + 2u] = ${p}${v}.z; Sh[o + 3u] = ${p}${v}.w; }\n`).join("");
+    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let gr = ${base} + t / ${KV}u; let kk = k0n / ${V}u + t % ${KV}u;
+      if (gr < ${lim} && kk < kEndV) { ${load(p, v, name, kind, `${gbase} + gr * KV + kk`)} } else { ${zero(p, v)} } }\n`).join("");
+  const stash = (p: string, n: number, S: string, rows: number) =>
+    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S} + (t / ${KV}u) * ${BKP}u + (t % ${KV}u) * ${V}u;
+      Sh[o] = ${p}${v}.x; Sh[o + 1u] = ${p}${v}.y; Sh[o + 2u] = ${p}${v}.z; Sh[o + 3u] = ${p}${v}.w;${
+        wide ? `\n      Sh[o + 4u] = ${p}${v}h.x; Sh[o + 5u] = ${p}${v}h.y; Sh[o + 6u] = ${p}${v}h.z; Sh[o + 7u] = ${p}${v}h.w;` : ""
+      } }\n`).join("");
   let decl = "";
   for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) decl += `  var c${i}_${j}: subgroup_matrix_result<f32, 8, 8>;\n`;
-  let mma = "";
-  for (let i = 0; i < FM; i++)
-    mma += `      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>, row_major>(&Sh, (sm + ${i * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
-  for (let j = 0; j < FN; j++)
-    mma += `      let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>, col_major>(&Sh, ${BOFF}u + (sn + ${j * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
-  for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) mma += `      c${i}_${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}_${j});\n`;
-  // Epilogue: each subgroup spills one 8×8 fragment at a time into its own
-  // 64-float scratch; its 32 lanes then add the bias and store 2 values each.
-  const SCR = (BM + BN) * BKP;
-  const bv = bias ? ` + ${ld(bias, "bias[P.obias + col]", "f32")}` : "";
-  let stores = "";
-  for (let i = 0; i < FM; i++)
+  const mma = (buf: string) => {
+    let m = "";
+    for (let i = 0; i < FM; i++)
+      m += `      let a${i} = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>, row_major>(&Sh, ${buf} + (sm + ${i * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
     for (let j = 0; j < FN; j++)
-      stores += `  subgroupMatrixStore<row_major>(&Sh, scr, c${i}_${j}, 8u);
+      m += `      let b${j} = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>, col_major>(&Sh, ${buf} + ${BOFF}u + (sn + ${j * 8}u) * ${BKP}u + kk, ${BKP}u);\n`;
+    for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) m += `      c${i}_${j} = subgroupMatrixMultiplyAccumulate(a${i}, b${j}, c${i}_${j});\n`;
+    return Array.from({ length: BK / 8 }, (_, q) => `    {\n      let kk = ${q * 8}u;\n${m}    }\n`).join("");
+  };
+  const bv = bias ? ` + ${ld(bias, "bias[P.obias + col]", "f32")}` : "";
+  const cIdx = split ? "wid.z * P.M * P.N + row * P.N + col" : "row * P.N + col";
+  const PANELS = db ? 2 * TILE : TILE;
+  let SH: number, epilogue = "";
+  if (epi === "block") {
+    // Each subgroup spills its whole SBM×SBN block (row-major) over the
+    // panels, then its lanes store it row-contiguously: one barrier.
+    SH = Math.max(PANELS, (WG / SG) * SBM * SBN);
+    for (let i = 0; i < FM; i++)
+      for (let j = 0; j < FN; j++) epilogue += `  subgroupMatrixStore<row_major>(&Sh, sg * ${SBM * SBN}u + ${i * 8 * SBN + j * 8}u, c${i}_${j}, ${SBN}u);\n`;
+    epilogue += `  workgroupBarrier();
+  for (var e = lane; e < ${SBM * SBN}u; e += 32u) {
+    let row = r0 + sm + e / ${SBN}u; let col = c0 + sn + e % ${SBN}u;
+    if (row < P.M && col < P.N) { C[${cIdx}] = ${st(out, `Sh[sg * ${SBM * SBN}u + e]${bv}`, "f32")}; }
+  }\n`;
+  } else {
+    // One 8×8 fragment at a time through a private 64-float scratch per
+    // subgroup (keeps workgroup memory, hence occupancy, small).
+    SH = PANELS + (WG / SG) * 64;
+    for (let i = 0; i < FM; i++)
+      for (let j = 0; j < FN; j++)
+        epilogue += `  subgroupMatrixStore<row_major>(&Sh, scr, c${i}_${j}, 8u);
   workgroupBarrier();
   for (var e = lane; e < 64u; e += 32u) {
     let row = r0 + sm + ${i * 8}u + e / 8u; let col = c0 + sn + ${j * 8}u + e % 8u;
-    if (row < P.M && col < P.N) { C[row * P.N + col] = ${st(out, `Sh[scr + e]${bv}`, "f32")}; }
+    if (row < P.M && col < P.N) { C[${cIdx}] = ${st(out, `Sh[scr + e]${bv}`, "f32")}; }
   }
   workgroupBarrier();\n`;
-  const body = `${out.bf16 ? HELPERS : ""}
-// A tile at 0, B tile at ${BOFF}, per-subgroup 8×8 output scratch at ${SCR}.
-var<workgroup> Sh: array<f32, ${SCR + (WG / SG) * 64}>;
-@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-  let K4 = P.K / 4u;
-  let r0 = wid.y * ${BM}u; let c0 = wid.x * ${BN}u;
-  let aBase = P.oa / 4u; let bBase = P.ob / 4u;
-  let sg = lid / ${SG}u;
-  let sm = (sg / ${WN}u) * ${BM / WM}u; let sn = (sg % ${WN}u) * ${BN / WN}u;
-  let lane = lid % ${SG}u; let scr = ${SCR}u + sg * 64u;
-${decl}
-${regs("pa", NA)}${regs("pb", NB)}  {
-    let k0n = 0u;
-${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}  }
-  for (var k0 = 0u; k0 < P.K; k0 += ${BK}u) {
-${stash("pa", NA, 0, BM)}${stash("pb", NB, BOFF, BN)}    workgroupBarrier();
+  }
+  const loop = db
+    ? `  {
+    let k0n = kBeg;
+${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}
+${stash("pa", NA, "0u", BM)}${stash("pb", NB, `${BOFF}u`, BN)}  }
+  workgroupBarrier();
+  var cur = 0u;
+  for (var k0 = kBeg; k0 < kEnd; k0 += ${BK}u) {
     let k0n = k0 + ${BK}u;
-    if (k0n < P.K) {
+    let more = k0n < kEnd;
+    if (more) {
 ${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}    }
-${Array.from({ length: BK / 8 }, (_, q) => `    {\n      let kk = ${q * 8}u;\n${mma}    }\n`).join("")}
+${mma("cur")}
+    if (more) {
+      let nxt = ${TILE}u - cur;
+${stash("pa", NA, "nxt", BM)}${stash("pb", NB, `nxt + ${BOFF}u`, BN)}    }
+    cur = ${TILE}u - cur;
     workgroupBarrier();
   }
-${stores}}`;
+`
+    : `  {
+    let k0n = kBeg;
+${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}  }
+  for (var k0 = kBeg; k0 < kEnd; k0 += ${BK}u) {
+${stash("pa", NA, "0u", BM)}${stash("pb", NB, `${BOFF}u`, BN)}    workgroupBarrier();
+    let k0n = k0 + ${BK}u;
+    if (k0n < kEnd) {
+${fetch("pa", NA, "A", a, "r0", "P.M", "aBase", BM)}${fetch("pb", NB, "B", b, "c0", "P.N", "bBase", BN)}    }
+${mma("0u")}
+    workgroupBarrier();
+  }
+`;
+  const body = `${out.bf16 ? HELPERS : ""}
+// Panels: A at 0, B at ${BOFF}${db ? `, second buffer at ${TILE}` : ""}; epilogue scratch ${epi === "block" ? "reuses them" : `at ${PANELS}`}.
+var<workgroup> Sh: array<f32, ${SH}>;
+@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let KV = P.K / ${V}u;
+  let kBeg = wid.z * P.kc; let kEnd = min(P.K, kBeg + P.kc); let kEndV = kEnd / ${V}u;
+  let r0 = wid.y * ${BM}u; let c0 = wid.x * ${BN}u;
+  let aBase = P.oa / ${V}u; let bBase = P.ob / ${V}u;
+  let sg = lid / ${SG}u;
+  let sm = (sg / ${WN}u) * ${SBM}u; let sn = (sg % ${WN}u) * ${SBN}u;
+  let lane = lid % ${SG}u; let scr = ${PANELS}u + sg * 64u;
+${decl}
+${regs("pa", NA)}${regs("pb", NB)}${loop}
+${epilogue}}`;
   return {
-    key: `gemmsg:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${BM}x${BN}x${BK}/${WM}x${WN}`,
+    key: `gemmsg:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${BM}x${BN}x${BK}/${WM}x${WN}:${db ? "db" : "sb"}:${epi}:${BKP}:${V}${split ? ":split" : ""}`,
     bindings,
-    params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
+    params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["kc", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
     f16: needsF16(a, b, out, ...(bias ? [bias] : [])),
     enables: ["chromium_experimental_subgroup_matrix"],
     // Offsets differ per subgroup (derived from local_invocation_index), which is fine:
     // each subgroup executes the matrix ops in subgroup-uniform control flow.
     directives: ["diagnostic(off, chromium.subgroup_matrix_uniformity)"],
+  };
+}
+
+/**
+ * Split-K reduction: C[i] = Σ_z Pt[z·n + i] (+ bias[i % N]), f32 sums in a
+ * fixed order, rounded once on store. 4 outputs per thread when N % 4 == 0.
+ */
+export function splitKReduceKernel(bias: Kind | null, out: Kind, S: number): KernelSource {
+  const bindings: BindingSpec[] = [{ name: "Pt", elem: "f32", access: "read" }];
+  if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
+  bindings.push({ name: "C", elem: out.st, access: "read_write" });
+  let sum = "    var acc = Pt[i];\n";
+  for (let z = 1; z < S; z++) sum += `    acc += Pt[i + ${z}u * P.n];\n`;
+  const bv = bias ? ` + ${ld(bias, "bias[P.obias + i % P.N]", "f32")}` : "";
+  const body = `${out.bf16 ? HELPERS : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+  let i = gid.x + gid.y * nwg.x * 256u;
+  if (i < P.n) {
+${sum}    C[i] = ${st(out, `acc${bv}`, "f32")};
+  }
+}`;
+  return {
+    key: `splitk:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${S}`,
+    bindings,
+    params: [["n", "u32"], ["N", "u32"], ["obias", "u32"]],
+    body,
+    f16: needsF16(out, ...(bias ? [bias] : [])),
   };
 }
 

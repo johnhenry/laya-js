@@ -69,6 +69,8 @@ export class Storage {
 
 interface PooledBuffer {
   buffer: GPUBuffer;
+  /** Runtime-assigned id (first-use order): the pool hands out the lowest id first. */
+  id: number;
   releasedEpoch: number;
 }
 
@@ -79,6 +81,8 @@ export interface RuntimeStats {
   dispatches: number;
   submits: number;
   pipelines: number;
+  /** Bind groups created (cache misses). */
+  bindGroups: number;
 }
 
 export class Runtime {
@@ -101,9 +105,16 @@ export class Runtime {
   private deferredDestroy: GPUBuffer[] = [];
   private firstError: string | null = null;
   readonly uniformAlign: number;
-  stats: RuntimeStats = { liveBytes: 0, pooledBytes: 0, buffersCreated: 0, dispatches: 0, submits: 0, pipelines: 0 };
+  stats: RuntimeStats = { liveBytes: 0, pooledBytes: 0, buffersCreated: 0, dispatches: 0, submits: 0, pipelines: 0, bindGroups: 0 };
 
   readonly maxBatch: number;
+  /**
+   * Dispatches in the first submit after the GPU went idle (a completed
+   * readback): the GPU starts on it while the rest is encoded.
+   */
+  firstBatch: number;
+  /** Whether work was submitted since the GPU was last known idle. */
+  private busy = false;
   readonly maxPooledBytes: number;
   /**
    * Sleep (setTimeout) for most of the expected GPU time before awaiting a
@@ -118,9 +129,10 @@ export class Runtime {
   /** The in-progress pre-read sleep: concurrent reads wait on it too before polling. */
   private sleeping: Promise<void> | null = null;
 
-  constructor(device: GPUDevice, maxBatch: number, maxPooledBytes: number) {
+  constructor(device: GPUDevice, maxBatch: number, maxPooledBytes: number, firstBatch = maxBatch) {
     this.device = device;
     this.maxBatch = maxBatch;
+    this.firstBatch = Math.min(firstBatch, maxBatch);
     this.maxPooledBytes = maxPooledBytes;
     this.uniformAlign = Math.max(256, device.limits.minUniformBufferOffsetAlignment ?? 256);
     device.addEventListener?.("uncapturederror", (ev: Event) => {
@@ -143,6 +155,10 @@ export class Runtime {
   /** Allocates a storage buffer; `forWrite` reports whether queue.writeBuffer is safe without a flush. */
   acquire(bytes: number): { buffer: GPUBuffer; bytes: number; writeHazard: boolean } {
     const cls = sizeClass(Math.max(4, bytes));
+    // Lists are sorted by descending id, so pop() returns the lowest id. A
+    // forward that allocates and frees in the same order then gets the same
+    // buffers every time (a LIFO pool permutes them from call to call), so
+    // bind groups keyed by buffer ids hit the cache.
     const list = this.pool.get(cls);
     const hit = list?.pop();
     if (hit) {
@@ -166,7 +182,10 @@ export class Runtime {
     }
     let list = this.pool.get(bytes);
     if (!list) this.pool.set(bytes, (list = []));
-    list.push({ buffer, releasedEpoch: this.epoch });
+    const id = this.bufferId(buffer);
+    let i = list.length;
+    while (i > 0 && list[i - 1]!.id < id) i--;
+    list.splice(i, 0, { buffer, id, releasedEpoch: this.epoch });
     this.stats.pooledBytes += bytes;
   }
 
@@ -278,6 +297,7 @@ export class Runtime {
       const entries: GPUBindGroupEntry[] = buffers.map((buffer, i) => ({ binding: i, resource: { buffer } }));
       if (ubuf) entries.push({ binding: buffers.length, resource: { buffer: ubuf, offset: 0, size: k.paramBytes } });
       bindGroup = this.device.createBindGroup({ layout: k.layout, entries });
+      this.stats.bindGroups++;
       // Keys embed buffer ids that are never reused, so stale entries only cost memory.
       if (this.bindGroups.size >= 4096) this.bindGroups.clear();
       this.bindGroups.set(key, bindGroup);
@@ -305,7 +325,7 @@ export class Runtime {
     this.pendingDispatches++;
     this.sinceRead++;
     this.stats.dispatches++;
-    if (this.pendingDispatches >= this.maxBatch) this.flush();
+    if (this.pendingDispatches >= (this.busy ? this.maxBatch : this.firstBatch)) this.flush();
   }
 
   get hasPending(): boolean {
@@ -334,6 +354,7 @@ export class Runtime {
     }
     this.uniformIdx = 0;
     this.device.queue.submit([this.encoder.finish()]);
+    if (this.pendingDispatches) this.busy = true;
     this.encoder = null;
     this.pass = null;
     this.pendingDispatches = 0;
@@ -363,6 +384,7 @@ export class Runtime {
       if (this.sleeping === p) this.sleeping = null;
     } else if (this.sleeping) await this.sleeping;
     await staging.mapAsync(MAP_READ, 0, copyBytes);
+    if (!this.pendingDispatches) this.busy = false;
     if (work) {
       if (this.waitMs.size > 256) this.waitMs.clear();
       this.waitMs.set(work, performance.now() - t0);
@@ -425,6 +447,7 @@ export class Runtime {
   async onIdle(): Promise<void> {
     this.flush();
     await this.device.queue.onSubmittedWorkDone();
+    if (!this.pendingDispatches) this.busy = false;
   }
 
   destroyAll(): void {
