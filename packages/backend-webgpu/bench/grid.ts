@@ -32,7 +32,7 @@ const cool = Number(env.COOL ?? 5);
 const fx = await loadReal("english");
 const encoderConfig = JSON.parse(await readFile(`${fx.model_dir}/encoder/config.json`, "utf8"));
 const file = readSafetensors(await readFile(`${fx.model_dir}/model.safetensors`));
-const setups: { name: string; backend: Backend; model: ReturnType<typeof loadDecisionModel> }[] = [];
+const setups: { name: string; backend: Backend; model: Awaited<ReturnType<typeof loadDecisionModel>> }[] = [];
 for (const name of which) {
   let backend: Backend;
   if (name === "mlx") {
@@ -42,7 +42,7 @@ for (const name of which) {
     const w = await import("../src/index.ts");
     backend = (await w.createWebGpuBackend({ profiling: profile })) as unknown as Backend;
   }
-  const model = loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
+  const model = await loadDecisionModel(backend, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype });
   setups.push({ name, backend, model });
 }
 

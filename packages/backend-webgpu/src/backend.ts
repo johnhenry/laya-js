@@ -2,8 +2,12 @@ import type { Backend, DType, HostTensor, Shape, Tensor } from "@johnhenry/tenso
 import { f32ToBf16Bits } from "@johnhenry/tensor-backend";
 import { Runtime, Storage, type CompiledKernel, type KernelSource } from "./runtime.ts";
 import {
+  ERF_HELPERS,
   GEMM_DEFAULT,
+  POW_HELPERS,
+  argReduceKernel,
   copyKernel,
+  cumsumKernel,
   gatherKernel,
   gegluKernel,
   gemmKernel,
@@ -243,7 +247,12 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
 
   // ---- transfer ------------------------------------------------------------
 
-  fromHost(h: HostTensor): WebGpuTensor {
+  /** Uploads via `queue.writeBuffer`, which copies the host data at call time; resolves once queued. */
+  async fromHost(h: HostTensor): Promise<WebGpuTensor> {
+    return this.upload(h);
+  }
+
+  private upload(h: HostTensor): WebGpuTensor {
     const n = numel(h.shape);
     if (h.data.length !== n) throw new RangeError(`fromHost: ${h.data.length} values for shape [${h.shape}]`);
     const k = this.kind(h.dtype);
@@ -374,7 +383,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     return out;
   }
 
-  private nary(op: string, expr: string, xs: WebGpuTensor[], outDtype: DType, c: CType, s = 0): WebGpuTensor {
+  private nary(op: string, expr: string, xs: WebGpuTensor[], outDtype: DType, c: CType, s = 0, helpers = ""): WebGpuTensor {
     for (const x of xs) this.live(x);
     const shape = broadcastShapes(...xs.map((x) => x.shape));
     const n = numel(shape);
@@ -393,7 +402,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     });
     const ok = this.kind(outDtype);
     const key = `nary:${op}:${ins.map((i) => (i.kind.st + (i.kind.bf16 ? "b" : "") + (i.flat ? "f" : "s"))).join(",")}:${ok.st}${ok.bf16 ? "b" : ""}:${c}`;
-    this.run(key, () => naryKernel(op, expr, ins, ok, c), [...xs.map((x) => x.storage.buffer), out.storage.buffer], params, this.flatGroups(n));
+    this.run(key, () => naryKernel(op, expr, ins, ok, c, helpers), [...xs.map((x) => x.storage.buffer), out.storage.buffer], params, this.flatGroups(n));
     return out;
   }
 
@@ -509,9 +518,9 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     return this.nary("where", c === "f32" ? "select(c, b, a != 0.0)" : "select(c, b, a != 0)", [cond, a, b], out, c);
   }
 
-  private unaryFloat(op: string, expr: string, x: WebGpuTensor, s = 0): WebGpuTensor {
+  private unaryFloat(op: string, expr: string, x: WebGpuTensor, s = 0, helpers = ""): WebGpuTensor {
     const out = isFloat(x.dtype) ? x.dtype : "f32";
-    return this.nary(op, expr, [x], out, "f32", s);
+    return this.nary(op, expr, [x], out, "f32", s, helpers);
   }
   scale(x: WebGpuTensor, s: number): WebGpuTensor {
     if (x.dtype === "i32") return this.nary("scale", "a * P.s", [x], "f32", "f32", s);
@@ -534,11 +543,12 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     return { a, outer: numel(x.shape.slice(0, a)), R: x.shape[a]!, inner: numel(x.shape.slice(a + 1)) };
   }
 
-  private reduce(op: "sum" | "max", x: WebGpuTensor, axis: number, keepDims = false): WebGpuTensor {
+  private reduce(op: "sum" | "max" | "min" | "mean", x: WebGpuTensor, axis: number, keepDims = false): WebGpuTensor {
     this.live(x);
     const { a, outer, R, inner } = this.axis3(x, axis);
     const shape = keepDims ? x.shape.map((d, i) => (i === a ? 1 : d)) : x.shape.filter((_, i) => i !== a);
-    const outDtype: DType = op === "sum" && (x.dtype === "bool" || x.dtype === "i32") ? "i32" : x.dtype;
+    const outDtype: DType =
+      op === "mean" ? (isFloat(x.dtype) ? x.dtype : "f32") : op === "sum" && (x.dtype === "bool" || x.dtype === "i32") ? "i32" : x.dtype;
     const out = this.alloc(shape, outDtype);
     const n = outer * inner;
     if (!n || !R) return out;
@@ -832,6 +842,79 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     this.run(`meanpool:${keyOf(xk, mk)}`, () => meanPoolKernel(xk, mk), [x.storage.buffer, mask.storage.buffer, out.storage.buffer], {
       n, D, L, ox: x.offset, om: mask.offset,
     }, this.flatGroups(n));
+    return out;
+  }
+
+  // ---- general numerics (optional contract ops) -------------------------------
+
+  private compare(op: string, cmp: string, a: WebGpuTensor, b: WebGpuTensor): WebGpuTensor {
+    const c: CType = isFloat(promote(a.dtype, b.dtype)) ? "f32" : "i32";
+    const one = c === "f32" ? "1.0" : "1", zero = c === "f32" ? "0.0" : "0";
+    return this.nary(op, `select(${zero}, ${one}, ${cmp})`, [a, b], "bool", c);
+  }
+  equal(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("eq", "a == b", a, b); }
+  notEqual(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("ne", "a != b", a, b); }
+  less(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("lt", "a < b", a, b); }
+  lessEqual(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("le", "a <= b", a, b); }
+  greater(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("gt", "a > b", a, b); }
+  greaterEqual(a: WebGpuTensor, b: WebGpuTensor) { return this.compare("ge", "a >= b", a, b); }
+  logicalAnd(a: WebGpuTensor, b: WebGpuTensor) {
+    const c: CType = isFloat(promote(a.dtype, b.dtype)) ? "f32" : "i32";
+    return this.compare("and", c === "f32" ? "a != 0.0 && b != 0.0" : "a != 0 && b != 0", a, b);
+  }
+  logicalOr(a: WebGpuTensor, b: WebGpuTensor) {
+    const c: CType = isFloat(promote(a.dtype, b.dtype)) ? "f32" : "i32";
+    return this.compare("or", c === "f32" ? "a != 0.0 || b != 0.0" : "a != 0 || b != 0", a, b);
+  }
+  logicalNot(x: WebGpuTensor) {
+    const c: CType = isFloat(x.dtype) ? "f32" : "i32";
+    return this.nary("not", c === "f32" ? "select(0.0, 1.0, a == 0.0)" : "select(0, 1, a == 0)", [x], "bool", c);
+  }
+  sqrt(x: WebGpuTensor) { return this.unaryFloat("sqrt", "sqrt(a)", x); }
+  rsqrt(x: WebGpuTensor) { return this.unaryFloat("rsqrt", "inverseSqrt(a)", x); }
+  /** Clamped: tanh(±15) is ±1 in f32, and some drivers overflow exp inside tanh for large |x|. */
+  tanh(x: WebGpuTensor) { return this.unaryFloat("tanh", "tanh(clamp(a, -15.0, 15.0))", x); }
+  sigmoid(x: WebGpuTensor) { return this.unaryFloat("sigmoid", "1.0 / (1.0 + exp(-a))", x); }
+  erf(x: WebGpuTensor) { return this.unaryFloat("erf", "erf_mp(a)", x, 0, ERF_HELPERS); }
+  pow(a: WebGpuTensor, b: WebGpuTensor) {
+    let out = promote(a.dtype, b.dtype);
+    if (!isFloat(out)) out = "f32";
+    return this.nary("pow", "pow_(a, b)", [a, b], out, "f32", 0, POW_HELPERS);
+  }
+  neg(x: WebGpuTensor) {
+    if (isFloat(x.dtype)) return this.unaryFloat("neg", "-a", x);
+    return this.nary("neg", "-a", [x], "i32", "i32");
+  }
+  abs(x: WebGpuTensor) {
+    if (isFloat(x.dtype)) return this.unaryFloat("abs", "abs(a)", x);
+    return this.nary("abs", "abs(a)", [x], "i32", "i32");
+  }
+  mean(x: WebGpuTensor, axis: number, keepDims?: boolean) { return this.reduce("mean", x, axis, keepDims); }
+  min(x: WebGpuTensor, axis: number, keepDims?: boolean) { return this.reduce("min", x, axis, keepDims); }
+
+  private argReduce(op: "argmax" | "argmin", x: WebGpuTensor, axis: number, keepDims = false): WebGpuTensor {
+    this.live(x);
+    const { a, outer, R, inner } = this.axis3(x, axis);
+    const shape = keepDims ? x.shape.map((d, i) => (i === a ? 1 : d)) : x.shape.filter((_, i) => i !== a);
+    const out = this.alloc(shape, "i32");
+    const n = outer * inner;
+    if (!n || !R) return out;
+    const ik = this.kind(x.dtype);
+    this.run(`${op}:${keyOf(ik)}`, () => argReduceKernel(op, ik), [x.storage.buffer, out.storage.buffer], { n, R, inner, off: x.offset }, this.flatGroups(n));
+    return out;
+  }
+  argmax(x: WebGpuTensor, axis: number, keepDims?: boolean) { return this.argReduce("argmax", x, axis, keepDims); }
+  argmin(x: WebGpuTensor, axis: number, keepDims?: boolean) { return this.argReduce("argmin", x, axis, keepDims); }
+
+  cumsum(x: WebGpuTensor, axis: number): WebGpuTensor {
+    this.live(x);
+    const { outer, R, inner } = this.axis3(x, axis);
+    const outDtype: DType = isFloat(x.dtype) ? x.dtype : "i32";
+    const out = this.alloc(x.shape, outDtype);
+    const n = outer * inner;
+    if (!n || !R) return out;
+    const ik = this.kind(x.dtype), ok = this.kind(outDtype);
+    this.run(`cumsum:${keyOf(ik, ok)}`, () => cumsumKernel(ik, ok), [x.storage.buffer, out.storage.buffer], { n, R, inner, off: x.offset }, this.flatGroups(n));
     return out;
   }
 }

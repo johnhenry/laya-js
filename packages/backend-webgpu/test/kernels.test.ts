@@ -100,7 +100,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     for (const [M, N, K] of [[130, 200, 256], [37, 45, 70], [1, 3072, 1024], [33, 100, 256], [50, 96, 128]] as const) {
       const x = rnd(M * K), w = rnd(N * K, 0.05), bias = rnd(N);
       const want = refLinear(x, w, bias, M, N, K);
-      const X = up(bk, [M, K], x), W = up(bk, [N, K], w), Bi = up(bk, [N], bias);
+      const X = await up(bk, [M, K], x), W = await up(bk, [N, K], w), Bi = await up(bk, [N], bias);
       close(await rd(bk, bk.linear(X, W, Bi)), want, 1e-4, 1e-4, `linear f32 ${M}x${N}x${K}`);
       const y16 = bk.linear(bk.cast(X, "f16"), bk.cast(W, "f16"), bk.cast(Bi, "f16"));
       assert.equal(y16.dtype, "f16");
@@ -115,8 +115,8 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
       for (const [M, N, K] of [[93, 200, 256], [300, 130, 268], [65, 64, 64]] as const) {
         const x = rnd((M + 1) * K), w = rnd(N * K, 0.05), bias = rnd(N);
         const want = refLinear(x.subarray(K), w, bias, M, N, K);
-        const X = bk.slice(up(bk, [M + 1, K], x), [1, 0], [M + 1, K]); // offset view
-        const W = up(bk, [N, K], w), Bi = up(bk, [N], bias);
+        const X = bk.slice(await up(bk, [M + 1, K], x), [1, 0], [M + 1, K]); // offset view
+        const W = await up(bk, [N, K], w), Bi = await up(bk, [N], bias);
         const cfgs: [string, GemmConfig][] = [
           ["default", saved],
           ["direct", { ...saved, sg: null, skinny: [] }],
@@ -139,7 +139,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     for (const hd of [8, 6]) {
       const [B, L, nh] = [2, 5, 3];
       const x = rnd(B * L * 3 * nh * hd);
-      const X = up(bk, [B, L, 3, nh, hd], x);
+      const X = await up(bk, [B, L, 3, nh, hd], x);
       const perm = [2, 0, 3, 1, 4];
       const shape = perm.map((p) => [B, L, 3, nh, hd][p]!);
       const want = new Float32Array(x.length);
@@ -152,16 +152,16 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
       close(await rd(bk, bk.transpose(bk.cast(X, "f16"), perm)), want, 2e-3, 2e-3, `transpose f16 hd=${hd}`);
     }
     const a = rnd(6), c = rnd(9);
-    close(await rd(bk, bk.concat([up(bk, [2, 3], a), up(bk, [3, 3], c)], 0)), Float32Array.from([...a, ...c]), 0, 0, "concat axis 0");
+    close(await rd(bk, bk.concat([await up(bk, [2, 3], a), await up(bk, [3, 3], c)], 0)), Float32Array.from([...a, ...c]), 0, 0, "concat axis 0");
   });
 
   t.it("linear on a sliced (offset) view", async () => {
     const bk = await get();
     const M = 8, N = 64, K = 64;
     const x = rnd(2 * M * K), w = rnd(N * K, 0.1);
-    const X = up(bk, [2, M, K], x);
+    const X = await up(bk, [2, M, K], x);
     const second = bk.slice(X, [1, 0, 0], [2, M, K]); // free view with offset M*K
-    const got = await rd(bk, bk.linear(second, up(bk, [N, K], w)));
+    const got = await rd(bk, bk.linear(second, await up(bk, [N, K], w)));
     close(got, refLinear(x.subarray(M * K), w, null, M, N, K), 1e-4, 1e-4, "offset view");
   });
 
@@ -169,7 +169,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const bk = await get();
     for (const [M, K, N] of [[70, 64, 96], [33, 17, 29]] as const) {
       const a = rnd(3 * M * K), bb = rnd(K * N);
-      const got = await rd(bk, bk.matmul(up(bk, [3, M, K], a), up(bk, [1, K, N], bb)));
+      const got = await rd(bk, bk.matmul(await up(bk, [3, M, K], a), await up(bk, [1, K, N], bb)));
       const want = new Float32Array(3 * M * N);
       const bt = new Float32Array(N * K);
       for (let k = 0; k < K; k++) for (let n = 0; n < N; n++) bt[n * K + k] = bb[k * N + n]!;
@@ -177,7 +177,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
       close(got, want, 1e-4, 1e-4, `matmul ${M}x${K}x${N}`);
       // Batch-broadcast on the left operand ([1,M,K] @ [3,K,N]).
       const b3 = rnd(3 * K * N);
-      const got2 = await rd(bk, bk.matmul(up(bk, [1, M, K], a.subarray(0, M * K)), up(bk, [3, K, N], b3)));
+      const got2 = await rd(bk, bk.matmul(await up(bk, [1, M, K], a.subarray(0, M * K)), await up(bk, [3, K, N], b3)));
       for (let i = 0; i < 3; i++) {
         const bti = new Float32Array(N * K);
         for (let k = 0; k < K; k++) for (let n = 0; n < N; n++) bti[n * K + k] = b3[i * K * N + k * N + n]!;
@@ -196,8 +196,8 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
         for (let j = 0; j < L; j++) mask[(bb * L + i) * L + j] = Math.abs(i - j) <= W && j < L - bb * 10 ? 1 : 0;
     const want = refSdpa(q, k, v, mask, B, H, L, D, 0.125);
     const shape = [B, H, L, D];
-    const M = bk.fromHost({ dtype: "bool", shape: [B, 1, L, L], data: mask });
-    const Q = up(bk, shape, q), K = up(bk, shape, k), V = up(bk, shape, v);
+    const M = await bk.fromHost({ dtype: "bool", shape: [B, 1, L, L], data: mask });
+    const Q = await up(bk, shape, q), K = await up(bk, shape, k), V = await up(bk, shape, v);
     close(await rd(bk, bk.sdpa(Q, K, V, M, 0.125)), want, 1e-4, 1e-4, "sdpa f32");
     const y16 = bk.sdpa(bk.cast(Q, "f16"), bk.cast(K, "f16"), bk.cast(V, "f16"), M, 0.125);
     close(await rd(bk, y16), want, 2e-2, 2e-2, "sdpa f16");
@@ -207,7 +207,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const bk = await get();
     const R = 3, D = 5000;
     const x = rnd(R * D, 4);
-    const X = up(bk, [R, D], x);
+    const X = await up(bk, [R, D], x);
     const sm = await rd(bk, bk.softmax(X, -1));
     const ln = await rd(bk, bk.layerNorm(X, null, null, 1e-5));
     for (let r = 0; r < R; r++) {
@@ -225,13 +225,13 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const bk = await get();
     for (const n of [1000, 5000]) {
       const x = rnd(2 * n);
-      const got = await rd(bk, bk.sort(up(bk, [2, n], x), -1));
+      const got = await rd(bk, bk.sort(await up(bk, [2, n], x), -1));
       const want = new Float32Array(2 * n);
       for (let r = 0; r < 2; r++) want.set(Float32Array.from(x.subarray(r * n, (r + 1) * n)).sort(), r * n);
       close(got, want, 0, 0, `sort n=${n}`);
     }
     const x = rnd(5 * 3);
-    const got = await rd(bk, bk.sort(up(bk, [5, 3], x), 0));
+    const got = await rd(bk, bk.sort(await up(bk, [5, 3], x), 0));
     for (let c = 0; c < 3; c++) {
       const col = Float32Array.from([0, 1, 2, 3, 4].map((r) => x[r * 3 + c]!)).sort();
       close([0, 1, 2, 3, 4].map((r) => got[r * 3 + c]!), col, 0, 0, "sort axis 0");
@@ -242,32 +242,44 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const bk = await get();
     const n = 65536 * 256 + 1000;
     const x = rnd(n);
-    const got = await rd(bk, bk.add(up(bk, [n], x), up(bk, [1], new Float32Array([1]))));
+    const got = await rd(bk, bk.add(await up(bk, [n], x), await up(bk, [1], new Float32Array([1]))));
     for (const i of [0, 1, 65535 * 256, n - 1]) assert.ok(Math.abs(got[i]! - (x[i]! + 1)) < 1e-6, `at ${i}`);
   });
 
   t.it("gelu matches exact erf GELU to ~1e-6 in f32", async () => {
     const bk = await get();
     const x = Float32Array.from({ length: 16001 }, (_, i) => -8 + i * 0.001);
-    const got = await rd(bk, bk.gelu(up(bk, [x.length], x)));
+    const got = await rd(bk, bk.gelu(await up(bk, [x.length], x)));
     let worst = 0;
     for (let i = 0; i < x.length; i++) worst = Math.max(worst, Math.abs(got[i]! - 0.5 * x[i]! * (1 + erfRef(x[i]! / Math.SQRT2))));
     assert.ok(worst < 2e-6, `max abs err ${worst}`);
   });
 
+  t.it("erf (canonical math-plus algorithm) is within 2.5e-7 of the f64 erf over [-8, 8]", async () => {
+    const bk = await get();
+    const x = Float32Array.from({ length: 16001 }, (_, i) => -8 + i * 0.001);
+    const got = await rd(bk, bk.erf(await up(bk, [x.length], x)));
+    let worst = 0, at = 0;
+    for (let i = 0; i < x.length; i++) {
+      const d = Math.abs(got[i]! - erfRef(x[i]!));
+      if (d > worst) { worst = d; at = x[i]!; }
+    }
+    assert.ok(worst < 2.5e-7, `max abs err ${worst} at ${at}`);
+  });
+
   t.it("dtype storage: bf16 round-trip, f16 odd-offset read, i32/bool casts, reshape is a view", async () => {
     const bk = await get();
     const bits = Uint16Array.from([0x3f80, 0xc000, 0x3e20, 0x7f80]);
-    const t = bk.fromHost({ dtype: "bf16", shape: [4], data: bits });
+    const t = await bk.fromHost({ dtype: "bf16", shape: [4], data: bits });
     assert.deepEqual([...((await bk.read(t)).data as Uint16Array)], [...bits]);
-    const h = bk.cast(up(bk, [5], Float32Array.from([1, 2, 3, 4, 5])), "f16");
+    const h = bk.cast(await up(bk, [5], Float32Array.from([1, 2, 3, 4, 5])), "f16");
     const odd = bk.slice(h, [1], [4]);
     close(await rd(bk, odd), [2, 3, 4], 0, 0, "f16 odd offset");
-    const i = bk.fromHost({ dtype: "i32", shape: [3], data: Int32Array.from([-2, 0, 7]) });
+    const i = await bk.fromHost({ dtype: "i32", shape: [3], data: Int32Array.from([-2, 0, 7]) });
     assert.deepEqual([...(await bk.read(bk.cast(i, "bool"))).data], [1, 0, 1]);
     assert.deepEqual([...(await bk.read(bk.add(i, i))).data], [-4, 0, 14]);
     const before = bk.rt.stats.dispatches;
-    const r = bk.reshape(up(bk, [2, 3], rnd(6)), [3, -1]);
+    const r = bk.reshape(await up(bk, [2, 3], rnd(6)), [3, -1]);
     assert.deepEqual(r.shape, [3, 2]);
     assert.equal(bk.rt.stats.dispatches, before);
   });
@@ -276,10 +288,10 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const bk = await get();
     const backing = Float32Array.from([9, 9, 1, 2, 3, 4, 9]);
     const view = new Float32Array(backing.buffer, 8, 4);
-    const x = bk.fromHost({ dtype: "f32", shape: [4], data: view });
+    const x = await bk.fromHost({ dtype: "f32", shape: [4], data: view });
     close(await rd(bk, x), [1, 2, 3, 4], 0, 0, "offset view");
     const h = new Float16Array([7, 7, 7, 0.5, 1.5, 2.5]).subarray(3);
-    const y = bk.fromHost({ dtype: "f16", shape: [3], data: h });
+    const y = await bk.fromHost({ dtype: "f16", shape: [3], data: h });
     close(await rd(bk, bk.cast(y, "f32")), [0.5, 1.5, 2.5], 0, 0, "f16 offset view");
   });
 });

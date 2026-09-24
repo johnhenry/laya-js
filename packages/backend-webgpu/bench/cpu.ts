@@ -17,7 +17,7 @@ const b = await createWebGpuBackend(process.env.SLEEP ? { sleepWhileWaiting: pro
 const fx = await loadReal("english");
 const encoderConfig = JSON.parse(await readFile(`${fx.model_dir}/encoder/config.json`, "utf8"));
 const file = readSafetensors(await readFile(`${fx.model_dir}/model.safetensors`));
-const model = loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype: "f16" });
+const model = await loadDecisionModel(b, { encoderConfig, agentConfig: fx.config as AgentConfig, weights: safetensorsWeights(file), dtype: "f16" });
 const M = 4;
 const batch: Batch = {
   size: B, length: L, markerCount: M, inputIds: Int32Array.from({ length: B * L }, (_, i) => 1000 + ((i * 7919) % 30000)),
@@ -31,7 +31,7 @@ const d0 = b.rt.stats.dispatches, s0 = b.rt.stats.submits;
 const c0 = process.cpuUsage();
 for (let i = 0; i < n; i++) {
   const t0 = performance.now();
-  const r = model.forwardTensors(batch);
+  const r = await model.forwardTensors(batch);
   const t1 = performance.now();
   await model.readOutputs(r);
   const t2 = performance.now();

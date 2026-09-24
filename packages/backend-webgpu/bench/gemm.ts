@@ -22,10 +22,12 @@ async function time(label: string, flops: number, fn: () => WebGpuTensor) {
 }
 
 const M = 16 * 128, K = 1024, N = 3072;
-const x32 = b.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K) });
-const w32 = b.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.03) });
-const q32 = b.fromHost({ dtype: "f32", shape: [16, 128, 1024], data: rnd(16 * 128 * 1024) });
-const k32 = b.fromHost({ dtype: "f32", shape: [16, 1024, 128], data: rnd(16 * 1024 * 128) });
+const [x32, w32, q32, k32] = await Promise.all([
+  b.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K) }),
+  b.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.03) }),
+  b.fromHost({ dtype: "f32", shape: [16, 128, 1024], data: rnd(16 * 128 * 1024) }),
+  b.fromHost({ dtype: "f32", shape: [16, 1024, 128], data: rnd(16 * 1024 * 128) }),
+]);
 const dts = b.supports("f16") ? (["f32", "f16"] as const) : (["f32"] as const);
 const T = (t: WebGpuTensor, dt: "f32" | "f16") => (dt === "f32" ? t : b.cast(t, dt));
 const configs: [string, GemmConfig][] = [["default", GEMM_DEFAULT]];

@@ -9,16 +9,16 @@ const b = await createWebGpuBackend();
 if (process.env.SKINNY) b.gemmConfig = { ...b.gemmConfig, skinny: [{ maxM: 1e9, ...JSON.parse(process.env.SKINNY) }] };
 if (process.env.NOSKINNY) b.gemmConfig = { ...b.gemmConfig, skinny: [] };
 const rnd = (n: number, s = 1) => Float32Array.from({ length: n }, () => (Math.random() * 2 - 1) * s);
-const T = (shape: number[], s = 1) => b.cast(b.fromHost({ dtype: "f32", shape, data: rnd(shape.reduce((a, c) => a * c, 1), s) }), dt);
+const T = async (shape: number[], s = 1) => b.cast(await b.fromHost({ dtype: "f32", shape, data: rnd(shape.reduce((a, c) => a * c, 1), s) }), dt);
 const H = 1024, nh = 16, hd = 64;
-const x = T([1, L, H]);
-const w = { qkv: T([3 * H, H], 0.03), o: T([H, H], 0.03), wi: T([5248, H], 0.03), wo: T([H, 2624], 0.03), ln: T([H]) };
-const bias = T([3 * H]);
+const x = await T([1, L, H]);
+const w = { qkv: await T([3 * H, H], 0.03), o: await T([H, H], 0.03), wi: await T([5248, H], 0.03), wo: await T([H, 2624], 0.03), ln: await T([H]) };
+const bias = await T([3 * H]);
 const qkv = b.linear(x, w.qkv);
-const q = T([1, nh, L, hd]);
-const mask = b.fromHost({ dtype: "bool", shape: [1, 1, L, L], data: new Uint8Array(L * L).fill(1) });
-const m = T([1, L, 5248]);
-const g = T([1, L, 2624]);
+const q = await T([1, nh, L, hd]);
+const mask = await b.fromHost({ dtype: "bool", shape: [1, 1, L, L], data: new Uint8Array(L * L).fill(1) });
+const m = await T([1, L, 5248]);
+const g = await T([1, L, 2624]);
 
 async function time(name: string, fn: () => WebGpuTensor, bytes = 0) {
   for (let i = 0; i < 5; i++) b.dispose(fn());

@@ -71,8 +71,8 @@ async function gemmBench(): Promise<void> {
   const b = await createWebGpuBackend();
   const M = 2048, K = 1024, N = 3072;
   const rnd = (n: number, s = 1) => Float32Array.from({ length: n }, () => (Math.random() * 2 - 1) * s);
-  const x = b.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K) });
-  const w = b.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.03) });
+  const x = await b.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K) });
+  const w = await b.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.03) });
   for (const dt of b.supports("f16") ? (["f32", "f16"] as const) : (["f32"] as const)) {
     const xx = dt === "f32" ? x : b.cast(x, dt), ww = dt === "f32" ? w : b.cast(w, dt);
     for (let i = 0; i < 3; i++) b.dispose(b.linear(xx, ww));

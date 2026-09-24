@@ -10,15 +10,15 @@ const b = await createWebGpuBackend({ ...(process.env.SGMAT === "1" ? { subgroup
 const Ms = (process.env.MS ?? "16,33,64,93,128,192,279,384,512,1024,1488,2048").split(",").map(Number);
 const shapes: [number, number][] = [[3072, 1024], [1024, 1024], [5248, 1024], [1024, 2624]];
 const rnd = (n: number, s = 1) => Float32Array.from({ length: n }, () => (Math.random() * 2 - 1) * s);
-const f16 = (shape: number[], s = 1) => {
-  const t = b.fromHost({ dtype: "f32", shape, data: rnd(shape.reduce((a, c) => a * c, 1), s) });
+const f16 = async (shape: number[], s = 1) => {
+  const t = await b.fromHost({ dtype: "f32", shape, data: rnd(shape.reduce((a, c) => a * c, 1), s) });
   const h = b.cast(t, "f16");
   b.dispose(t);
   return h;
 };
-const W = shapes.map(([N, K]) => f16([N, K], 0.03));
+const W = await Promise.all(shapes.map(([N, K]) => f16([N, K], 0.03)));
 const maxM = Math.max(...Ms);
-const X = [1024, 2624].map((K) => f16([maxM, K]));
+const X = await Promise.all([1024, 2624].map((K) => f16([maxM, K])));
 
 const configs: [string, GemmConfig][] = [["default", GEMM_DEFAULT]];
 const extra = (process.env.CONFIGS ?? "direct,tiled").split(",");
