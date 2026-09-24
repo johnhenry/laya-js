@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- 67e77a4: Track `@johnhenry/math-plus-tensor-cpu@^0.2.0` (adds the shared tensor-core ↔ host conversion helpers; the re-exported backend is unchanged).
+
 ## 0.3.0
 
 ### Minor Changes
