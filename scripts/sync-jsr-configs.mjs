@@ -14,6 +14,11 @@
  *     - a workspace sibling that is itself on JSR  → `jsr:@johnhenry/<name>@^x`
  *     - `@johnhenry/math-plus-*` (published to JSR by math-plus) → `jsr:`
  *     - anything else (incl. siblings that are npm-only) → `npm:<name>@<range>`
+ *   Deno/JSR accept ONE comparator per specifier (`^1.2.3`, `~1.2`, `1.2.3`,
+ *   `1.x`, `*`); an npm union like `^0.0.0 || ^0.1.0` is rejected at publish
+ *   ("Invalid package specifier ... Unexpected character", math-plus release
+ *   run 35967422091), as are `>=a <b` ranges. `jsrRange` keeps the highest
+ *   alternative of a `||` union and refuses anything else it cannot express.
  * - `publish.include` is `src` plus every non-build entry of the npm
  *   `files` list (fixtures, NOTICE, CHANGELOG.md), README.md and LICENSE.
  *
@@ -30,6 +35,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 
 const PACKAGE_DIRS = [
   "packages/backend-cpu",
+  "packages/backend-mlx",
   "packages/backend-webgpu",
   "packages/hf-cache",
   "packages/langdetect-lite",
@@ -43,7 +49,6 @@ const PACKAGE_DIRS = [
 
 /** Packages deliberately kept off JSR, with the reason (read by test/manifest-drift.test.ts). */
 export const JSR_EXCLUDED = {
-  "packages/backend-mlx": "native FFI (bun:ffi / koffi + libmlxc.dylib); no Deno.dlopen adapter yet",
   "packages/backend-mlx-darwin-arm64": "npm platform package of native binaries (os/cpu-gated optionalDependency)",
   "packages/laya": "runtime split via package.json `imports` (#io browser/node), which JSR cannot express",
   "packages/laya-cli": "Node/Bun command-line tool (bin) on top of @johnhenry/laya",
@@ -102,12 +107,42 @@ export function internalImports(pkg) {
   return out;
 }
 
+/** A version requirement Deno/JSR accept inside a `jsr:`/`npm:` specifier: one ^/~/exact/partial comparator, or `*`. */
+export const SPECIFIER_RANGE = /^(?:\*|[\^~]?\d+(?:\.(?:\d+|x|\*)){0,2}(?:-[0-9A-Za-z.-]+)?)$/;
+
+function rangeBase(r) {
+  return r
+    .replace(/^[\^~]/, "")
+    .split("-")[0]
+    .split(".")
+    .map((p) => (p === "x" || p === "*" ? Number.POSITIVE_INFINITY : Number(p)));
+}
+
+/**
+ * The package.json range as a Deno/JSR specifier range. A `||` union keeps
+ * its highest alternative (`^0.0.0 || ^0.1.0 || ^0.2.0` → `^0.2.0`): the
+ * lower alternatives only exist for npm dedupe across pre-1.0 minors, and
+ * JSR resolves the newest match anyway.
+ */
+export function jsrRange(range) {
+  const alts = String(range).split("||").map((r) => r.trim());
+  for (const a of alts) {
+    if (!SPECIFIER_RANGE.test(a)) throw new Error(`range "${range}": "${a}" is not a single ^/~/exact comparator, which a jsr:/npm: specifier requires`);
+  }
+  return alts.reduce((best, a) => {
+    const x = rangeBase(a);
+    const y = rangeBase(best);
+    for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0) ? a : best;
+    return best;
+  });
+}
+
 function buildImports(pkg, onJsr) {
   const deps = { ...pkg.dependencies, ...pkg.optionalDependencies, ...pkg.peerDependencies };
   const imports = internalImports(pkg);
   for (const [name, range] of Object.entries(deps).sort(([a], [b]) => a.localeCompare(b))) {
     const jsr = onJsr.has(name) || EXTERNAL_JSR_PREFIXES.some((p) => name.startsWith(p));
-    imports[name] = jsr ? `jsr:${name}@${range}` : `npm:${name}@${range}`;
+    imports[name] = `${jsr ? "jsr" : "npm"}:${name}@${jsrRange(range)}`;
   }
   return imports;
 }
