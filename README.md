@@ -286,9 +286,11 @@ own tensor library.
   safetensors implementation in either repo. `@johnhenry/tensor-backend`'s
   dtype names and `HostTensor` layout match `@johnhenry/math-plus-tensor-core`,
   so `toMathPlusArgs` hands results to `Tensor.fromTypedArray` without a copy.
-  math-plus's `tensor-webgpu` is a general tensor library; this repo's
-  `backend-webgpu` implements only the inference op contract and is not a
-  dependency either way.
+  The two repos share devices in both directions (math-plus RFC 0001):
+  `@johnhenry/backend-cpu` re-exports math-plus's
+  `@johnhenry/math-plus-tensor-cpu`, while math-plus's `tensor-webgpu` (0.3+)
+  and `tensor-mlx` are device facades built on this repo's `backend-webgpu`
+  and `backend-mlx`. Each construct has one implementation, in one repo.
 - **[`@johnhenry/math`](https://github.com/johnhenry/math)** — math-plus's
   scalar/CAS sibling. No direct dependency from laya-js; listed so the
   family map stays complete.
