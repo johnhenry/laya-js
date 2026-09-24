@@ -74,12 +74,23 @@ WebGPU runs on Node through Dawn; Bun is within ±3%.
 
 | L | 16 | 33 | 64 | 93 | 128 | 256 | 512 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| B=1 MLX (JS) | 20.0 | 22.4 | 23.0 | 39.5 | 41.7 | 80.0 | 150.6 |
-| B=1 WebGPU | 15.1 | 25.1 | 39.3 | 57.4 | 73.5 | 139.7 | 278.9 |
-| B=3 MLX (JS) | 25.1 | 43.5 | 59.3 | 92.2 | 108.4 | 212.8 | 436.6 |
-| B=3 WebGPU | 31.5 | 69.6 | 105.7 | 145.2 | 193.3 | 385.0 | 804.9 |
-| B=16 MLX (JS) | 81.7 | 159.5 | 269.6 | 408.2 | 537.2 | 1096 | 2297 |
-| B=16 WebGPU | 130.4 | 264.1 | 471.6 | 696.9 | 954.9 | 1980 | 4260 |
+| B=1 MLX (JS) | 20.0 | 23.6 | 23.6 | 41.7 | 39.0 | 80.4 | 154.4 |
+| B=1 WebGPU | 14.6 | 24.1 | 37.9 | 53.8 | 67.2 | 130.2 | 252.2 |
+| B=1 WebGPU 0.2.0 | 15.4 | 25.7 | 39.4 | 59.0 | 77.0 | 149.3 | 288.2 |
+| B=3 MLX (JS) | 25.4 | 43.7 | 62.1 | 95.5 | 107.4 | 220.9 | 442.6 |
+| B=3 WebGPU | 30.8 | 67.0 | 90.6 | 141.7 | 175.1 | 354.1 | 727.3 |
+| B=3 WebGPU 0.2.0 | 32.1 | 71.1 | 106.0 | 148.3 | 199.6 | 398.7 | 836.0 |
+| B=16 MLX (JS) | 79.7 | 159.4 | 271.7 | 413.2 | 545.9 | 1118 | 2367 |
+| B=16 WebGPU | 119.6 | 252.5 | 435.7 | 653.4 | 886.3 | 1821 | 3843 |
+| B=16 WebGPU 0.2.0 | 129.7 | 279.0 | 488.7 | 723.6 | 992.2 | 2067 | 4440 |
+
+All three rows of a block come from one Node process, interleaved cell by cell
+(`BACKEND=webgpu-main,webgpu,mlx`; "0.2.0" is the unmodified backend from
+`main`, copied to `packages/backend-webgpu/.base/`). WebGPU is now 4–15% faster
+than 0.2.0: faster subgroup-matrix GEMM tiles (≈1.95 instead of ≈1.75 TFLOP/s
+f16 for large M, see the backend README for per-shape GFLOP/s), a buffer pool
+that makes every bind group a cache hit, an earlier first submit, and faster
+bool uploads and RoPE.
 
 **Python laya-mlx reference:** a full `predict()` on the same machine (L=93,
 B=1, 30 runs after warmup) has a P50 of **46.2 ms**. The JS MLX `predict()`
@@ -87,15 +98,22 @@ adds about 1 ms of prompt building and result formatting on top of the 39.5 ms
 forward pass. The native path is therefore at parity with Python: both call the
 same MLX kernels, and graph building over FFI costs about 1.4 ms per pass.
 
-**Why WebGPU is 1.5–1.9× slower than MLX at L ≥ 64:** at those sizes the linear
-layers are about 85% of GPU time.
+**Why WebGPU is still 1.3–1.7× slower than MLX at L ≥ 64:** at those sizes
+the linear layers are about 85% of GPU time (B=16, L=256: 1545 of 1827 ms, at
+≈1.85 TFLOP/s; MLX's GEMM runs at ≈3 TFLOP/s, which accounts for ≈600 of the
+≈700 ms gap; attention is most of the rest, 169 ms).
 - WGSL cannot reach Apple's matrix units directly. Dawn's experimental subgroup
-  matrices get f16 GEMMs to about 1.75 TFLOP/s, against about 3 TFLOP/s for
-  MLX.
+  matrices can: a loop of multiply-accumulates alone runs at 3.2 TFLOP/s on
+  the M2, but loading each multiply's 8×8 fragments from workgroup memory, as
+  a GEMM must, caps it at 2.0–2.45 TFLOP/s. The f16 GEMM reaches ≈1.95.
 - Dawn only offers f16 accumulation for f16 inputs. That would break parity, so
-  the kernel accumulates in f32.
+  the kernel converts f16 tiles to f32 in workgroup memory (twice the traffic
+  of MLX's half tiles) and accumulates in f32.
 - In browsers without the subgroup-matrix feature (and in Deno), the tiled WGSL
   kernel is used instead, at about 1.3 TFLOP/s.
+- Host overhead is not the gap: ≈450 dispatches go out in 6 submits per
+  forward, encoding (≈2.4 ms) overlaps GPU work, and profiled GPU time matches
+  wall time within 2%.
 
 ## Snake (multilingual checkpoint, 3 questions per move, B=3)
 

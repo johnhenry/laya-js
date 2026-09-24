@@ -200,10 +200,10 @@ checkpoints (max |Δlogit| ≤ 4e-5, single-threaded and slow). Reproduce with
 
 | tokens (B = 1) | 33 | 93 | 256 | 512 |
 |---|---:|---:|---:|---:|
-| MLX (JS) | 22.4 ms | 39.5 ms | 80.0 ms | 150.6 ms |
-| WebGPU (Node/Dawn) | 25.1 ms | 57.4 ms | 139.7 ms | 278.9 ms |
+| MLX (JS) | 23.6 ms | 41.7 ms | 80.4 ms | 154.4 ms |
+| WebGPU (Node/Dawn) | 24.1 ms | 53.8 ms | 130.2 ms | 252.2 ms |
 
-Python laya-mlx `predict()` at 93 tokens on the same machine: 46.2 ms P50. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.5–1.9× MLX at longer inputs; the gap is GEMM throughput, since WGSL can't reach Apple's matrix units at full speed.
+Python laya-mlx `predict()` at 93 tokens on the same machine: 46.2 ms P50. JS on MLX is at parity with Python, because both run the same MLX kernels. WebGPU is 1.3–1.7× MLX at longer inputs; the gap is GEMM throughput (≈1.95 vs ≈3 TFLOP/s), since WGSL can't reach Apple's matrix units at full speed.
 
 MLX op dispatch costs 0.80 µs (Node/koffi) and 0.55 µs (Bun/`bun:ffi`) per
 op, against 0.40 µs in Python; GPU time is identical because it is the same
