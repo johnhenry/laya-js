@@ -7,12 +7,29 @@ import { WebGpuBackend, type WebGpuBackendOptions } from "./backend.ts";
 import { requestAdapter, requestDevice, summarizeAdapter } from "./device.ts";
 
 export { WebGpuBackend, WebGpuTensor, type GemmChoice, type WebGpuBackendOptions } from "./backend.ts";
+export {
+  Runtime,
+  Storage,
+  type BindingSpec,
+  type CompiledKernel,
+  type KernelSource,
+  type ParamSpec,
+  type ParamType,
+  type RuntimeStats,
+} from "./runtime.ts";
 export { getGpu, requestAdapter, type AdapterSummary } from "./device.ts";
 export { GEMM_DEFAULT, GEMM_V020, type GemmConfig, type SgGemmConfig, type SkinnyGemmConfig } from "./kernels.ts";
 
 export interface CreateWebGpuBackendOptions extends WebGpuBackendOptions {
   /** Use this device instead of requesting one (the backend won't destroy it). */
   device?: GPUDevice;
+  /**
+   * With `device`: the adapter it was requested from. Subgroup-matrix
+   * detection needs the adapter's `subgroupMatrixConfigs`, which Dawn does
+   * not mirror onto `device.adapterInfo`; without it a device you pass in
+   * never uses subgroup matrices.
+   */
+  adapter?: GPUAdapter;
   /** Store/compute f16 natively when the adapter has `shader-f16` (default true). */
   preferF16?: boolean;
   powerPreference?: GPUPowerPreference;
@@ -44,8 +61,9 @@ export async function createWebGpuBackend(opts: CreateWebGpuBackendOptions = {})
   if (opts.device) {
     const device = opts.device;
     const f16 = preferF16 && device.features.has("shader-f16");
-    const subgroupMatrix = (opts.subgroupMatrix ?? true) && sgMatrixUsable((device as { adapterInfo?: unknown }).adapterInfo, device);
-    return new WebGpuBackend(device, summarizeAdapter(null, device), { ...opts, f16, ownsDevice: false, subgroupMatrix });
+    const info = opts.adapter?.info ?? (device as { adapterInfo?: unknown }).adapterInfo;
+    const subgroupMatrix = (opts.subgroupMatrix ?? true) && sgMatrixUsable(info, device);
+    return new WebGpuBackend(device, summarizeAdapter(opts.adapter ?? null, device), { ...opts, f16, ownsDevice: false, subgroupMatrix });
   }
   const wantSg = opts.subgroupMatrix ?? true;
   const adapter = await requestAdapter(opts.powerPreference, wantSg);

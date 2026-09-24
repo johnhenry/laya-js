@@ -6,7 +6,8 @@
  */
 import assert from "node:assert/strict";
 import { toF32 } from "@johnhenry/tensor-backend";
-import { createWebGpuBackend, isWebGpuAvailable, type GemmConfig, type WebGpuBackend, type WebGpuTensor } from "../src/index.ts";
+import { createWebGpuBackend, isWebGpuAvailable, requestAdapter, type GemmConfig, type WebGpuBackend, type WebGpuTensor } from "../src/index.ts";
+import { sdpaBytes, sdpaConfig, sdpaFastBytes } from "../src/kernels.ts";
 import { harness, isBun } from "./harness.ts";
 
 // @ts-ignore -- bun types are not installed
@@ -330,5 +331,109 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     const h = new Float16Array([7, 7, 7, 0.5, 1.5, 2.5]).subarray(3);
     const y = await bk.fromHost({ dtype: "f16", shape: [3], data: h });
     close(await rd(bk, bk.cast(y, "f32")), [0.5, 1.5, 2.5], 0, 0, "f16 offset view");
+  });
+  t.it("sdpa respects maxComputeWorkgroupStorageSize: on a default-limit (16 KiB) device, fast falls back and generic tiles shrink; results match", async () => {
+    // Pure: the configs fit the limit.
+    for (const D of [32, 48, 64, 96, 128, 256]) {
+      const c = sdpaConfig(D, 16384);
+      assert.ok(sdpaBytes(D, c.BQ, c.BKV) <= 16384, `D=${D} generic fits 16 KiB`);
+    }
+    assert.ok(sdpaFastBytes(64, true) > 16384 && sdpaFastBytes(32, true) <= 16384);
+    assert.deepEqual(sdpaConfig(64), { BQ: 32, BKV: 32, WG: 128 }, "unlimited: the tuned tiles");
+    // Real: a device requested with the spec-default limits.
+    const adapter = (await requestAdapter())!;
+    const device = await adapter.requestDevice();
+    assert.equal(device.limits.maxComputeWorkgroupStorageSize, 16384);
+    const bk = await createWebGpuBackend({ device, adapter });
+    try {
+      const B = 1, H = 2, L = 40;
+      for (const D of [32, 48, 64, 128, 256]) {
+        const q = rnd(B * H * L * D), k = rnd(B * H * L * D), v = rnd(B * H * L * D);
+        const mask = new Uint8Array(B * L * L).map((_, i) => ((i % L) <= Math.floor(i / L) ? 1 : 0)); // causal
+        const scale = 1 / Math.sqrt(D);
+        const shape = [B, H, L, D];
+        const M = await bk.fromHost({ dtype: "bool", shape: [B, 1, L, L], data: mask });
+        const Q = await up(bk, shape, q), K = await up(bk, shape, k), V = await up(bk, shape, v);
+        device.pushErrorScope("validation");
+        const plain = await rd(bk, bk.sdpa(Q, K, V, null, scale));
+        const masked = await rd(bk, bk.sdpa(Q, K, V, M, scale));
+        const err = await device.popErrorScope();
+        assert.equal(err, null, `D=${D}: ${err?.message}`);
+        close(plain, refSdpa(q, k, v, null, B, H, L, D, scale), 1e-4, 1e-4, `sdpa D=${D} 16 KiB`);
+        close(masked, refSdpa(q, k, v, mask, B, H, L, D, scale), 1e-4, 1e-4, `sdpa D=${D} 16 KiB masked`);
+      }
+    } finally {
+      bk.destroy();
+      device.destroy();
+    }
+  });
+
+  t.it("elementwise: custom n-ary kernel over x0..xN with broadcasting, offsets, i32 inputs, helpers and outDtype", async () => {
+    const bk = await get();
+    const a = rnd(3 * 4), b4 = rnd(4), c = rnd(3), e = rnd(12);
+    const A = await up(bk, [3, 4], a);
+    const Bv = await up(bk, [4], b4); // broadcast along rows
+    const C = await up(bk, [3, 1], c); // broadcast along columns
+    const E = bk.reshape(bk.slice(await up(bk, [2, 3, 4], Float32Array.from([...rnd(12), ...e])), [1, 0, 0], [2, 3, 4]), [3, 4]); // view at offset 12
+    const I = await bk.fromHost({ dtype: "i32", shape: [3, 4], data: Int32Array.from({ length: 12 }, (_, i) => i - 5) });
+    const helpers = "fn sq(x: f32) -> f32 { return x * x; }";
+    const before = bk.rt.stats.dispatches;
+    const y = bk.elementwise("sq(x0) + x1 * x2 - x3 + x4", [A, Bv, C, E, I], { helpers });
+    assert.equal(bk.rt.stats.dispatches - before, 1, "one dispatch");
+    assert.deepEqual(y.shape, [3, 4]);
+    const want = Float32Array.from({ length: 12 }, (_, i) => a[i]! ** 2 + b4[i % 4]! * c[Math.floor(i / 4)]! - e[i]! + (i - 5));
+    close(await rd(bk, y), want, 1e-5, 1e-5, "elementwise");
+    const pos = bk.elementwise("select(0.0, 1.0, x0 > 0.0)", [A], { outDtype: "bool" }); // bool out: nonzero = true
+    assert.equal(pos.dtype, "bool");
+    assert.deepEqual([...(await bk.read(pos)).data], [...a].map((v) => (v > 0 ? 1 : 0)));
+    const pipelines = bk.rt.stats.pipelines;
+    bk.elementwise("sq(x0) + x1 * x2 - x3 + x4", [A, Bv, C, E, I], { helpers });
+    assert.equal(bk.rt.stats.pipelines, pipelines, "the same expression reuses its pipeline");
+    assert.throws(() => bk.elementwise("x0", []), /at least one input/);
+  });
+
+  t.it("empty + rt.kernel/rt.dispatch run a custom kernel into a scope-tracked output; wrapBuffer views a caller-owned buffer and never pools it", async () => {
+    const bk = await get();
+    const x = await up(bk, [5], Float32Array.from([1, 2, 3, 4, 5]));
+    let tmp: WebGpuTensor | undefined;
+    const out = bk.scope(() => {
+      tmp = bk.empty([5], "f32");
+      const o = bk.empty([5], "f32");
+      const k = bk.rt.kernel(() => ({
+        key: "test:triple",
+        bindings: [{ name: "inp", elem: "f32", access: "read" }, { name: "outp", elem: "f32", access: "read_write" }],
+        params: [["n", "u32"]],
+        body: "@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) g: vec3<u32>) { if (g.x < P.n) { outp[g.x] = 3.0 * inp[g.x]; } }",
+        f16: false,
+      }), "test:triple");
+      bk.rt.dispatch(k, [x.storage.buffer, o.storage.buffer], { n: 5 }, [1]);
+      return o;
+    });
+    assert.equal(tmp!.disposed, true, "an unreturned empty() tensor is freed by the scope");
+    close(await rd(bk, out), [3, 6, 9, 12, 15], 0, 0, "custom kernel");
+
+    const buf = bk.device.createBuffer({ size: 32, usage: 0x80 | 0x04 | 0x08 /* STORAGE | COPY_SRC | COPY_DST */ });
+    bk.device.queue.writeBuffer(buf, 0, Float32Array.from([0, 0, 1, 2, 3, 4, 0, 0]));
+    const w = bk.wrapBuffer(buf, [4], "f32", 2);
+    close(await rd(bk, bk.scale(w, 2)), [2, 4, 6, 8], 0, 0, "wrapped view");
+    const pooled = bk.rt.stats.pooledBytes;
+    bk.dispose(w);
+    assert.equal(bk.rt.stats.pooledBytes, pooled, "a wrapped buffer is not returned to the pool");
+    const again = bk.wrapBuffer(buf, [4], "f32", 2); // still alive: not destroyed by dispose
+    close(await rd(bk, again), [1, 2, 3, 4], 0, 0, "buffer survives dispose");
+    assert.throws(() => bk.wrapBuffer(buf, [8], "f32", 2), /needs 40 bytes/);
+    buf.destroy();
+  });
+
+  t.it("createWebGpuBackend({ device, adapter }) detects subgroup matrices like a backend that requested its own device; sleepThresholdMs is applied", async () => {
+    const own = await get();
+    const adapter = (await requestAdapter(undefined, true))!;
+    const device = await adapter.requestDevice({ requiredFeatures: [...adapter.features].filter((f) => f === "chromium-experimental-subgroup-matrix" || f === "shader-f16") as GPUFeatureName[] });
+    const withAdapter = await createWebGpuBackend({ device, adapter, sleepThresholdMs: 15 });
+    assert.equal(withAdapter.hasSubgroupMatrix, own.hasSubgroupMatrix);
+    assert.equal(withAdapter.rt.sleepThresholdMs, 15);
+    assert.equal(own.rt.sleepThresholdMs, 3, "default");
+    withAdapter.destroy();
+    device.destroy();
   });
 });

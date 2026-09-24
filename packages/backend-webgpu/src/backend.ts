@@ -21,6 +21,7 @@ import {
   reduceKernel,
   ropeKernel,
   sdpaConfig,
+  sdpaFastBytes,
   sdpaKernel,
   sdpaFastKernel,
   softmaxColKernel,
@@ -75,6 +76,8 @@ export interface WebGpuBackendOptions {
    * false for navigator.gpu.
    */
   sleepWhileWaiting?: boolean;
+  /** With `sleepWhileWaiting`, only sleep when the expected wait exceeds this many milliseconds (default 3). */
+  sleepThresholdMs?: number;
 }
 
 const numel = (s: readonly number[]) => s.reduce((a, b) => a * b, 1);
@@ -162,6 +165,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     this.gemmConfig = opts.gemm ?? GEMM_DEFAULT;
     for (const [k, v] of Object.entries(opts.gemmTuning ?? {})) this.gemmTuning.set(k, v);
     this.rt.sleepWhileWaiting = opts.sleepWhileWaiting ?? adapterInfo.source !== "navigator.gpu";
+    if (opts.sleepThresholdMs !== undefined) this.rt.sleepThresholdMs = opts.sleepThresholdMs;
   }
 
   supports(dtype: DType): boolean {
@@ -211,7 +215,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   dispose(t: WebGpuTensor): void {
     if (t.disposed) return;
     t.disposed = true;
-    if (--t.storage.refs === 0) this.rt.release(t.storage.buffer, t.storage.bytes);
+    if (--t.storage.refs === 0 && !t.storage.external) this.rt.release(t.storage.buffer, t.storage.bytes);
   }
 
   scope<R>(fn: () => R): R {
@@ -403,7 +407,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     return out;
   }
 
-  private nary(op: string, expr: string, xs: WebGpuTensor[], outDtype: DType, c: CType, s = 0, helpers = ""): WebGpuTensor {
+  private nary(op: string, expr: string, xs: WebGpuTensor[], outDtype: DType, c: CType, s = 0, helpers = "", names?: readonly string[]): WebGpuTensor {
     for (const x of xs) this.live(x);
     const shape = broadcastShapes(...xs.map((x) => x.shape));
     const n = numel(shape);
@@ -422,8 +426,50 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     });
     const ok = this.kind(outDtype);
     const key = `nary:${op}:${ins.map((i) => (i.kind.st + (i.kind.bf16 ? "b" : "") + (i.flat ? "f" : "s"))).join(",")}:${ok.st}${ok.bf16 ? "b" : ""}:${c}`;
-    this.run(key, () => naryKernel(op, expr, ins, ok, c, helpers), [...xs.map((x) => x.storage.buffer), out.storage.buffer], params, this.flatGroups(n));
+    this.run(key, () => naryKernel(op, expr, ins, ok, c, helpers, names), [...xs.map((x) => x.storage.buffer), out.storage.buffer], params, this.flatGroups(n));
     return out;
+  }
+
+  // ---- extension hooks -----------------------------------------------------
+
+  /**
+   * An uninitialised tensor of `shape`/`dtype` from the runtime's buffer
+   * pool, tracked by the enclosing `scope` like any op result. For custom
+   * kernels (`rt.kernel` / `rt.dispatch`) that write their own output.
+   */
+  empty(shape: Shape, dtype: DType): WebGpuTensor {
+    return this.alloc(shape, dtype);
+  }
+
+  /**
+   * A tensor view of a `GPUBuffer` you own (no copy). It must hold
+   * `offset + numel(shape)` elements in this backend's storage for `dtype`
+   * (4 bytes each; f16 is 2 bytes when `hasF16`) and carry STORAGE (plus
+   * COPY_SRC to be read). `dispose` never pools or destroys it — the buffer
+   * stays yours; keep it alive while the view (or work reading it) is in use.
+   */
+  wrapBuffer(buffer: GPUBuffer, shape: Shape, dtype: DType, offset = 0): WebGpuTensor {
+    const need = (offset + numel(shape)) * this.bytesPer(dtype);
+    if (buffer.size < need) throw new RangeError(`wrapBuffer: [${shape}] ${dtype} at offset ${offset} needs ${need} bytes, the buffer has ${buffer.size}`);
+    return this.track(new WebGpuTensor([...shape], dtype, new Storage(buffer, buffer.size, true), offset));
+  }
+
+  /**
+   * A custom n-ary elementwise kernel with NumPy broadcasting: `expr` is an
+   * f32-valued WGSL expression over the inputs `x0, x1, …` (loaded and
+   * computed as f32; i32/bool inputs are converted) whose value is stored in
+   * `outDtype` (default f32, rounded once on store; for `"bool"` nonzero is
+   * true, so wrap a comparison as `select(0.0, 1.0, …)`). `helpers` is WGSL placed before
+   * the entry point (functions, constants). Compiled once per
+   * (`expr`, `helpers`, input kinds and layouts); one dispatch. Up to the
+   * device's storage-buffer limit minus one inputs (the WebGPU default is 8
+   * bindings; devices from `createWebGpuBackend` raise it to the adapter's).
+   */
+  elementwise(expr: string, xs: readonly WebGpuTensor[], opts: { outDtype?: DType; helpers?: string } = {}): WebGpuTensor {
+    if (!xs.length) throw new Error("elementwise: needs at least one input");
+    const helpers = opts.helpers ?? "";
+    const names = xs.map((_, j) => `x${j}`);
+    return this.nary(`custom:${expr}:${helpers}`, expr, [...xs], opts.outDtype ?? "f32", "f32", 0, helpers, names);
   }
 
   // ---- shape ---------------------------------------------------------------
@@ -940,12 +986,16 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       Object.assign(params, { om: m.offset, msb: s4[0], msh: s4[1], msq: s4[2], msk: s4[3] });
     }
     const bufs = [q.storage.buffer, k.storage.buffer, v.storage.buffer, ...(m ? [m.storage.buffer] : []), out.storage.buffer];
-    const fast = (D === 32 || D === 64) && q.offset % 4 === 0 && k.offset % 4 === 0 && v.offset % 4 === 0;
+    // Both kernels respect the device's workgroup-memory limit: the fast one
+    // only runs where it fits (D = 64 needs ~20 KiB), and the generic one
+    // shrinks its tiles until it fits (the WebGPU default is 16 KiB).
+    const limit = this.device.limits.maxComputeWorkgroupStorageSize ?? 16384;
+    const fast = (D === 32 || D === 64) && q.offset % 4 === 0 && k.offset % 4 === 0 && v.offset % 4 === 0 && sdpaFastBytes(D, m !== null) <= limit;
     if (fast) {
       this.run(`sdpafast:${keyOf(qk, kk, vk, mk, ok)}:${D}`, () => sdpaFastKernel(qk, kk, vk, mk, ok, D), bufs, params, [Math.ceil(Lq / 32), H, B]);
     } else {
-      const { BQ } = sdpaConfig(D);
-      this.run(`sdpa:${keyOf(qk, kk, vk, mk, ok)}:${D}`, () => sdpaKernel(qk, kk, vk, mk, ok, D), bufs, params, [Math.ceil(Lq / BQ), H, B]);
+      const { BQ, BKV } = sdpaConfig(D, limit);
+      this.run(`sdpa:${keyOf(qk, kk, vk, mk, ok)}:${D}:${BQ}x${BKV}`, () => sdpaKernel(qk, kk, vk, mk, ok, D, limit), bufs, params, [Math.ceil(Lq / BQ), H, B]);
     }
     if (m && m !== mask) this.dispose(m);
     return out;

@@ -102,9 +102,9 @@ export interface NaryInput {
  * Broadcast inputs use params sh (output shape, rank 8 padded) and st{j}
  * (input strides, 0 on broadcast axes).
  */
-export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind, c: CType, helpers = ""): KernelSource {
+export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind, c: CType, helpers = "", names: readonly string[] = ["a", "b", "c"]): KernelSource {
   const WG = 256;
-  const names = ["a", "b", "c"];
+  if (ins.length > names.length) throw new Error(`nary ${op}: ${ins.length} inputs, only ${names.length} names`);
   const bindings: BindingSpec[] = ins.map((k, j) => ({ name: `in${j}`, elem: k.kind.st, access: "read" }));
   bindings.push({ name: "outp", elem: out.st, access: "read_write" });
   const params: [string, ParamSpec[number][1]][] = [["n", "u32"], ["s", "f32"]];
@@ -694,15 +694,38 @@ ${s}}`;
 // Flash-style SDPA: one workgroup per (query block, head, batch); online
 // softmax in f32 over key tiles held in workgroup memory.
 
-export function sdpaConfig(D: number): { BQ: number; BKV: number; WG: number } {
-  if (D <= 64) return { BQ: 32, BKV: 32, WG: 128 };
-  if (D <= 128) return { BQ: 16, BKV: 16, WG: 128 };
-  if (D <= 256) return { BQ: 8, BKV: 8, WG: 64 };
-  throw new Error(`sdpa: head dim ${D} > 256 not supported`);
+/** Workgroup memory (bytes) of the generic sdpa kernel for a tile config. */
+export function sdpaBytes(D: number, BQ: number, BKV: number): number {
+  return 4 * (BQ * D + BKV * (D + 1) + BKV * D + BQ * BKV + 3 * BQ);
 }
 
-export function sdpaKernel(q: Kind, k: Kind, v: Kind, mask: Kind | null, out: Kind, D: number): KernelSource {
-  const { BQ, BKV, WG } = sdpaConfig(D);
+/**
+ * Generic sdpa tile config for head dim D. `limit` is the device's
+ * maxComputeWorkgroupStorageSize: tiles halve (keys first, then queries)
+ * until the kernel fits (the WebGPU default of 16 KiB, for example).
+ */
+export function sdpaConfig(D: number, limit = Infinity): { BQ: number; BKV: number; WG: number } {
+  let c: { BQ: number; BKV: number; WG: number };
+  if (D <= 64) c = { BQ: 32, BKV: 32, WG: 128 };
+  else if (D <= 128) c = { BQ: 16, BKV: 16, WG: 128 };
+  else if (D <= 256) c = { BQ: 8, BKV: 8, WG: 64 };
+  else throw new Error(`sdpa: head dim ${D} > 256 not supported`);
+  while (sdpaBytes(D, c.BQ, c.BKV) > limit) {
+    if (c.BKV >= c.BQ && c.BKV > 1) c = { ...c, BKV: c.BKV / 2 };
+    else if (c.BQ > 1) c = { ...c, BQ: c.BQ / 2 };
+    else throw new Error(`sdpa: head dim ${D} needs ${sdpaBytes(D, 1, 1)} bytes of workgroup memory, the device allows ${limit}`);
+  }
+  return c;
+}
+
+/** Workgroup memory (bytes) of the fast (D = 32 / 64) sdpa kernel. */
+export function sdpaFastBytes(D: number, masked: boolean): number {
+  const BQ = 32, BKV = 16, WG = 128, D4 = D / 4, KP = D4 + 1;
+  return 16 * (BQ * D4 + BKV * KP + BKV * D4) + 4 * (BQ * (BKV + 1) + WG + 3 * BQ) + (masked ? 16 : 0);
+}
+
+export function sdpaKernel(q: Kind, k: Kind, v: Kind, mask: Kind | null, out: Kind, D: number, limit = Infinity): KernelSource {
+  const { BQ, BKV, WG } = sdpaConfig(D, limit);
   const NS = Math.ceil((BQ * BKV) / WG);
   const NO = Math.ceil((BQ * D) / WG);
   const bindings: BindingSpec[] = [
@@ -818,7 +841,7 @@ ${write}}`;
     ...(mask ? ([["om", "u32"], ["msb", "u32"], ["msh", "u32"], ["msq", "u32"], ["msk", "u32"]] as const) : []),
   ];
   return {
-    key: `sdpa:${kindKey(q)}:${kindKey(k)}:${kindKey(v)}:${mask ? kindKey(mask) : "-"}:${kindKey(out)}:D${D}`,
+    key: `sdpa:${kindKey(q)}:${kindKey(k)}:${kindKey(v)}:${mask ? kindKey(mask) : "-"}:${kindKey(out)}:D${D}:${BQ}x${BKV}`,
     bindings,
     params,
     body,
