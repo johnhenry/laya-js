@@ -18,7 +18,7 @@ export {
   type RuntimeStats,
 } from "./runtime.ts";
 export { getGpu, requestAdapter, type AdapterSummary } from "./device.ts";
-export { GEMM_DEFAULT, GEMM_V020, type GemmConfig, type SgGemmConfig, type SkinnyGemmConfig } from "./kernels.ts";
+export { GEMM_DEFAULT, GEMM_V020, QUANT_GEMM_DEFAULT, QUANT_GEMM_NAVIGATOR, type GemmConfig, type QmvGemmConfig, type QuantGemmConfig, type SgGemmConfig, type SkinnyGemmConfig } from "./kernels.ts";
 
 export interface CreateWebGpuBackendOptions extends WebGpuBackendOptions {
   /** Use this device instead of requesting one (the backend won't destroy it). */
@@ -55,6 +55,13 @@ function sgMatrixUsable(info: unknown, device: GPUDevice): boolean {
   return (i.subgroupMatrixConfigs ?? []).some((c) => c.componentType === "f32" && c.resultComponentType === "f32" && c.M === 8 && c.N === 8 && c.K === 8);
 }
 
+/** The subgroup size when the device has `subgroups` and the adapter reports one fixed size, else 0. */
+function fixedSubgroupSize(info: unknown, device: GPUDevice): number {
+  if (!device.features.has("subgroups" as GPUFeatureName)) return 0;
+  const i = info as { subgroupMinSize?: number; subgroupMaxSize?: number } | undefined;
+  return i?.subgroupMinSize && i.subgroupMinSize === i.subgroupMaxSize ? i.subgroupMinSize : 0;
+}
+
 /** Creates a WebGPU backend; rejects when no adapter is available. */
 export async function createWebGpuBackend(opts: CreateWebGpuBackendOptions = {}): Promise<WebGpuBackend> {
   const preferF16 = opts.preferF16 ?? true;
@@ -63,17 +70,18 @@ export async function createWebGpuBackend(opts: CreateWebGpuBackendOptions = {})
     const f16 = preferF16 && device.features.has("shader-f16");
     const info = opts.adapter?.info ?? (device as { adapterInfo?: unknown }).adapterInfo;
     const subgroupMatrix = (opts.subgroupMatrix ?? true) && sgMatrixUsable(info, device);
-    return new WebGpuBackend(device, summarizeAdapter(opts.adapter ?? null, device), { ...opts, f16, ownsDevice: false, subgroupMatrix });
+    return new WebGpuBackend(device, summarizeAdapter(opts.adapter ?? null, device), { ...opts, f16, ownsDevice: false, subgroupMatrix, subgroupSize: fixedSubgroupSize(info, device) });
   }
   const wantSg = opts.subgroupMatrix ?? true;
   const adapter = await requestAdapter(opts.powerPreference, wantSg);
   if (!adapter) throw new Error("webgpu: no GPU adapter available");
   const extra: GPUFeatureName[] = opts.profiling ? ["timestamp-query"] : [];
   if (wantSg) extra.push(SGMAT);
+  extra.push("subgroups" as GPUFeatureName);
   const device = await requestDevice(adapter, preferF16, extra);
   const f16 = device.features.has("shader-f16");
   const subgroupMatrix = wantSg && sgMatrixUsable(adapter.info, device);
-  return new WebGpuBackend(device, summarizeAdapter(adapter, device), { ...opts, f16, ownsDevice: true, subgroupMatrix });
+  return new WebGpuBackend(device, summarizeAdapter(adapter, device), { ...opts, f16, ownsDevice: true, subgroupMatrix, subgroupSize: fixedSubgroupSize(adapter.info, device) });
 }
 
 /** True when a WebGPU adapter can be obtained in this runtime (for skipping tests). */

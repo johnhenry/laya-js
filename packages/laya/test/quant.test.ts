@@ -272,6 +272,11 @@ test("load() from an http URL in Node: quantized checkpoint over Range requests"
     agent.dispose();
     assert.ok(maxDelta(got, fx.result) <= 2e-3);
     assert.ok(ranges >= 1, "weights were read with Range requests");
+    // a backend with the quantized ops keeps them quantized from a URL too
+    const dev = await load(url, { backend: cpuWithQuantizedPath(), batchSize: 2, warn: () => {} });
+    assert.equal(dev.model.quantizedOnDevice, true, "quantized: \"device\" reaches the URL loader");
+    assert.ok(maxDelta(await dev.predict(fx.state, fx.questions), got) <= 1e-5);
+    dev.dispose();
     await assert.rejects(load(url + "/nope", { backend: "cpu" }), /Not a complete Laya checkpoint/);
   } finally {
     server.close();

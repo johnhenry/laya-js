@@ -34,6 +34,6 @@ export async function readCheckpointFromUrl(baseUrl: string | URL, prefix: strin
     encoderConfig: encoderConfig as Record<string, unknown>,
     tokenizer: loadTokenizer(tokJson, tokConfig),
     // openSafetensors reads URLs with Range requests
-    weights: (w) => readWeights(url("model.safetensors"), { ...(opts.fetch ? { fetch: opts.fetch } : {}), ...(w?.dtype ? { dtype: w.dtype } : {}) }),
+    weights: (w) => readWeights(url("model.safetensors"), { ...(opts.fetch ? { fetch: opts.fetch } : {}), ...(w?.dtype ? { dtype: w.dtype } : {}), ...(w?.quantized ? { quantized: w.quantized } : {}) }),
   };
 }

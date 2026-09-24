@@ -186,21 +186,21 @@ questions (one batch of 16).
 | english | mlx | **q8 on device** | **441 MiB (55%)** | 1193 MiB | 0.6 s | 33.8 ms | 458 ms (34.9 q/s) |
 | english | mlx | q4, dequantize on load | 804 MiB | 1413 MiB | 0.7 s | 40.2 ms | 415 ms (38.5 q/s) |
 | english | mlx | **q4 on device** | **228 MiB (28%)** | 1047 MiB | 0.1 s | 34.4 ms | 466 ms (34.3 q/s) |
-| english | webgpu | fp16 | 891 MiB | 999 MiB | 0.2 s | 53.4 ms | 635 ms (25.2 q/s) |
+| english | webgpu | fp16 | 891 MiB | 999 MiB | 0.4 s | 54.6 ms | 654 ms (24.5 q/s) |
 | english | webgpu | q8, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
-| english | webgpu | **q8 on device** | **460 MiB (52%)** | 568 MiB | 0.2 s | 58.0 ms | 723 ms (22.1 q/s) |
+| english | webgpu | **q8 on device** | **460 MiB (52%)** | 569 MiB | 0.2 s | **51.3 ms** | **641 ms (25.0 q/s)** |
 | english | webgpu | q4, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
-| english | webgpu | **q4 on device** | **251 MiB (28%)** | 359 MiB | 0.1 s | 60.6 ms | 739 ms (21.6 q/s) |
+| english | webgpu | **q4 on device** | **251 MiB (28%)** | 360 MiB | 0.1 s | 54.7 ms | **650 ms (24.6 q/s)** |
 | multilingual | mlx | fp16 | 614 MiB | 1338 MiB | 0.8 s | 15.9 ms | 151 ms (106.1 q/s) |
 | multilingual | mlx | q8, dequantize on load | 614 MiB | 1338 MiB | 1.1 s | 16.1 ms | 152 ms (105.5 q/s) |
 | multilingual | mlx | **q8 on device** | **338 MiB (55%)** | 1124 MiB | 1.1 s | 16.1 ms | 168 ms (95.4 q/s) |
 | multilingual | mlx | q4, dequantize on load | 614 MiB | 1338 MiB | 1.2 s | 16.1 ms | 152 ms (105.5 q/s) |
 | multilingual | mlx | **q4 on device** | **175 MiB (28%)** | 950 MiB | 0.6 s | 15.9 ms | 172 ms (93.2 q/s) |
-| multilingual | webgpu | fp16 | 635 MiB | 713 MiB | 0.7 s | 22.4 ms | 234 ms (68.4 q/s) |
+| multilingual | webgpu | fp16 | 635 MiB | 713 MiB | 0.8 s | 22.8 ms | 239 ms (66.9 q/s) |
 | multilingual | webgpu | q8, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (67.1 q/s) |
-| multilingual | webgpu | **q8 on device** | **328 MiB (52%)** | 406 MiB | 0.6 s | 24.4 ms | 271 ms (59.0 q/s) |
+| multilingual | webgpu | **q8 on device** | **328 MiB (52%)** | 406 MiB | 0.6 s | **21.4 ms** | **234 ms (68.3 q/s)** |
 | multilingual | webgpu | q4, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (66.9 q/s) |
-| multilingual | webgpu | **q4 on device** | **179 MiB (28%)** | 257 MiB | 0.6 s | 25.5 ms | 278 ms (57.5 q/s) |
+| multilingual | webgpu | **q4 on device** | **179 MiB (28%)** | 257 MiB | 0.6 s | **21.9 ms** | **237 ms (67.5 q/s)** |
 
 - **Resident weights shrink with the file:** 52–55% of fp16 for q8 and 28%
   for q4, on both backends. The MLX peak falls by 210–390 MiB; the rest of
@@ -210,10 +210,45 @@ questions (one batch of 16).
   39.1 ms: batch-1 is memory-bound and `quantized_matmul` reads a quarter to
   half the bytes) and unchanged on multilingual; 16-question batches are
   10–12% slower (dequantization in the GEMM is not free once it is
-  compute-bound). WebGPU is 9–14% slower for one question and 12–16% slower
-  for 16: its kernels dequantize in the tile load at ≈0.85–0.9× the fp16
-  GFLOP/s for M ≥ 64 and ≈0.55–0.8× for M = 16–33 (see the backend-webgpu
-  README), and at these sizes WebGPU is not bandwidth-bound.
+  compute-bound). On WebGPU quantized weights are now at least as fast as
+  fp16: one question 6% faster for q8 (English 51.3 vs 54.6 ms) and 0–4%
+  for q4 (English q4 54.7 vs 54.6 ms is a tie), 16-question batches 1–2%
+  faster. With backend-webgpu 0.4 they were
+  9–16% slower (English q8 59.4 ms / 748 ms, q4 61.7 / 762 ms; multilingual
+  q8 24.4 / 274 ms, q4 25.4 / 279 ms, measured the same day with the same
+  bench). The WebGPU fp16 and on-device rows were re-measured 2026-09-24
+  with backend-webgpu 0.5 (`QUANT_GEMM_DEFAULT`: a matrix-"vector" kernel for small M,
+  subgroup-matrix tiles that dequantize after the MMAs for larger M; the
+  single question here is M = 93 tokens, the 16 questions M ≈ 1488).
+  Per-Linear GFLOP/s before/after are in the
+  backend-webgpu README. The dequantize-on-load and MLX rows are from the
+  earlier run (those paths did not change).
+- **In a browser** (Chromium in the Claude browser pane on the same M2,
+  `navigator.gpu`, `shader-f16` and `subgroups` but no subgroup matrices;
+  checkpoints served from `localhost` by the web-playground's `serve.ts`; a
+  scratch page loading them with `load(url)`, 3 warmups, P50 of 30 single
+  questions of 48–51 tokens, median of 5 batches of 16):
+
+  | checkpoint | weights | device memory | 1 question P50 | 16 questions |
+  |---|---|---:|---:|---:|
+  | english | fp16 | 891 MiB | 34.6 ms | 596 ms (26.9 q/s) |
+  | english | q8 on device | 460 MiB | 33.1 ms | 522 ms (30.7 q/s) |
+  | english | q4 on device | 251 MiB | 35.7 ms | 545 ms (29.3 q/s) |
+  | multilingual | fp16 | 635 MiB | 19.4 ms | 216 ms (74.2 q/s) |
+  | multilingual | q8 on device | 328 MiB | 20.0 ms (min 15.8) | 202 ms (79.4 q/s) |
+  | multilingual | q4 on device | 179 MiB | 22.0 ms (min 17.1) | 205 ms (77.9 q/s) |
+
+  The English fp16 / q8 and multilingual q8 rows are from the final build;
+  the q4 and multilingual fp16 rows from the same session a build earlier
+  (same browser-side kernel choice, older unpack code). Single-question
+  P50s in the browser pane vary by ±2 ms between runs, so one question is a
+  tie (English q8 4% faster in the final run); 16-question batches are
+  5–12% faster quantized.
+  With 0.4's kernel choice the same page measured English q8 at 42.2 ms and
+  1533 ms (without subgroup matrices it fell back to the direct kernel).
+  Loading a checkpoint from an http(s) URL only kept the weights quantized
+  on the device after a fix in `@johnhenry/laya` (the URL loader dropped the
+  `quantized` option and always dequantized).
 - **Load time** drops for the device path on MLX/WebGPU (no host
   dequantization): English q4 loads in 0.1 s against 0.7 s dequantizing.
 
