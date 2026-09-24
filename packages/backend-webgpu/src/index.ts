@@ -6,9 +6,9 @@
 import { WebGpuBackend, type WebGpuBackendOptions } from "./backend.ts";
 import { requestAdapter, requestDevice, summarizeAdapter } from "./device.ts";
 
-export { WebGpuBackend, WebGpuTensor, type WebGpuBackendOptions } from "./backend.ts";
+export { WebGpuBackend, WebGpuTensor, type GemmChoice, type WebGpuBackendOptions } from "./backend.ts";
 export { getGpu, requestAdapter, type AdapterSummary } from "./device.ts";
-export { GEMM_DEFAULT, type GemmConfig } from "./kernels.ts";
+export { GEMM_DEFAULT, GEMM_V020, type GemmConfig, type SgGemmConfig, type SkinnyGemmConfig } from "./kernels.ts";
 
 export interface CreateWebGpuBackendOptions extends WebGpuBackendOptions {
   /** Use this device instead of requesting one (the backend won't destroy it). */

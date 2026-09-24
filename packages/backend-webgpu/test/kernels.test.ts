@@ -108,7 +108,7 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     }
   });
 
-  t.it("linear: subgroup-matrix kernels (when available) vs direct, partial tiles, K % 8 != 0", async () => {
+  t.it("linear: subgroup-matrix kernels (when available) vs direct, partial tiles, K % 8 != 0, wide loads, split-K", async () => {
     const bk = await get();
     const saved = bk.gemmConfig;
     try {
@@ -122,6 +122,10 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
           ["direct", { ...saved, sg: null, skinny: [] }],
           ["sg 32x64", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 2, WN: 2 }] }],
           ["sg 96x64x16", { ...saved, skinny: [], sg: [{ minM: 0, BM: 96, BN: 64, BK: 16, WM: 2, WN: 2 }] }],
+          ["sg 64x64 pad 0", { ...saved, skinny: [], sg: [{ minM: 0, BM: 64, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0 }] }],
+          ["sg 32x64 narrow, double-buffered, block epilogue", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, wide: false, db: true, epi: "block" }] }],
+          ["sg 32x64 split-K 3", { ...saved, skinny: [], sg: [{ minM: 0, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, splitK: [{ S: 3 }] }] }],
+          ["sg 64x64x16 split-K 2", { ...saved, skinny: [], sg: [{ minM: 0, BM: 64, BN: 64, BK: 16, WM: 2, WN: 2, splitK: [{ S: 2 }] }] }],
         ];
         for (const [name, cfg] of cfgs) {
           bk.gemmConfig = cfg;
@@ -152,6 +156,19 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     for (let i = 0; i < 5; i++) bk.dispose(chain());
     await bk.sync();
     assert.equal(bk.rt.stats.bindGroups, before, "steady-state chain creates no bind groups");
+  });
+
+  t.it("tuneGemm records a measured choice per shape and uses it", async () => {
+    const bk = await get();
+    const shapes = [{ M: 70, N: 96, K: 64 }, { M: 20, N: 64, K: 32 }];
+    const picks = await bk.tuneGemm(shapes, { dtype: "f32", rounds: 1 });
+    for (const [key, v] of Object.entries(picks)) {
+      assert.equal(bk.gemmTuning.get(key), v);
+      assert.ok(v === "skinny" || v === "direct" || typeof v === "number", key);
+    }
+    const x = rnd(70 * 64), w = rnd(96 * 64, 0.1);
+    close(await rd(bk, bk.linear(await up(bk, [70, 64], x), await up(bk, [96, 64], w))), refLinear(x, w, null, 70, 96, 64), 1e-4, 1e-4, "tuned linear");
+    bk.gemmTuning.clear();
   });
 
   t.it("strided copies: collapsed 5-D transpose (vector and scalar inner loops), concat", async () => {

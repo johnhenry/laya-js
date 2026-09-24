@@ -27,9 +27,12 @@ import {
   softmaxRowKernel,
   sortKernel,
   sortSlowKernel,
+  splitKReduceKernel,
   type CType,
   type GemmConfig,
   type Kind,
+  type SgGemmConfig,
+  type SkinnyGemmConfig,
   kindKey,
   type NaryInput,
 } from "./kernels.ts";
@@ -63,6 +66,8 @@ export interface WebGpuBackendOptions {
   maxPooledBytes?: number;
   /** Override the GEMM tile configuration (benchmarking). */
   gemm?: GemmConfig;
+  /** Previously measured `tuneGemm` choices to restore (merged into the device's table). */
+  gemmTuning?: Record<string, GemmChoice>;
   /**
    * Before awaiting a readback, sleep for most of the GPU time the same
    * amount of work took last time, instead of letting the runtime poll
@@ -126,6 +131,12 @@ function promote(a: DType, b: DType): DType {
   return "i32";
 }
 
+/** A Linear kernel choice: skinny, direct, or an index into `GemmConfig.sg`. */
+export type GemmChoice = "skinny" | "direct" | number;
+const tunings = new WeakMap<GPUDevice, Map<string, GemmChoice>>();
+const inRange = (v: number, [lo, hi]: readonly [number, number]) => v >= lo && v <= hi;
+const tuneKey = (k: Kind, M: number, N: number, K: number) => `${k.st}:${M}x${N}x${K}`;
+
 export class WebGpuBackend implements Backend<WebGpuTensor> {
   readonly name = "webgpu";
   readonly rt: Runtime;
@@ -149,6 +160,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     this.ownsDevice = opts.ownsDevice;
     this.rt = new Runtime(device, opts.maxBatch ?? 128, opts.maxPooledBytes ?? 2 ** 30, opts.firstBatch ?? 24);
     this.gemmConfig = opts.gemm ?? GEMM_DEFAULT;
+    for (const [k, v] of Object.entries(opts.gemmTuning ?? {})) this.gemmTuning.set(k, v);
     this.rt.sleepWhileWaiting = opts.sleepWhileWaiting ?? adapterInfo.source !== "navigator.gpu";
   }
 
@@ -636,7 +648,9 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     const biask = bias ? this.kind(bias.dtype) : null;
     const vecA = K % 4 === 0 && a.offset % 4 === 0 && aBatchStrides.every((s) => s % 4 === 0);
     const vecB = (transB ? K % 4 === 0 : N % 4 === 0) && b.offset % 4 === 0 && bBatchStrides.every((s) => s % 4 === 0);
-    const sk = transB && vecA && vecB && batch === 1 ? this.gemmConfig.skinny.find((c) => M <= c.maxM) : undefined;
+    const linearPath = transB && vecA && vecB && batch === 1;
+    const choice = linearPath ? this.pickLinear(M, N, K, ak) : undefined;
+    const sk = choice?.skinny;
     if (sk) {
       const TM = Math.ceil(M / sk.WY);
       this.run(`gemmskinny:${keyOf(ak, bk, biask, ok, sk, TM)}`, () => gemmSkinnyKernel(ak, bk, biask, ok, sk, TM),
@@ -645,18 +659,36 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
         [Math.ceil(N / (sk.WX * sk.TN)), 1, 1]);
       return out;
     }
-    const sg = this.hasSubgroupMatrix && transB && vecA && vecB && batch === 1
-      ? this.gemmConfig.sg?.find((c) => M > c.minM && M <= (c.maxM ?? Infinity))
-      : undefined;
+    const sg = choice?.sg;
     if (sg) {
-      this.run(`gemmsg:${keyOf(ak, bk, biask, ok, sg)}`, () => gemmSgKernel(ak, bk, biask, ok, sg),
-        [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
-        { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
-        [Math.ceil(N / sg.BN), Math.ceil(M / sg.BM), 1]);
+      const wide = (sg.wide ?? true) && ak.st === "f16" && bk.st === "f16" && K % 8 === 0 && a.offset % 8 === 0 && b.offset % 8 === 0;
+      const cfgKey = `${sg.BM}x${sg.BN}x${sg.BK}/${sg.WM}x${sg.WN}/${sg.db ?? false}/${sg.epi ?? "frag"}/${sg.pad ?? 4}/${wide}`;
+      const grid: [number, number, number] = [Math.ceil(N / sg.BN), Math.ceil(M / sg.BM), 1];
+      const groups = grid[0] * grid[1];
+      const S = Math.min(sg.splitK?.find((c) => M <= (c.maxM ?? Infinity) && groups <= (c.maxGroups ?? Infinity))?.S ?? 1, Math.floor(K / sg.BK));
+      if (S <= 1) {
+        this.run(`gemmsg:${keyOf(ak, bk, biask, ok)}:${cfgKey}`, () => gemmSgKernel(ak, bk, biask, ok, sg, false, wide),
+          [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+          { M, N, K, kc: K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 }, grid);
+        return out;
+      }
+      // Split-K: f32 partials [S, M, N], then one reduction (+ bias, rounded once).
+      const kc = Math.ceil(K / S / sg.BK) * sg.BK;
+      grid[2] = Math.ceil(K / kc);
+      const f32: Kind = { st: "f32" };
+      const part = this.rt.acquire(grid[2] * M * N * 4);
+      this.run(`gemmsg:${keyOf(ak, bk, "-", f32)}:${cfgKey}:split`, () => gemmSgKernel(ak, bk, null, f32, sg, true, wide),
+        [a.storage.buffer, b.storage.buffer, part.buffer],
+        { M, N, K, kc, oa: a.offset, ob: b.offset, obias: 0 }, grid);
+      const n = M * N;
+      this.run(`splitk:${keyOf(biask, ok)}:${grid[2]}`, () => splitKReduceKernel(biask, ok, grid[2]),
+        [part.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+        { n, N, obias: bias?.offset ?? 0 }, this.flatGroups(n));
+      this.rt.release(part.buffer, part.bytes);
       return out;
     }
     const dc = this.gemmConfig.direct;
-    if (dc && transB && vecA && vecB && batch === 1) {
+    if (dc && linearPath) {
       this.run(`gemmdirect:${keyOf(ak, bk, biask, ok, dc)}`, () => gemmDirectKernel(ak, bk, biask, ok, dc),
         [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
         { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
@@ -671,6 +703,98 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0,
       bsh: pad8(batchShape, 1), ast: pad8(aBatchStrides, 0), bst: pad8(bBatchStrides, 0),
     }, [Math.ceil(N / cfg.BN), Math.ceil(M / cfg.BM), batch]);
+    return out;
+  }
+
+  /**
+   * Kernel for a Linear (transB, vec4-aligned, unbatched) of shape (M, N, K):
+   * a `tuneGemm` measurement for this exact shape if there is one, else the
+   * first skinny config with M ≤ maxM, else the first subgroup-matrix config
+   * whose M range, minimum workgroup count and row-padding limit all hold,
+   * else the direct/tiled kernels (empty choice).
+   */
+  private pickLinear(M: number, N: number, K: number, ak: Kind): { skinny?: SkinnyGemmConfig; sg?: SgGemmConfig } {
+    const cfg = this.gemmConfig;
+    const sgs = this.hasSubgroupMatrix ? cfg.sg ?? [] : [];
+    const tuned = this.gemmTuning.get(tuneKey(ak, M, N, K));
+    if (tuned !== undefined) {
+      if (tuned === "skinny") {
+        const sk = cfg.skinny.find((c) => M <= c.maxM) ?? cfg.skinny[cfg.skinny.length - 1];
+        if (sk) return { skinny: sk };
+      } else if (tuned === "direct") return {};
+      else if (sgs[tuned]) return { sg: sgs[tuned] };
+    }
+    const skinny = cfg.skinny.find((c) => M <= c.maxM);
+    if (skinny) return { skinny };
+    const sg = sgs.find((c) =>
+      M > c.minM && M <= (c.maxM ?? Infinity) &&
+      (c.minGroups === undefined || Math.ceil(M / c.BM) * Math.ceil(N / c.BN) >= c.minGroups) &&
+      (c.maxPad === undefined || (Math.ceil(M / c.BM) * c.BM) / M <= c.maxPad) &&
+      (c.skipGroups === undefined || !inRange(Math.ceil(M / c.BM) * Math.ceil(N / c.BN), c.skipGroups)));
+    return sg ? { sg } : {};
+  }
+
+  /**
+   * Measured (not modelled) Linear kernel choices, by `${storage}:${M}x${N}x${K}`:
+   * "skinny", "direct" or an index into `gemmConfig.sg`. Filled by
+   * `tuneGemm`, shared by every backend on the same GPUDevice; export it
+   * with `Object.fromEntries` and restore it with `gemmTuning` (option) to
+   * skip re-tuning.
+   */
+  get gemmTuning(): Map<string, GemmChoice> {
+    let m = tunings.get(this.device);
+    if (!m) tunings.set(this.device, (m = new Map()));
+    return m;
+  }
+
+  /**
+   * Autotunes the Linear kernel per shape on this device: for each
+   * {M, N, K} (x [M, K] · w [N, K]ᵀ, in `dtype`), times every applicable
+   * candidate (skinny for M ≤ 128, each `gemmConfig.sg` entry, the direct
+   * kernel) in interleaved rounds, and records the fastest in `gemmTuning`.
+   * Takes ~10–50 ms per shape. Returns the choices.
+   */
+  async tuneGemm(shapes: readonly { M: number; N: number; K: number }[], opts: { dtype?: "f16" | "f32"; rounds?: number } = {}): Promise<Record<string, GemmChoice>> {
+    const dtype = opts.dtype ?? (this.hasF16 ? "f16" : "f32");
+    const ak = this.kind(dtype);
+    const rounds = opts.rounds ?? 3;
+    const out: Record<string, GemmChoice> = {};
+    for (const { M, N, K } of shapes) {
+      if (K % 4) continue;
+      const key = tuneKey(ak, M, N, K);
+      const cands: GemmChoice[] = [];
+      if (M <= 128 && this.gemmConfig.skinny.length) cands.push("skinny");
+      (this.hasSubgroupMatrix ? this.gemmConfig.sg ?? [] : []).forEach((_, i) => cands.push(i));
+      if (this.gemmConfig.direct) cands.push("direct");
+      if (cands.length < 2) continue;
+      const rnd = (n: number, sc: number) => Float32Array.from({ length: n }, (_, i) => (((i * 2654435761) >>> 0) / 2 ** 32 - 0.5) * sc);
+      const x = await this.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K, 2) });
+      const w = await this.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.06) });
+      const xs = this.cast(x, dtype), ws = this.cast(w, dtype);
+      const iters = Math.max(2, Math.min(20, Math.round(4e9 / (2 * M * N * K))));
+      const best = cands.map(() => Infinity);
+      const prev = this.gemmTuning.get(key);
+      try {
+        for (let r = 0; r < rounds; r++) {
+          for (let c = 0; c < cands.length; c++) {
+            this.gemmTuning.set(key, cands[c]!);
+            this.dispose(this.linear(xs, ws));
+            await this.sync();
+            const t0 = performance.now();
+            for (let i = 0; i < iters; i++) this.dispose(this.linear(xs, ws));
+            await this.sync();
+            best[c] = Math.min(best[c]!, performance.now() - t0);
+          }
+        }
+      } finally {
+        if (prev === undefined) this.gemmTuning.delete(key);
+        else this.gemmTuning.set(key, prev);
+      }
+      for (const t of [x, w, xs, ws]) this.dispose(t);
+      const pick = cands[best.indexOf(Math.min(...best))]!;
+      this.gemmTuning.set(key, pick);
+      out[key] = pick;
+    }
     return out;
   }
 
