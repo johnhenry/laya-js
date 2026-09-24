@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@johnhenry/laya": "^0.3.0",
+    "@johnhenry/laya": "^0.3.1",
     "@johnhenry/laya-core": "^0.1.1"
   },
   "devDependencies": {

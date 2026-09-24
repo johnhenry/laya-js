@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- Optional backend peer ranges also accept `^0.5.0` (backend-webgpu 0.5).
+- Updated dependencies
+- Updated dependencies [0d5072b]
+  - @johnhenry/laya@0.3.1
+
 ## 0.3.0
 
 ### Minor Changes
