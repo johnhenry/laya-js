@@ -991,8 +991,10 @@ export function ropeKernel(x: Kind, out: Kind): KernelSource {
   let o = row * P.D + j;
   let x0 = ${X("o")};
   let x1 = ${X("o + half")};
-  outp[o] = ${st(out, "x0 * c - x1 * s", "f32")};
-  outp[o + half] = ${st(out, "x1 * c + x0 * s", "f32")};
+  // Explicit fma: the contraction Metal chose for the 0.2.0 one-element-per-
+  // thread kernel; keeps f16 results bit-identical to it (and MLX parity).
+  outp[o] = ${st(out, "fma(-x1, s, x0 * c)", "f32")};
+  outp[o + half] = ${st(out, "fma(x0, s, x1 * c)", "f32")};
 }`;
   return {
     key: `rope:${kindKey(x)}:${kindKey(out)}`,
