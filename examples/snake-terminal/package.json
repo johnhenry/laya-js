@@ -32,6 +32,6 @@
     "bun": ">=1.2.0"
   },
   "devDependencies": {
-    "@johnhenry/backend-webgpu": "^0.5.0"
+    "@johnhenry/backend-webgpu": "^0.5.1"
   }
 }
