@@ -35,6 +35,10 @@ gpu.destroy();
   adapter is available. Options:
   - `device?: GPUDevice`: use your device. The backend never destroys a
     device it didn't create.
+  - `adapter?: GPUAdapter`: with `device`, the adapter it came from. The
+    subgroup-matrix check needs the adapter's `subgroupMatrixConfigs`, and
+    Dawn doesn't mirror them onto `device.adapterInfo`. Without the adapter,
+    a device you pass in never uses subgroup matrices.
   - `preferF16 = true`: request `shader-f16` and store/compute `"f16"` natively.
   - `powerPreference = "high-performance"`.
   - `maxBatch = 128`: dispatches per command buffer before an automatic submit.
@@ -59,6 +63,9 @@ gpu.destroy();
     same amount of work took last time. Dawn-node resolves `mapAsync` by
     polling in a busy loop (≈100% of a core under Bun, ≈33% under Node);
     this cuts process CPU during a forward by ~4× at the same latency.
+  - `sleepThresholdMs = 3`: sleep only when the expected wait is longer
+    than this. Short readbacks (a few ms) can lose 15–60% latency to the
+    sleep; raise the threshold if latency matters more than CPU.
 - `isWebGpuAvailable(): Promise<boolean>`: use it to skip tests.
 - `WebGpuBackend` implements every required op plus `geglu`, `meanPool`,
   `flush` and `destroy`. Extras:
@@ -72,6 +79,25 @@ gpu.destroy();
     Without it, the built-in rules below pick the kernel.
   - `rt.stats`: live/pooled bytes, buffers created, bind groups created, dispatches, submits, pipelines.
   - `rt.trim()`: free pooled buffers.
+- Extension hooks, for code that adds its own kernels to the runtime
+  (math-plus's tensor-compile fusion does):
+  - `elementwise(expr, xs, { outDtype?, helpers? })`: a custom n-ary
+    elementwise kernel with broadcasting. `expr` is an f32 WGSL expression
+    over `x0, x1, …`; `helpers` is extra WGSL (functions) placed before the
+    entry point. The kernel is one dispatch, cached per expression and
+    input layout. For `outDtype: "bool"`, nonzero means true.
+  - `empty(shape, dtype)`: an uninitialised, scope-tracked tensor from the
+    pool, for a custom kernel's output.
+  - `wrapBuffer(buffer, shape, dtype, offset?)`: a view of a `GPUBuffer`
+    you own. `dispose` never pools or destroys it.
+  - `rt.kernel(() => source, key)` / `rt.dispatch(kernel, buffers, params,
+    groups)`: compile and batch any kernel. The runtime generates the header
+    from `bindings` (`array<elem>`, `read` or `read_write`) and `params` (a
+    uniform struct `P`); entry point `main`. A tensor's data is
+    `t.storage.buffer` from element `t.offset`.
+  - Exported classes and types: `Runtime`, `Storage`, `KernelSource`,
+    `BindingSpec`, `ParamSpec`, `ParamType`, `CompiledKernel` and
+    `RuntimeStats`.
 - `WebGpuTensor` has `shape`, `dtype`, `storage` (a refcounted `GPUBuffer`),
   `offset` (element offset: views share storage) and `disposed`.
 - `getGpu({ unsafe? })` / `requestAdapter(powerPreference?, unsafe?)` give
@@ -154,8 +180,8 @@ gpu.destroy();
 | linear, M > 64, K % 4 = 0, subgroup matrices available | `tuneGemm` choice if any, else: 64×64 tiles, 2 subgroups × 8×4 f32 8×8 fragments, when the grid has ≥ 48 workgroups (not 57–79: a poor last wave on M2) and rows pad by ≤ 10%; otherwise 32×64 tiles (2 subgroups × 4×4 fragments), split-K 2 below 48 workgroups. K panels of 8 staged (converted to f32; f16 read 8 at a time as `vec4<u32>`) through workgroup memory, software-pipelined through registers. f32 accumulation. |
 | linear, K % 4 = 0 otherwise | Register-blocked "direct" kernel: 4×8 outputs per thread, vec4 loads straight from global memory. |
 | linear otherwise; batched and broadcast matmul | 64×64×16 workgroup-memory tiled GEMM. |
-| sdpa, head dim 32 or 64 | Flash attention: online softmax, register-blocked 32q×16k tiles. With a mask, each query block first scans its mask rows and only visits the key-tile range that has a visible key (sliding window, padding). |
-| sdpa, other head dims ≤ 256 | Generic flash kernel. |
+| sdpa, head dim 32 or 64, when its workgroup memory fits (D = 64: ~20 KiB) | Flash attention: online softmax, register-blocked 32q×16k tiles. With a mask, each query block first scans its mask rows and only visits the key-tile range that has a visible key (sliding window, padding). |
+| sdpa, otherwise (head dims ≤ 256) | Generic flash kernel. Its tiles halve until they fit the device's `maxComputeWorkgroupStorageSize`, so a device with the 16 KiB default works. |
 | layerNorm, softmax (last axis) | One workgroup per row. |
 | sort | Bitonic sort in workgroup memory for rows ≤ 4096; slow per-row insertion sort above that. |
 
@@ -291,6 +317,8 @@ L=512 18.8 s.
   `cumsum` scans each lane sequentially, so it is slow for very long axes.
   NaN handling in comparisons, `min`/`argmax` etc. follows the driver
   (WGSL may assume no NaNs).
+  The generic `sdpa` kernel (head dims other than 32/64, or a device too
+  small for the fast one) walks every key tile, masked or not.
   `matmul` supports batch ≤ 65535. Rank ≤ 8. `sdpa` head dim ≤ 256, with q,
   k and v having the same batch and heads (no GQA). Fully masked rows are
   undefined behaviour, as in the contract.

@@ -61,9 +61,12 @@ export class Storage {
   readonly buffer: GPUBuffer;
   /** Allocated (size-class) bytes. */
   readonly bytes: number;
-  constructor(buffer: GPUBuffer, bytes: number) {
+  /** A caller-owned buffer (`WebGpuBackend.wrapBuffer`): never returned to the pool or destroyed by the backend. */
+  readonly external: boolean;
+  constructor(buffer: GPUBuffer, bytes: number, external = false) {
     this.buffer = buffer;
     this.bytes = bytes;
+    this.external = external;
   }
 }
 
@@ -123,6 +126,8 @@ export class Runtime {
    * that power comes out of the GPU's budget.
    */
   sleepWhileWaiting = false;
+  /** Only sleep when the expected wait exceeds this many milliseconds (default 3). */
+  sleepThresholdMs = 3;
   /** Dispatches enqueued since the last readback, and the last observed wait (ms) per count. */
   private sinceRead = 0;
   private waitMs = new Map<number, number>();
@@ -377,7 +382,7 @@ export class Runtime {
     const est = work ? this.waitMs.get(work) : undefined;
     // Sleep ~80% of the last wait for the same amount of work; poll only for the rest.
     // Self-correcting: an overestimate shrinks by 20% per read.
-    if (this.sleepWhileWaiting && est !== undefined && est > 3) {
+    if (this.sleepWhileWaiting && est !== undefined && est > this.sleepThresholdMs) {
       const p = new Promise<void>((r) => setTimeout(r, est * 0.8 - (performance.now() - t0)));
       this.sleeping = p;
       await p;
