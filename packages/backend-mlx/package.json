@@ -1,7 +1,7 @@
 {
   "name": "@johnhenry/backend-mlx",
   "version": "0.2.0",
-  "description": "Native Apple Silicon MLX backend (mlx-c over FFI) for @johnhenry/tensor-backend on Node and Bun",
+  "description": "Native Apple Silicon MLX backend (mlx-c over FFI) for @johnhenry/tensor-backend on Node, Bun and Deno",
   "keywords": [
     "mlx",
     "apple-silicon",
@@ -13,6 +13,7 @@
     "transformer",
     "inference",
     "bun",
+    "deno",
     "koffi"
   ],
   "license": "MIT",
@@ -46,7 +47,8 @@
     "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
     "test:bun": "bun --conditions=source test test/",
     "build:mlxc": "bash scripts/build-mlxc.sh",
-    "bench": "node --conditions=source bench/ops.bench.ts"
+    "bench": "node --conditions=source bench/ops.bench.ts",
+    "test:deno": "deno test -A --conditions=source --node-modules-dir=manual test/"
   },
   "engines": {
     "node": ">=24.0.0",

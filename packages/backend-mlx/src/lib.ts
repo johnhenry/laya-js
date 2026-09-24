@@ -7,7 +7,9 @@
  *      one (`$LAYA_MLXC_LIB` is accepted as a legacy alias). A set variable
  *      that points nowhere is an error, never a silent fallback.
  *   3. the platform package `@johnhenry/backend-mlx-darwin-arm64`
- *      (an optionalDependency: npm installs it only on darwin/arm64). It
+ *      (an optionalDependency: npm installs it only on darwin/arm64). Deno
+ *      finds it in node_modules (next to this module or the working
+ *      directory) or, without node_modules, in its global npm cache. It
  *      ships `lib/{libmlxc,libmlx,libjaccl}.dylib` + `lib/mlx.metallib`,
  *      built by `scripts/build-mlxc.sh` (mlx-c v0.6+ against the MLX 0.32.2
  *      wheel — the same MLX the Python reference uses)
@@ -34,12 +36,54 @@ export interface LibCandidate {
 export const PLATFORM_PACKAGE = "@johnhenry/backend-mlx-darwin-arm64";
 
 type Env = Record<string, string | undefined>;
-const processEnv = (): Env => (globalThis as { process?: { env?: Env } }).process?.env ?? {};
+const processEnv = (): Env => {
+  try {
+    return { ...(globalThis as { process?: { env?: Env } }).process?.env };
+  } catch {
+    return {}; // Deno without --allow-env
+  }
+};
+const deno = (): { cwd(): string } | undefined => (globalThis as { Deno?: { cwd(): string } }).Deno;
+
+/** This module's directory, or undefined when it was loaded over https (e.g. from JSR under Deno). */
+function moduleDir(): string | undefined {
+  return import.meta.url.startsWith("file:") ? dirname(fileURLToPath(import.meta.url)) : undefined;
+}
 
 function packageFile(spec: string, ...rel: string[]): string | undefined {
+  // Node/Bun (and Deno with node_modules): node resolution from this module,
+  // then (Deno only, e.g. a JSR import) from the working directory's node_modules.
+  const bases: string[] = [import.meta.url];
+  const d = deno();
+  if (d) {
+    try {
+      bases.push(join(d.cwd(), "package.json"));
+    } catch {
+      // no --allow-read for cwd
+    }
+  }
+  for (const base of bases) {
+    try {
+      return join(dirname(createRequire(base).resolve(`${spec}/package.json`)), ...rel);
+    } catch {
+      // not resolvable from this base (or base is not a file URL)
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Deno without node_modules (e.g. `jsr:@johnhenry/backend-mlx`): the platform
+ * package resolves only once it is in Deno's npm cache (`deno add
+ * npm:@johnhenry/backend-mlx-darwin-arm64`); an uncached package stays an
+ * `npm:` URL and is skipped. The specifier is a literal so that JSR rewrites
+ * it through this package's import map at publish time.
+ */
+function denoPlatformLib(): string | undefined {
+  if (!deno()) return undefined;
   try {
-    const req = createRequire(import.meta.url);
-    return join(dirname(req.resolve(`${spec}/package.json`)), ...rel);
+    const url = import.meta.resolve("@johnhenry/backend-mlx-darwin-arm64/package.json");
+    return url.startsWith("file:") ? join(dirname(fileURLToPath(url)), "lib", "libmlxc.dylib") : undefined;
   } catch {
     return undefined;
   }
@@ -57,14 +101,14 @@ function envPath(value: string | undefined): string | undefined {
 }
 
 export function libCandidates(explicit?: string): LibCandidate[] {
-  const here = dirname(fileURLToPath(import.meta.url)); // src/ or dist/
+  const here = moduleDir(); // src/ or dist/ (undefined when loaded over https)
   const env = processEnv();
   const list: [string | undefined, string][] = [
     [explicit, "option libPath"],
     [envPath(env.LAYA_MLXC_PATH), "$LAYA_MLXC_PATH"],
     [envPath(env.LAYA_MLXC_LIB), "$LAYA_MLXC_LIB"],
-    [packageFile(PLATFORM_PACKAGE, "lib", "libmlxc.dylib"), PLATFORM_PACKAGE],
-    [join(here, "..", "prebuilds", "darwin-arm64", "libmlxc.dylib"), "backend-mlx local build (npm run build:mlxc)"],
+    [packageFile(PLATFORM_PACKAGE, "lib", "libmlxc.dylib") ?? denoPlatformLib(), PLATFORM_PACKAGE],
+    [here && join(here, "..", "prebuilds", "darwin-arm64", "libmlxc.dylib"), "backend-mlx local build (npm run build:mlxc)"],
     [packageFile("@nielspeter/mlx-ts-darwin-arm64", "libmlxc.dylib"), "@nielspeter/mlx-ts-darwin-arm64"],
     ["/opt/homebrew/opt/mlx-c/lib/libmlxc.dylib", "Homebrew"],
     ["/opt/homebrew/lib/libmlxc.dylib", "Homebrew"],
@@ -87,7 +131,8 @@ export function resolveLib(explicit?: string): LibCandidate {
   if (!found) {
     throw new Error(
       `backend-mlx: libmlxc.dylib not found. Install ${PLATFORM_PACKAGE} (npm adds it automatically on ` +
-        "darwin/arm64 unless optional dependencies are omitted), run `npm run build:mlxc -w @johnhenry/backend-mlx`, " +
+        "darwin/arm64 unless optional dependencies are omitted; under Deno without node_modules, " +
+        "`deno add npm:@johnhenry/backend-mlx-darwin-arm64`), run `npm run build:mlxc -w @johnhenry/backend-mlx`, " +
         "`brew install mlx-c`, or set LAYA_MLXC_PATH. Tried:\n" +
         cands.map((c) => `  ${c.path} (${c.source})`).join("\n"),
     );

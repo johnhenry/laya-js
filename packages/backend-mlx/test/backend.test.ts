@@ -20,7 +20,7 @@ if (skipReason) {
     it("reports which libmlxc and ABI it loaded", () => {
       const { info } = get();
       assert.match(info.libPath, /libmlxc\.dylib$/);
-      assert.ok(info.runtime === "node" || info.runtime === "bun");
+      assert.ok(["node", "bun", "deno"].includes(info.runtime));
       assert.equal(get().name, "mlx");
       assert.equal(get().device, "gpu");
     });
