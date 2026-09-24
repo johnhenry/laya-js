@@ -68,11 +68,11 @@ test("tiny encoder: every stage matches MLX within 1e-5 on CPU; HF 'model.' name
   const get = await tinyWeights();
   assert.equal(detectPrefix(get), "encoder.");
   const backend = createCpuBackend();
-  const enc = loadModernBert(backend, config, get);
+  const enc = await loadModernBert(backend, config, get);
   const ids = decodeTensor(act.inputs.input_ids!), mask = decodeTensor(act.inputs.attention_mask!);
   const [B, L] = ids.shape as [number, number];
   const stages = new Map<string, CpuTensor>();
-  const out = enc.forward(ids.data as Int32Array, mask.data as Uint8Array, B, L, {
+  const out = await enc.forward(ids.data as Int32Array, mask.data as Uint8Array, B, L, {
     onStage: (name, t) => (stages.set(name, t), true),
   });
   assert.equal(stages.get("final_norm"), out);
@@ -93,8 +93,8 @@ test("tiny encoder: every stage matches MLX within 1e-5 on CPU; HF 'model.' name
   // Same weights under HF names: model.embeddings..., model.layers.N..., model.final_norm...
   const hf: WeightGetter = (n) => (n.startsWith("model.") ? get("encoder." + n.slice(6)) : undefined);
   assert.equal(detectPrefix(hf), "model.");
-  const enc2 = loadModernBert(backend, config, { get: hf });
-  const out2 = enc2.forward(ids.data as Int32Array, mask.data as Uint8Array, B, L);
+  const enc2 = await loadModernBert(backend, config, { get: hf });
+  const out2 = await enc2.forward(ids.data as Int32Array, mask.data as Uint8Array, B, L);
   assert.deepEqual(toF32(await backend.read(out2)), toF32(await backend.read(out)));
 
   // embed(): masked mean of final_norm over valid tokens (laya-mlx embed_fn_from_agent)
@@ -120,10 +120,10 @@ test("loadModernBert validates names and shapes", async () => {
   const config = parseModernBertConfig(await tinyConfig());
   const get = await tinyWeights();
   const backend = createCpuBackend();
-  assert.throws(() => loadModernBert(backend, config, () => undefined), /no embeddings\.tok_embeddings\.weight/);
+  await assert.rejects(() => loadModernBert(backend, config, () => undefined), /no embeddings\.tok_embeddings\.weight/);
   const noNorm: WeightGetter = (n) => (n === "encoder.layers.2.attn_norm.weight" ? undefined : get(n));
-  assert.throws(() => loadModernBert(backend, config, noNorm), /missing weight encoder\.layers\.2\.attn_norm\.weight/);
+  await assert.rejects(() => loadModernBert(backend, config, noNorm), /missing weight encoder\.layers\.2\.attn_norm\.weight/);
   const bigger = parseModernBertConfig({ ...(await tinyConfig()), intermediate_size: 100 });
-  assert.throws(() => loadModernBert(backend, bigger, get), /Wi\.weight has shape \[192,64\], want \[200,64\]/);
-  assert.throws(() => loadModernBert(backend, config, get, { dtype: "f16" }), /does not support f16/);
+  await assert.rejects(() => loadModernBert(backend, bigger, get), /Wi\.weight has shape \[192,64\], want \[200,64\]/);
+  await assert.rejects(() => loadModernBert(backend, config, get, { dtype: "f16" }), /does not support f16/);
 });
