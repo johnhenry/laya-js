@@ -130,3 +130,39 @@ jobs:
           path: packages/backend-mlx-darwin-arm64/*.tgz
           if-no-files-found: error
           retention-days: 7
+
+  # What users actually install: the PUBLISHED @johnhenry/backend-mlx +
+  # its platform package from npm, on macOS 15 (the oldest macOS the prebuilt
+  # bundle should support). 0.1.0 of the platform package was built on macOS
+  # 26 and failed here with "could not create gpu stream".
+  mlx-published-macos15:
+    runs-on: macos-15
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install the published packages into an empty project
+        run: |
+          mkdir smoke && cd smoke && npm init -y >/dev/null
+          npm install --no-audit --no-fund @johnhenry/backend-mlx@latest koffi
+          node -p "'platform package ' + require('./node_modules/@johnhenry/backend-mlx-darwin-arm64/package.json').version"
+
+      - name: MLX GPU smoke test (matmul + softmax on Metal)
+        working-directory: smoke
+        run: |
+          cat > smoke.mjs <<'JS'
+          import { createMlxBackend } from "@johnhenry/backend-mlx";
+          const b = createMlxBackend({ device: "gpu" });
+          console.log(JSON.stringify(b.info));
+          const a = await b.fromHost({ dtype: "f32", shape: [2, 3], data: Float32Array.from([1, 2, 3, 4, 5, 6]) });
+          const w = await b.fromHost({ dtype: "f32", shape: [2, 3], data: Float32Array.from([1, 0, 0, 0, 1, 0]) });
+          const y = await b.read(b.softmax(b.linear(a, w), -1));
+          const got = Array.from(y.data, (v) => +v.toFixed(4));
+          console.log("result", got);
+          const want = [0.2689, 0.7311, 0.2689, 0.7311];
+          if (got.some((v, i) => Math.abs(v - want[i]) > 1e-3)) { console.error("MISMATCH", got, want); process.exit(1); }
+          JS
+          node smoke.mjs
