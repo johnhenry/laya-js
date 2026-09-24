@@ -1,5 +1,5 @@
-import type { Backend, DType, HostQuantized, HostTensor, QuantizedLinearOptions, QuantizedTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
-import { f32ToBf16Bits } from "@johnhenry/tensor-backend";
+import type { Backend, DType, HostQuantized, HostTensor, QuantBits, QuantizedLinearOptions, QuantizedTensor, QuantMode, Shape, Tensor } from "@johnhenry/tensor-backend";
+import { f32ToBf16Bits, packQuantized } from "@johnhenry/tensor-backend";
 import { Runtime, Storage, type CompiledKernel, type KernelSource } from "./runtime.ts";
 import {
   ERF_HELPERS,
@@ -13,6 +13,7 @@ import {
   gemmKernel,
   gemmDirectKernel,
   gemmSkinnyKernel,
+  gemmQmvKernel,
   gemmSgKernel,
   grid,
   layerNormKernel,
@@ -37,6 +38,10 @@ import {
   type Kind,
   type SgGemmConfig,
   type SkinnyGemmConfig,
+  type QmvGemmConfig,
+  type QuantGemmConfig,
+  QUANT_GEMM_DEFAULT,
+  QUANT_GEMM_NAVIGATOR,
   kindKey,
   type NaryInput,
 } from "./kernels.ts";
@@ -140,8 +145,10 @@ function promote(a: DType, b: DType): DType {
 /** Subgroup-matrix tile for quantized Linears with 16 < M ≤ 64. */
 const QUANT_SG_SMALL_M: SgGemmConfig = { BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0 };
 
-/** A Linear kernel choice: skinny, direct, or an index into `GemmConfig.sg`. */
-export type GemmChoice = "skinny" | "direct" | number;
+type LinearPick = { skinny?: SkinnyGemmConfig; sg?: SgGemmConfig; qmv?: QmvGemmConfig };
+
+/** A Linear kernel choice: skinny, direct, qmv (quantized only), or an index into `GemmConfig.sg`. */
+export type GemmChoice = "skinny" | "direct" | "qmv" | number;
 const tunings = new WeakMap<GPUDevice, Map<string, GemmChoice>>();
 const inRange = (v: number, [lo, hi]: readonly [number, number]) => v >= lo && v <= hi;
 const tuneKey = (k: Kind, M: number, N: number, K: number) => `${k.st}:${M}x${N}x${K}`;
@@ -152,6 +159,8 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   readonly hasF16: boolean;
   /** f32 8×8×8 subgroup matrices usable (Dawn chromium-experimental-subgroup-matrix, subgroup size 32). */
   readonly hasSubgroupMatrix: boolean;
+  /** WGSL `subgroups` usable with a fixed subgroup size (that size), else 0. */
+  readonly subgroupSize: number;
   gemmConfig: GemmConfig;
   private scopes: Set<WebGpuTensor>[] = [];
   private ropeTables = new Map<string, Storage>();
@@ -161,14 +170,16 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   readonly adapterInfo: AdapterSummary;
   private readonly ownsDevice: boolean;
 
-  constructor(device: GPUDevice, adapterInfo: AdapterSummary, opts: WebGpuBackendOptions & { f16: boolean; ownsDevice: boolean; subgroupMatrix?: boolean }) {
+  constructor(device: GPUDevice, adapterInfo: AdapterSummary, opts: WebGpuBackendOptions & { f16: boolean; ownsDevice: boolean; subgroupMatrix?: boolean; subgroupSize?: number }) {
     this.device = device;
     this.adapterInfo = adapterInfo;
     this.hasF16 = opts.f16;
     this.hasSubgroupMatrix = opts.subgroupMatrix ?? false;
+    this.subgroupSize = opts.subgroupSize ?? 0;
     this.ownsDevice = opts.ownsDevice;
     this.rt = new Runtime(device, opts.maxBatch ?? 128, opts.maxPooledBytes ?? 2 ** 30, opts.firstBatch ?? 24);
-    this.gemmConfig = opts.gemm ?? GEMM_DEFAULT;
+    // navigator.gpu (browsers, Deno): the quantized choice measured in Chromium
+    this.gemmConfig = opts.gemm ?? (adapterInfo.source === "navigator.gpu" ? { ...GEMM_DEFAULT, quant: QUANT_GEMM_NAVIGATOR } : GEMM_DEFAULT);
     for (const [k, v] of Object.entries(opts.gemmTuning ?? {})) this.gemmTuning.set(k, v);
     this.rt.sleepWhileWaiting = opts.sleepWhileWaiting ?? adapterInfo.source !== "navigator.gpu";
     if (opts.sleepThresholdMs !== undefined) this.rt.sleepThresholdMs = opts.sleepThresholdMs;
@@ -707,7 +718,19 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     const vecB = (transB ? K % 4 === 0 : N % 4 === 0) && b.offset % 4 === 0 && bBatchStrides.every((s) => s % 4 === 0);
     const linearPath = transB && vecA && vecB && batch === 1;
     if (q && !linearPath) throw new Error("webgpu quantizedLinear: needs K % 4 == 0 and an aligned, unbatched x");
-    const choice = linearPath ? this.pickLinear(M, N, K, ak, !!q) : undefined;
+    const choice = linearPath ? this.pickLinear(M, N, K, ak, q) : undefined;
+    const qmv = choice?.qmv;
+    if (qmv && q) {
+      // M split into balanced blocks of at most qmv.MT rows (grid.y)
+      const blocks = Math.ceil(M / qmv.MT), MT = Math.ceil(M / blocks);
+      const sub = !!qmv.sub && this.subgroupSize >= qmv.TK && this.subgroupSize % qmv.TK === 0;
+      const cfg = sub === !!qmv.sub ? qmv : { ...qmv, sub };
+      this.run(`gemmqmv:${keyOf(ak, biask, ok)}:${qmv.TK}x${qmv.NR}x${qmv.R}/${qmv.C}/${MT}${sub ? "s" : ""}${qk}`, () => gemmQmvKernel(ak, biask, ok, q, cfg, MT),
+        [a.storage.buffer, ...bBufs, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+        { M, N, K, oa: a.offset, obias: bias?.offset ?? 0 },
+        [Math.ceil(N / (qmv.NR * qmv.R)), blocks, 1]);
+      return out;
+    }
     const sk = choice?.skinny;
     if (sk) {
       const TM = Math.ceil(M / sk.WY);
@@ -720,7 +743,7 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     }
     const sg = choice?.sg;
     if (sg) {
-      const wide = !q && (sg.wide ?? true) && ak.st === "f16" && bk.st === "f16" && K % 8 === 0 && a.offset % 8 === 0 && b.offset % 8 === 0;
+      const wide = (sg.wide ?? true) && ak.st === "f16" && K % 8 === 0 && a.offset % 8 === 0 && (q ? q.g % 8 === 0 : bk.st === "f16" && b.offset % 8 === 0);
       const cfgKey = `${sg.BM}x${sg.BN}x${sg.BK}/${sg.WM}x${sg.WN}/${sg.db ?? false}/${sg.epi ?? "frag"}/${sg.pad ?? 4}/${wide}${qk}`;
       const grid: [number, number, number] = [Math.ceil(N / sg.BN), Math.ceil(M / sg.BM), 1];
       const groups = grid[0] * grid[1];
@@ -767,27 +790,36 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
 
   /**
    * Kernel for a Linear (transB, vec4-aligned, unbatched) of shape (M, N, K):
-   * a `tuneGemm` measurement for this exact shape if there is one, else the
-   * first skinny config with M ≤ maxM, else the first subgroup-matrix config
-   * whose M range, minimum workgroup count and row-padding limit all hold,
-   * else the direct/tiled kernels (empty choice).
+   * a `tuneGemm` measurement for this exact shape if there is one; for
+   * quantized weights with `gemmConfig.quant`, its qmv / subgroup-matrix tile
+   * rules (`quantPick`); else the first skinny config with M ≤ maxM, else
+   * the first subgroup-matrix config whose M range, minimum workgroup count
+   * and row-padding limit all hold, else the direct/tiled kernels (empty
+   * choice).
    */
-  private pickLinear(M: number, N: number, K: number, ak: Kind, quant = false): { skinny?: SkinnyGemmConfig; sg?: SgGemmConfig } {
+  private pickLinear(M: number, N: number, K: number, ak: Kind, q: QuantSpec | null = null): LinearPick {
     const cfg = this.gemmConfig;
+    const quant = !!q;
     const sgs = this.hasSubgroupMatrix ? cfg.sg ?? [] : [];
     const tuned = this.gemmTuning.get((quant ? "q" : "") + tuneKey(ak, M, N, K));
     if (tuned !== undefined) {
-      if (tuned === "skinny") {
+      if (tuned === "qmv") {
+        const qs = (cfg.quant ?? QUANT_GEMM_DEFAULT).qmv.filter((c) => q && K % c.C === 0 && q.g % c.C === 0);
+        const c = qs.find((c) => M <= c.maxM) ?? qs.at(-1);
+        if (c) return { qmv: c };
+      } else if (tuned === "skinny") {
         const sk = cfg.skinny.find((c) => M <= c.maxM) ?? cfg.skinny[cfg.skinny.length - 1];
         if (sk) return { skinny: sk };
       } else if (tuned === "direct") return {};
       else if (sgs[tuned]) return { sg: sgs[tuned] };
     }
-    if (quant) {
-      // Quantized B (measured on M2, bench/quantized-gemm.ts): dequantizing in the
-      // skinny kernel is ALU-bound once each thread owns many rows, so only the
-      // smallest M stay skinny; up to 64 rows the subgroup-matrix kernel with
-      // split-K 2 is faster, else the wide-row skinny config.
+    if (q && cfg.quant) {
+      const p = this.quantPick(M, N, K, q, cfg.quant);
+      if (p) return p;
+    } else if (q) {
+      // 0.4.0 rules (measured on M2, bench/quantized-gemm.ts): skinny for the
+      // smallest M; up to 64 rows the subgroup-matrix kernel with split-K 2,
+      // else the wide-row skinny config.
       if (M <= 16 && cfg.skinny[0]) return { skinny: cfg.skinny[0] };
       if (M <= 64) {
         if (sgs[0]) return { sg: { ...QUANT_SG_SMALL_M, splitK: [{ S: 2 }] } };
@@ -803,6 +835,26 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       (c.maxPad === undefined || (Math.ceil(M / c.BM) * c.BM) / M <= c.maxPad) &&
       (c.skipGroups === undefined || !inRange(Math.ceil(M / c.BM) * Math.ceil(N / c.BN), c.skipGroups)));
     return sg ? { sg } : {};
+  }
+
+  /** Quantized-weight rules of `QuantGemmConfig` (undefined: fall through to the float rules). */
+  private quantPick(M: number, N: number, K: number, q: QuantSpec, qc: QuantGemmConfig): LinearPick | undefined {
+    const sgOk = this.hasSubgroupMatrix && !!qc.sg;
+    const qmv = qc.qmv.find((c) => M <= c.maxM && (c.bits === undefined || c.bits === q.bits) && K % c.C === 0 && q.g % c.C === 0 && !(sgOk && c.maxN !== undefined && N > c.maxN));
+    if (qmv) return { qmv };
+    if (!sgOk) return undefined;
+    const r = qc.sg!;
+    const groups = (BM: number) => Math.ceil(M / BM) * Math.ceil(N / 64);
+    const tile = (BM: number, S = 1): SgGemmConfig => ({ BM, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0, ...(S > 1 ? { splitK: [{ S }] } : {}) });
+    if (Math.ceil(M / 64) * 64 <= r.maxPad64 * M && groups(64) >= r.minGroups64) return { sg: tile(64) };
+    const pad = (BM: number) => Math.ceil(M / BM) * BM;
+    const least = Math.min(...r.rows.map(pad));
+    const rows = [...r.rows].sort((a, b) => b - a).filter((BM) => pad(BM) <= 1.1 * least);
+    const tall = rows.find((BM) => groups(BM) >= r.minGroups);
+    if (tall !== undefined) return { sg: tile(tall) };
+    const BM = rows[rows.length - 1]!;
+    const S = Math.min(r.maxSplit, Math.ceil(r.minGroups / groups(BM)));
+    return { sg: tile(BM, S) };
   }
 
   /**
@@ -823,48 +875,84 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
    * {M, N, K} (x [M, K] · w [N, K]ᵀ, in `dtype`), times every applicable
    * candidate (skinny for M ≤ 128, each `gemmConfig.sg` entry, the direct
    * kernel) in interleaved rounds, and records the fastest in `gemmTuning`.
-   * Takes ~10–50 ms per shape. Returns the choices.
+   * With `quantized`, tunes `quantizedLinear` for weights of that format
+   * instead (keys prefixed "q"): the candidates are the built-in quantized
+   * choice, qmv, skinny, each `gemmConfig.sg` entry and direct, and a
+   * choice is recorded only when it beats the built-in one. Takes ~10–50 ms
+   * per shape. Returns the recorded choices.
    */
-  async tuneGemm(shapes: readonly { M: number; N: number; K: number }[], opts: { dtype?: "f16" | "f32"; rounds?: number } = {}): Promise<Record<string, GemmChoice>> {
+  async tuneGemm(
+    shapes: readonly { M: number; N: number; K: number }[],
+    opts: { dtype?: "f16" | "f32"; rounds?: number; quantized?: { bits: QuantBits; groupSize?: number; mode?: QuantMode } } = {},
+  ): Promise<Record<string, GemmChoice>> {
     const dtype = opts.dtype ?? (this.hasF16 ? "f16" : "f32");
     const ak = this.kind(dtype);
     const rounds = opts.rounds ?? 3;
+    const qo = opts.quantized;
     const out: Record<string, GemmChoice> = {};
+    const rnd = (n: number, sc: number) => Float32Array.from({ length: n }, (_, i) => (((i * 2654435761) >>> 0) / 2 ** 32 - 0.5) * sc);
     for (const { M, N, K } of shapes) {
       if (K % 4) continue;
-      const key = tuneKey(ak, M, N, K);
-      const cands: GemmChoice[] = [];
+      const key = (qo ? "q" : "") + tuneKey(ak, M, N, K);
+      // undefined: the built-in choice (quantized only)
+      const cands: (GemmChoice | undefined)[] = qo ? [undefined] : [];
+      if (qo && (this.gemmConfig.quant ?? QUANT_GEMM_DEFAULT).qmv.length) cands.push("qmv");
       if (M <= 128 && this.gemmConfig.skinny.length) cands.push("skinny");
       (this.hasSubgroupMatrix ? this.gemmConfig.sg ?? [] : []).forEach((_, i) => cands.push(i));
       if (this.gemmConfig.direct) cands.push("direct");
       if (cands.length < 2) continue;
-      const rnd = (n: number, sc: number) => Float32Array.from({ length: n }, (_, i) => (((i * 2654435761) >>> 0) / 2 ** 32 - 0.5) * sc);
       const x = await this.fromHost({ dtype: "f32", shape: [M, K], data: rnd(M * K, 2) });
-      const w = await this.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.06) });
-      const xs = this.cast(x, dtype), ws = this.cast(w, dtype);
+      const xs = this.cast(x, dtype);
+      let run: () => WebGpuTensor, free: () => void;
+      if (qo) {
+        const groupSize = qo.groupSize ?? 64, mode = qo.mode ?? (qo.bits === 8 ? "symmetric" : "affine");
+        const G = Math.ceil(K / groupSize);
+        const lo = mode === "symmetric" ? 1 - (1 << (qo.bits - 1)) : 0, span = mode === "symmetric" ? (1 << qo.bits) - 1 : 1 << qo.bits;
+        const qv = Int32Array.from({ length: N * K }, (_, i) => lo + (((i * 2654435761) >>> 8) % span));
+        const sc = Float16Array.from({ length: N * G }, (_, i) => 1e-3 * (1 + (i % 7) / 7));
+        const h: HostQuantized = {
+          shape: [N, K], bits: qo.bits, groupSize, mode, data: packQuantized(qv, qo.bits),
+          scales: { dtype: "f16", shape: [N, G], data: sc },
+          biases: mode === "affine" ? { dtype: "f16", shape: [N, G], data: sc.map((v) => -8 * v) } : null,
+        };
+        const q = await this.fromHostQuantized(h, dtype);
+        if (!q) {
+          for (const t of [x, xs]) this.dispose(t);
+          continue;
+        }
+        const qopts = { bits: qo.bits, groupSize, mode };
+        run = () => this.quantizedLinear(xs, q.w, q.scales, q.biases, qopts);
+        free = () => [q.w, q.scales, ...(q.biases ? [q.biases] : [])].forEach((t) => this.dispose(t));
+      } else {
+        const w = await this.fromHost({ dtype: "f32", shape: [N, K], data: rnd(N * K, 0.06) });
+        const ws = this.cast(w, dtype);
+        run = () => this.linear(xs, ws);
+        free = () => [w, ws].forEach((t) => this.dispose(t));
+      }
       const iters = Math.max(2, Math.min(20, Math.round(4e9 / (2 * M * N * K))));
       const best = cands.map(() => Infinity);
       const prev = this.gemmTuning.get(key);
+      const set = (c: GemmChoice | undefined) => (c === undefined ? this.gemmTuning.delete(key) : this.gemmTuning.set(key, c));
       try {
         for (let r = 0; r < rounds; r++) {
           for (let c = 0; c < cands.length; c++) {
-            this.gemmTuning.set(key, cands[c]!);
-            this.dispose(this.linear(xs, ws));
+            set(cands[c]);
+            this.dispose(run());
             await this.sync();
             const t0 = performance.now();
-            for (let i = 0; i < iters; i++) this.dispose(this.linear(xs, ws));
+            for (let i = 0; i < iters; i++) this.dispose(run());
             await this.sync();
             best[c] = Math.min(best[c]!, performance.now() - t0);
           }
         }
       } finally {
-        if (prev === undefined) this.gemmTuning.delete(key);
-        else this.gemmTuning.set(key, prev);
+        set(prev);
+        for (const t of [x, xs]) this.dispose(t);
+        free();
       }
-      for (const t of [x, w, xs, ws]) this.dispose(t);
-      const pick = cands[best.indexOf(Math.min(...best))]!;
-      this.gemmTuning.set(key, pick);
-      out[key] = pick;
+      const pick = cands[best.indexOf(Math.min(...best))];
+      set(pick);
+      if (pick !== undefined) out[key] = pick;
     }
     return out;
   }

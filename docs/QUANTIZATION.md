@@ -182,23 +182,47 @@ exact. The repacked weights dequantize bit-for-bit to fl32(q·scale + bias)
 the default composition.
 
 **WebGPU**: the packed words go into a `u32` storage buffer and the scales /
-biases into f16 buffers (f32 without `shader-f16`). Every Linear kernel —
-skinny (small M), subgroup-matrix (split-K too), direct and tiled — reads its
-B operand through one helper that unpacks 4 values from a word, sign-extends
-them for symmetric, and applies `fma(q, scale, bias)` in f32 while staging
-the tile; accumulation stays f32, as for fp16 weights. Group sizes must be
-multiples of 4 (partial last groups are fine). The embedding is a
-dequantizing gather.
+biases into f16 buffers (f32 without `shader-f16`). The kernel depends on
+M = B·L (`QUANT_GEMM_DEFAULT` in backend-webgpu; tuned on an M2):
 
-Numerically the on-device path matches host dequantization: WebGPU rounds
-each dequantized weight to f16 when the activations are f16 (as the host
-does) and keeps f32 otherwise; MLX computes in its own order. On the parity
-set every argmax and every q4 flip is identical in both modes and the
-probabilities differ by at most 5e-3; in f32 they agree to 4 decimals.
+- M ≤ 48, and M ≤ 64 when N < 2048 (every M without subgroup matrices, e.g.
+  in browsers without the flag): **qmv**, a memory-bound matrix-"vector"
+  kernel. 8 threads walk each weight row with one `vec2<u32>` (q8) / `u32`
+  (q4) load per 8 values (16 values per load for the smallest M), unpack
+  them in registers and apply the group's scale (and bias) once per step;
+  each thread keeps up to 8 rows of x × 2–4 weight rows of f32 partials,
+  summed across the 8 threads in workgroup memory (or with subgroup
+  shuffles).
+- Otherwise, with subgroup matrices: BM×64 subgroup-matrix tiles (BM 64, 48
+  or 32 by row padding and grid size, split-K when the grid is small). The
+  B tile's raw words and scale are fetched into registers and dequantized
+  when stored to workgroup memory, after the MMAs, so the loads hide behind
+  them.
+- The skinny, direct and tiled kernels still accept quantized B (through a
+  4-value helper) for `tuneGemm` choices and other configs.
+
+Values are unpacked without int→float conversions (a field OR 0x6400 is the
+f16 1024 + field). Accumulation is f32 everywhere, as for fp16 weights.
+Group sizes must be multiples of 4 (partial last groups are fine; the fast
+paths need multiples of 8 or 16). The embedding is a dequantizing gather.
+
+Numerically the on-device path matches host dequantization: with f16
+activations every WebGPU kernel multiplies by exactly fl16(q·scale + bias),
+the weights host dequantization uploads (qmv computes that product in f16
+arithmetic, a correctly rounded multiply or fma; the tile kernels in f32,
+then round), and keeps f32 weights otherwise; `backend-webgpu`'s tests check
+this weight by weight, subnormals included, and that random products round
+like the exact sum. MLX computes in its own order. On the parity set every
+argmax and every q4 flip is identical in both modes and the probabilities
+differ by at most 5e-3; in f32 they agree to 4 decimals.
 
 **What it buys** (M2, f16; [RESULTS.md](RESULTS.md#quantized-checkpoints)):
 device memory after load is 52–55% of fp16 for q8 and 28% for q4 (English on
 MLX: 804 → 441 / 228 MiB). One short question is 1.16× faster on MLX
-(batch 1 is memory-bound), 9–14% slower on WebGPU; 16-question batches are
-10–16% slower on both, since dequantizing inside the GEMM costs ALU time
-once the multiply is compute-bound.
+(batch 1 is memory-bound); 16-question batches are 10–16% slower there, since
+dequantizing inside the GEMM costs ALU time once the multiply is
+compute-bound. On WebGPU (backend-webgpu 0.5) quantized weights are as fast
+as fp16 or faster: one question 6% faster for q8 and 0–4% for q4,
+16-question batches 1–2% faster (0.4 was 9–16% slower). Individual Linears
+still lose 3–17% at a few shapes around M = 33 and M = 93–128 (see the
+backend-webgpu README).

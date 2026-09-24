@@ -360,6 +360,57 @@ export function quantBindings(q: QuantSpec): BindingSpec[] {
   ];
 }
 
+/**
+ * WGSL statements defining `${p}lo`, `${p}hi` (vec4<f32>): the 8 dequantized
+ * values held in the u32 `w0` (q4) or `w0`, `w1` (q8), with scale `sc` and
+ * bias `bi` (f32 expressions; bi ignored when symmetric). Fields are unpacked
+ * with the f16 exponent trick: field | 0x6400 is the half 1024 + field
+ * (exact), two per u32; symmetric fields are first made unsigned by XORing
+ * their sign bits. No int→float conversions. With `q.r16` the arithmetic is
+ * f16: fl16(q·s) (a correctly rounded f16 multiply) or fl16(q·s + b) (fma),
+ * exactly the weights host dequantization produces; else f32 fma (then
+ * rounded to f16 when r16).
+ */
+export function dequant8(q: QuantSpec, p: string, w0: string, w1: string | null, sc: string, bi: string, h16 = !!q.r16): string {
+  h16 &&= !!q.r16;
+  const off = 1024 + (q.sym ? 1 << (q.bits - 1) : 0);
+  const T = h16 ? "f16" : "f32";
+  // (vec2<f16>(unpack2x16float(u)) rather than bitcast<vec2<f16>>(u): Deno's naga rejects the latter)
+  const pair = (e: string) => (h16 ? `vec2<f16>(unpack2x16float(${e}))` : `unpack2x16float(${e})`);
+  let s: string, lo: string, hi: string;
+  if (q.bits === 8) {
+    const x = q.sym ? `${w0} ^ 0x80808080u` : w0, y = q.sym ? `${w1} ^ 0x80808080u` : w1!;
+    s = `let ${p}x = ${x}; let ${p}y = ${y};
+    let ${p}xe = ${pair(`(${p}x & 0x00ff00ffu) | 0x64006400u`)}; let ${p}xo = ${pair(`((${p}x >> 8u) & 0x00ff00ffu) | 0x64006400u`)};
+    let ${p}ye = ${pair(`(${p}y & 0x00ff00ffu) | 0x64006400u`)}; let ${p}yo = ${pair(`((${p}y >> 8u) & 0x00ff00ffu) | 0x64006400u`)};`;
+    lo = `vec4<${T}>(${p}xe.x, ${p}xo.x, ${p}xe.y, ${p}xo.y)`;
+    hi = `vec4<${T}>(${p}ye.x, ${p}yo.x, ${p}ye.y, ${p}yo.y)`;
+  } else {
+    const x = q.sym ? `${w0} ^ 0x88888888u` : w0;
+    s = `let ${p}x = ${x};
+    let ${p}n0 = ${pair(`(${p}x & 0x000f000fu) | 0x64006400u`)}; let ${p}n1 = ${pair(`((${p}x >> 4u) & 0x000f000fu) | 0x64006400u`)};
+    let ${p}n2 = ${pair(`((${p}x >> 8u) & 0x000f000fu) | 0x64006400u`)}; let ${p}n3 = ${pair(`((${p}x >> 12u) & 0x000f000fu) | 0x64006400u`)};`;
+    lo = `vec4<${T}>(${p}n0.x, ${p}n1.x, ${p}n2.x, ${p}n3.x)`;
+    hi = `vec4<${T}>(${p}n0.y, ${p}n1.y, ${p}n2.y, ${p}n3.y)`;
+  }
+  const o = `${off}.0${h16 ? "h" : ""}`;
+  if (h16) {
+    s += `
+    let ${p}s = vec4<f16>(f16(${sc}));${q.sym ? "" : ` let ${p}b = vec4<f16>(f16(${bi}));`}`;
+    const d = (v: string) => (q.sym ? `vec4<f32>((${v} - ${o}) * ${p}s)` : `vec4<f32>(fma(${v} - ${o}, ${p}s, ${p}b))`);
+    s += `
+    let ${p}lo = ${d(lo)}; let ${p}hi = ${d(hi)};`;
+  } else {
+    s += `
+    let ${p}s = vec4<f32>(${sc});${q.sym ? "" : ` let ${p}b = vec4<f32>(${bi});`}`;
+    const d0 = (v: string) => (q.sym ? `(${v} - ${o}) * ${p}s` : `fma(${v} - ${o}, ${p}s, ${p}b)`);
+    const d = (v: string) => (q.r16 ? `vec4<f32>(vec4<f16>(${d0(v)}))` : d0(v));
+    s += `
+    let ${p}lo = ${d(lo)}; let ${p}hi = ${d(hi)};`;
+  }
+  return s;
+}
+
 /** WGSL `fn qw4(row, k) -> vec4<f32>`: dequantized W[row, k..k+3] (needs P.K). */
 export function quantHelper(q: QuantSpec): string {
   const G = `((P.K + ${q.g - 1}u) / ${q.g}u)`;
@@ -381,14 +432,38 @@ export function quantHelper(q: QuantSpec): string {
   }
   const gi = `row * ${G} + k / ${q.g}u`;
   const b = q.sym ? "0.0" : `f32(QB[${gi}])`;
-  return `
+  const r16 = (d: string) => (q.r16 ? `vec4<f32>(vec4<f16>(${d}))` : d);
+  let s = `
 fn qw4(row: u32, k: u32) -> vec4<f32> {
   ${v}
   let gi = ${gi};
   let d = fma(v, vec4<f32>(f32(QS[gi])), vec4<f32>(${b}));
-  return ${q.r16 ? "vec4<f32>(vec4<f16>(d))" : "d"};
+  return ${r16("d")};
 }
 `;
+  if (q.g % 8 === 0) {
+    // qraw8(row, k8): the raw fields of W[row, 8·k8 .. 8·k8+7] (one group):
+    // words (x, y; y unused for q4), scale and bias as f32 bits (z, w), so a
+    // tile load can fetch now and dequantize later (qdq8) when it stores.
+    const f = (w: string, o: number) => (q.sym ? `bitcast<i32>(${w} << ${32 - q.bits - o}u) >> ${32 - q.bits}u` : `(${w} >> ${o}u) & ${(1 << q.bits) - 1}u`);
+    const u4 = (w: string, o: number) => `vec4<f32>(vec4<${q.sym ? "i32" : "u32"}>(${[0, 1, 2, 3].map((t) => f(w, o + t * q.bits)).join(", ")}))`;
+    const words = q.bits === 8 ? `QW[row * (P.K / 4u) + 2u * k8], QW[row * (P.K / 4u) + 2u * k8 + 1u]` : `QW[row * (P.K / 8u) + k8], 0u`;
+    s += `
+fn qraw8(row: u32, k8: u32) -> vec4<u32> {
+  let gi = row * ${G} + (k8 * 8u) / ${q.g}u;
+  return vec4<u32>(${words}, bitcast<u32>(f32(QS[gi])), ${q.sym ? "0u" : "bitcast<u32>(f32(QB[gi]))"});
+}
+// f32 arithmetic here: the same weights, but with the f16 variant this
+// kernel's results on M2 were measurably less accurate (≈√2× the RMS error
+// against an f64 reference, bench/quantized-gemm.ts era), so it is not used.
+fn qdq8(r: vec4<u32>) -> mat2x4<f32> {
+    ${dequant8(q, "", "r.x", q.bits === 8 ? "r.y" : null, "bitcast<f32>(r.z)", "bitcast<f32>(r.w)", false)}
+  return mat2x4<f32>(lo, hi);
+}
+fn qw8(row: u32, k8: u32) -> mat2x4<f32> { return qdq8(qraw8(row, k8)); }
+`;
+  }
+  return s;
 }
 
 /**
@@ -454,7 +529,62 @@ export interface GemmConfig {
     /** Not when the workgroup count is within [lo, hi] (a poor last wave). */
     skipGroups?: readonly [number, number];
   })[] | null;
+  /** Kernel choice for quantized weights (quantizedLinear); null/absent: the 0.4.0 rules. */
+  quant?: QuantGemmConfig | null;
 }
+
+/** Quantized-Linear kernel choice (see `QUANT_GEMM_DEFAULT`). */
+export interface QuantGemmConfig {
+  /**
+   * Matrix-"vector" kernel configs: the first with M ≤ maxM (and the
+   * weights' bits, if given) whose step C divides the group size and K wins,
+   * except that one with maxN is skipped for N > maxN when subgroup-matrix
+   * tiles are available.
+   */
+  qmv: (QmvGemmConfig & { maxM: number; maxN?: number; bits?: 4 | 8 })[];
+  /**
+   * Otherwise, with subgroup matrices: tiles of BM×64 (2 subgroups side by
+   * side, BK 8). 64×64 when the rows pad by at most maxPad64 and the grid
+   * has at least minGroups64 workgroups; else, among `rows` whose padding is
+   * within 10% of the least, the tallest with at least minGroups workgroups,
+   * or the shortest with split-K S ≤ maxSplit raising the grid to minGroups.
+   * null: `GemmConfig.sg` as for float weights.
+   */
+  sg: { rows: readonly number[]; maxPad64: number; minGroups64: number; minGroups: number; maxSplit: number } | null;
+}
+
+/**
+ * Tuned on Apple M2 over the Laya Linear shapes (bench/quantized-gemm.ts,
+ * bench/qmv-sweep.ts): qmv up to M = 48 (and M = 64 for N < 2048), then
+ * subgroup-matrix tiles that dequantize while staging B; without subgroup
+ * matrices, qmv at every M.
+ */
+export const QUANT_GEMM_DEFAULT: QuantGemmConfig = {
+  qmv: [
+    { maxM: 4, TK: 8, NR: 16, R: 2, C: 16, MT: 8, sub: true },
+    { maxM: 8, bits: 4, TK: 8, NR: 16, R: 2, C: 16, MT: 8, sub: true },
+    { maxM: 48, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+    { maxM: 64, maxN: 2047, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+    // without subgroup matrices (maxN 0: never with them), qmv at any M
+    // beats the direct and tiled kernels (1.1–1.7× the f16 direct kernel for M ≥ 93)
+    { maxM: Infinity, maxN: 0, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+  ],
+  sg: { rows: [64, 48, 32], maxPad64: 1.1, minGroups64: 64, minGroups: 72, maxSplit: 4 },
+};
+/**
+ * The quantized choice for navigator.gpu (browsers): measured in Chromium on
+ * the same M2 (end to end, examples in docs/RESULTS.md), 8-value steps and
+ * the workgroup-memory reduction beat the Dawn/Node picks there.
+ */
+export const QUANT_GEMM_NAVIGATOR: QuantGemmConfig = {
+  qmv: [
+    { maxM: 48, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+    { maxM: 64, maxN: 2047, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+    { maxM: Infinity, maxN: 0, TK: 8, NR: 4, R: 4, C: 8, MT: 8 },
+  ],
+  sg: QUANT_GEMM_DEFAULT.sg,
+};
+
 /** Tuned on Apple M2 (10-core GPU) via Dawn/Metal: see bench/gemm.ts. */
 export const GEMM_DEFAULT: GemmConfig = {
   tiled: { BM: 64, BN: 64, BK: 16, TM: 4, TN: 4 },
@@ -474,6 +604,7 @@ export const GEMM_DEFAULT: GemmConfig = {
     { minM: 64, BM: 64, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0, minGroups: 48, skipGroups: [57, 79], maxPad: 1.1 },
     { minM: 64, BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0, splitK: [{ maxGroups: 47, S: 2 }] },
   ],
+  quant: QUANT_GEMM_DEFAULT,
 };
 
 /** The 0.2.0 defaults (before per-shape tuning), kept for benchmarks. */
@@ -815,6 +946,136 @@ ${s}}`;
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
     f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
+  };
+}
+
+/** Quantized matrix-"vector" Linear (small M): see gemmQmvKernel. */
+export interface QmvGemmConfig {
+  /** Threads splitting K for each output (power of two; 32 = one subgroup). */
+  TK: number;
+  /** Output-column groups per workgroup (workgroup size TK·NR). */
+  NR: number;
+  /** Output columns (weight rows) per thread. */
+  R: number;
+  /** Values per thread per step (8 or 16; the group size must be a multiple). */
+  C: number;
+  /** Rows of x per thread; larger M is split over grid.y (each block re-reads W). */
+  MT: number;
+  /** Reduce the TK partials with subgroup shuffles (needs the subgroups feature and TK ≤ the fixed subgroup size). */
+  sub?: boolean;
+}
+
+/**
+ * Memory-bound quantized Linear for small M (transB, K % C == 0, g % C == 0).
+ * TK consecutive threads walk one weight row with C-value steps, so a
+ * subgroup reads TK·C·bits/8 contiguous bytes per step with one vector load
+ * per thread (vec4/vec2/u32 words), unpacks in registers and applies the
+ * group's scale (and bias) once per step: y += s·Σx·q (+ b·Σx), or, when the
+ * weights must be rounded to f16 (r16), plain dots with fl16(q·s + b). Each
+ * thread keeps MT×R f32 accumulators (x reused across R weight rows, weights
+ * across MT rows of x); the TK partials are then summed in a fixed order
+ * (workgroup memory, or subgroupAdd) and stored once, with the bias.
+ */
+export function gemmQmvKernel(a: Kind, bias: Kind | null, out: Kind, q: QuantSpec, cfg: QmvGemmConfig, MT: number): KernelSource {
+  const { TK, NR, R, C } = cfg;
+  const sub = !!cfg.sub;
+  const WG = TK * NR;
+  if (C % 8 || q.g % C || TK & (TK - 1)) throw new Error("gemmQmv: bad config");
+  const CW = (C * q.bits) / 32; // u32 words per step
+  const CV = C / 4; // vec4 of x per step
+  const wElem = CW === 1 ? "u32" : `vec${CW}<u32>`;
+  const bindings: BindingSpec[] = [
+    { name: "A", elem: `vec4<${a.st}>`, access: "read" },
+    { name: "QW", elem: wElem, access: "read" },
+    { name: "QS", elem: q.scale.st, access: "read" },
+    ...(q.sym ? [] : [{ name: "QB", elem: q.scale.st, access: "read" as const }]),
+  ];
+  if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
+  bindings.push({ name: "C", elem: out.st, access: "read_write" });
+  const f4 = (e: string) => (a.st === "f32" ? e : `vec4<f32>(${e})`);
+  const aff = !q.sym;
+  const word = (r: number, w: number) => (CW === 1 ? `u${r}` : `u${r}.${"xyzw"[w]}`);
+  // the 4 values of vec4 v (0 ≤ v < C/4) of weight row r, as vec4<f32>
+  const unpack = (r: number, v: number) => {
+    const per = 32 / q.bits; // values per word
+    const w = word(r, Math.floor((v * 4) / per));
+    const sh = ((v * 4) % per) * q.bits;
+    const f = (o: number) => (q.sym ? `bitcast<i32>(${w} << ${32 - q.bits - o}u) >> ${32 - q.bits}u` : `(${w} >> ${o}u) & ${(1 << q.bits) - 1}u`);
+    return `vec4<f32>(vec4<${q.sym ? "i32" : "u32"}>(${[0, 1, 2, 3].map((t) => f(sh + t * q.bits)).join(", ")}))`;
+  };
+  let s = `  let KC = P.K / ${C}u; let K4 = P.K / 4u; let G = (P.K + ${q.g - 1}u) / ${q.g}u;\n`;
+  for (let r = 0; r < R; r++) s += `  let wr${r} = min(n0 + ${r}u, P.N - 1u); let wb${r} = wr${r} * KC; let sb${r} = wr${r} * G;\n`;
+  for (let i = 0; i < MT; i++) s += `  let xr${i} = aBase + min(m0 + ${i}u, P.M - 1u) * K4;\n`;
+  for (let i = 0; i < MT; i++) for (let r = 0; r < R; r++) s += `  var c${i}_${r} = 0.0;\n`;
+  s += `  for (var kc = lk; kc < KC; kc += ${TK}u) {\n    let gi = (kc * ${C}u) / ${q.g}u;\n`;
+  for (let r = 0; r < R; r++) s += `    let u${r} = QW[wb${r} + kc]; let s${r} = f32(QS[sb${r} + gi]);${aff ? ` let b${r} = f32(QB[sb${r} + gi]);` : ""}\n`;
+  if (q.r16) {
+    // 8 values at a time (one group): words (w0, w1) of this step's CW
+    for (let r = 0; r < R; r++)
+      for (let j = 0; j < C / 8; j++) {
+        const wpc = q.bits / 4; // words per 8 values
+        const w0 = word(r, j * wpc), w1 = wpc === 2 ? word(r, j * wpc + 1) : null;
+        s += `    ${dequant8(q, `d${r}_${j}`, w0, w1, `s${r}`, aff ? `b${r}` : "0.0")}\n`;
+        s += `    let w${r}_${2 * j} = d${r}_${j}lo; let w${r}_${2 * j + 1} = d${r}_${j}hi;\n`;
+      }
+  } else {
+    for (let r = 0; r < R; r++) for (let v = 0; v < CV; v++) s += `    let w${r}_${v} = ${unpack(r, v)};\n`;
+  }
+  for (let i = 0; i < MT; i++) {
+    s += `    {\n`;
+    for (let v = 0; v < CV; v++) s += `      let x${v} = ${f4(`A[xr${i} + kc * ${CV}u + ${v}u]`)};\n`;
+    if (!q.r16 && aff) s += `      let sx = dot(${Array.from({ length: CV }, (_, v) => `x${v}`).join(" + ")}, vec4<f32>(1.0));\n`;
+    for (let r = 0; r < R; r++) {
+      const d = Array.from({ length: CV }, (_, v) => `dot(x${v}, w${r}_${v})`).join(" + ");
+      s += q.r16 ? `      c${i}_${r} += ${d};\n` : `      c${i}_${r} = fma(s${r}, ${d}, c${i}_${r})${aff ? ` + b${r} * sx` : ""};\n`;
+    }
+    s += `    }\n`;
+  }
+  s += `  }\n`;
+  const nOut = MT * R;
+  const store = (i: string, r: string, v: string) => {
+    const bv = bias ? ` + ${ld(bias, `bias[P.obias + col]`, "f32")}` : "";
+    return `{ let row = m0 + ${i}; let col = n0 + ${r}; if (row < P.M && col < P.N) { C[row * P.N + col] = ${st(out, `${v}${bv}`, "f32")}; } }`;
+  };
+  let red = "";
+  if (sub) {
+    // butterfly over the TK lanes of each output (TK ≤ subgroup size): every lane ends with the same sum
+    for (let i = 0; i < MT; i++)
+      for (let r = 0; r < R; r++) {
+        let t = `c${i}_${r}`;
+        red += `  { var t = ${t};\n`;
+        for (let o = TK / 2; o >= 1; o /= 2) red += `    t += subgroupShuffleXor(t, ${o}u);\n`;
+        red += `    if (lk == ${(i * R + r) % TK}u) ${store(`${i}u`, `${r}u`, "t")}\n  }\n`;
+        void t;
+      }
+  } else {
+    // partials to workgroup memory [out][lr][lk], then each thread sums TK of them in order
+    for (let i = 0; i < MT; i++) for (let r = 0; r < R; r++) red += `  red[(${i * R + r}u * ${NR}u + lr) * ${TK}u + lk] = c${i}_${r};\n`;
+    red += `  workgroupBarrier();
+  for (var o = lid; o < ${nOut * NR}u; o += ${WG}u) {
+    let base = o * ${TK}u;
+    var t = 0.0;
+    for (var j = 0u; j < ${TK}u; j++) { t += red[base + j]; }
+    let e = o / ${NR}u; let g = o % ${NR}u;
+    let n0 = (wid.x * ${NR}u + g) * ${R}u;
+    ${store(`e / ${R}u`, `e % ${R}u`, "t")}
+  }\n`;
+  }
+  const body = `${out.bf16 ? HELPERS : ""}
+${sub ? "" : `var<workgroup> red: array<f32, ${nOut * WG}>;`}
+@compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let lk = lid % ${TK}u; let lr = lid / ${TK}u;
+  let n0 = (wid.x * ${NR}u + lr) * ${R}u;
+  let m0 = wid.y * ${MT}u;
+  let aBase = P.oa / 4u;
+${s}${red}}`;
+  return {
+    key: `gemmqmv:${kindKey(a)}:${quantKey(q)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${TK}x${NR}x${R}/${C}/${MT}${sub ? "s" : ""}`,
+    bindings,
+    params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["obias", "u32"]],
+    body,
+    f16: needsF16(a, out, q.scale, ...(q.r16 ? [{ st: "f16" as const }] : []), ...(bias ? [bias] : [])),
+    ...(sub ? { enables: ["subgroups"] } : {}),
   };
 }
 
@@ -1367,7 +1628,7 @@ export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg
   const FM = SBM / 8, FN = SBN / 8; // fragments per subgroup
   if (FM % 1 || FN % 1 || BK % 8) throw new Error("gemmSg: bad tile config");
   if (split && bias) throw new Error("gemmSg: split-K partials take no bias");
-  if (wide && (a.st !== "f16" || b.st !== "f16" || quant)) throw new Error("gemmSg: wide loads need f16 operands");
+  if (wide && (a.st !== "f16" || (quant ? quant.g % 8 : b.st !== "f16"))) throw new Error("gemmSg: wide loads need f16 operands (quantized: groups of 8k)");
   const BKP = BK + (cfg.pad ?? 4); // padded row stride (floats) of the staged tiles
   // V elements per global load: vec4<f16>/<f32> (4), or 8 f16 as vec4<u32> (wide).
   const V = wide ? 8 : 4;
@@ -1385,23 +1646,36 @@ export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg
   const NA = Math.ceil((BM * KV) / WG), NB = Math.ceil((BN * KV) / WG);
   // guard for the last partial round when rows·KV isn't a multiple of WG
   const guard = (rows: number, v: number) => ((v + 1) * WG > rows * KV ? `if (lid + ${v * WG}u < ${rows * KV}u) ` : "");
+  // Quantized B with wide loads: fetch raw words + scale/bias (qraw8) into
+  // registers and dequantize (qdq8) when stashing, after the MMAs, so the
+  // loads' latency hides behind them.
+  // (A too, when B is quantized: measured faster there; the f16 kernel keeps converting at fetch time.)
+  const lateA = (p: string) => wide && p === "pa" && !!quant;
+  const late = (p: string) => (!!quant && wide && p === "pb") || lateA(p);
   const regs = (p: string, n: number) =>
-    Array.from({ length: n }, (_, v) => `  var ${p}${v} = vec4<f32>(0.0);\n${wide ? `  var ${p}${v}h = vec4<f32>(0.0);\n` : ""}`).join("");
+    Array.from({ length: n }, (_, v) => (late(p) ? `  var ${p}${v} = vec4<u32>(0u);\n` : `  var ${p}${v} = vec4<f32>(0.0);\n${wide ? `  var ${p}${v}h = vec4<f32>(0.0);\n` : ""}`)).join("");
   const load = (p: string, v: number, name: string, kind: Kind, idx: string, gr: string, kk: string) =>
-    quant && name === "B"
+    lateA(p)
+      ? `${p}${v} = ${name}[${idx}];`
+      : late(p)
+      ? `${p}${v} = qraw8(${gr}, ${kk});`
+      : quant && name === "B"
       ? `${p}${v} = qw4(${gr}, (${kk}) * 4u);`
       : wide
       ? `let u = ${name}[${idx}]; ${p}${v} = vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); ${p}${v}h = vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w));`
       : `${p}${v} = ${f4(kind, `${name}[${idx}]`)};`;
-  const zero = (p: string, v: number) => `${p}${v} = vec4<f32>(0.0);${wide ? ` ${p}${v}h = vec4<f32>(0.0);` : ""}`;
+  const zero = (p: string, v: number) => (late(p) ? `${p}${v} = vec4<u32>(0u);` : `${p}${v} = vec4<f32>(0.0);${wide ? ` ${p}${v}h = vec4<f32>(0.0);` : ""}`);
   const fetch = (p: string, n: number, name: string, kind: Kind, base: string, lim: string, gbase: string, rows: number) =>
     Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let gr = ${base} + t / ${KV}u; let kk = k0n / ${V}u + t % ${KV}u;
       if (gr < ${lim} && kk < kEndV) { ${load(p, v, name, kind, `${gbase} + gr * KV + kk`, "gr", "kk")} } else { ${zero(p, v)} } }\n`).join("");
   const stash = (p: string, n: number, S: string, rows: number) =>
-    Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S} + (t / ${KV}u) * ${BKP}u + (t % ${KV}u) * ${V}u;
-      Sh[o] = ${p}${v}.x; Sh[o + 1u] = ${p}${v}.y; Sh[o + 2u] = ${p}${v}.z; Sh[o + 3u] = ${p}${v}.w;${
-        wide ? `\n      Sh[o + 4u] = ${p}${v}h.x; Sh[o + 5u] = ${p}${v}h.y; Sh[o + 6u] = ${p}${v}h.z; Sh[o + 7u] = ${p}${v}h.w;` : ""
-      } }\n`).join("");
+    Array.from({ length: n }, (_, v) => {
+      const [x, h] = late(p) ? ["d[0]", "d[1]"] : [`${p}${v}`, `${p}${v}h`];
+      return `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S} + (t / ${KV}u) * ${BKP}u + (t % ${KV}u) * ${V}u;${lateA(p) ? ` let d = mat2x4<f32>(vec4<f32>(unpack2x16float(${p}${v}.x), unpack2x16float(${p}${v}.y)), vec4<f32>(unpack2x16float(${p}${v}.z), unpack2x16float(${p}${v}.w)));` : late(p) ? ` let d = qdq8(${p}${v});` : ""}
+      Sh[o] = ${x}.x; Sh[o + 1u] = ${x}.y; Sh[o + 2u] = ${x}.z; Sh[o + 3u] = ${x}.w;${
+        wide ? `\n      Sh[o + 4u] = ${h}.x; Sh[o + 5u] = ${h}.y; Sh[o + 6u] = ${h}.z; Sh[o + 7u] = ${h}.w;` : ""
+      } }\n`;
+    }).join("");
   let decl = "";
   for (let i = 0; i < FM; i++) for (let j = 0; j < FN; j++) decl += `  var c${i}_${j}: subgroup_matrix_result<f32, 8, 8>;\n`;
   const mma = (buf: string) => {
