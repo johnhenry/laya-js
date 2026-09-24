@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- Optional backend peer ranges are now `^0.2.0 || ^0.3.0`: they accept the 0.3 backends, and drop pre-0.2 backends, which predate the async-upload contract.
+- Updated dependencies
+  - @johnhenry/laya@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

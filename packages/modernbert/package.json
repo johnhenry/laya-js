@@ -51,7 +51,7 @@
   },
   "devDependencies": {
     "@johnhenry/math-plus-safetensors": "^0.1.0",
-    "@johnhenry/backend-cpu": "^0.2.0",
+    "@johnhenry/backend-cpu": "^0.3.0",
     "@johnhenry/laya-fixtures": "^0.0.0"
   },
   "publishConfig": {
