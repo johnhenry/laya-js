@@ -2,21 +2,22 @@
 
 [![npm version](https://img.shields.io/npm/v/%40johnhenry%2Fbackend-cpu.svg)](https://www.npmjs.com/package/@johnhenry/backend-cpu)
 
+> **Now an alias.** Since 0.3.0 this package re-exports
+> [`@johnhenry/math-plus-tensor-cpu`](https://github.com/johnhenry/math-plus/tree/main/packages/tensor-cpu),
+> the CPU reference backend that math-plus owns (math-plus RFC 0001 §12 Q3,
+> [math-plus#144](https://github.com/johnhenry/math-plus/issues/144)). New
+> code should depend on `@johnhenry/math-plus-tensor-cpu` directly. This
+> package will be deprecated in a later release.
+
 Pure-TypeScript f32 reference backend for
-[`@johnhenry/tensor-backend`](../tensor-backend). No native code, no WASM,
-no dependencies beyond the contract package: it runs anywhere JavaScript
-runs and is the numerical oracle the MLX and WebGPU backends are compared
-against.
+[`@johnhenry/tensor-backend`](../tensor-backend). It is the numerical oracle
+that the MLX and WebGPU backends are compared against.
 
 ## Install
 
 ```bash
-npm install @johnhenry/backend-cpu
-bun add @johnhenry/backend-cpu
-deno add jsr:@johnhenry/backend-cpu
+npm install @johnhenry/backend-cpu        # or, preferred: @johnhenry/math-plus-tensor-cpu
 ```
-
-Runs anywhere JavaScript runs: Node ≥ 24, Bun ≥ 1.2, Deno and browsers. No native code.
 
 ```ts
 import { createCpuBackend } from "@johnhenry/backend-cpu";
@@ -29,64 +30,30 @@ console.log(await cpu.read(y));
 
 ## API
 
-- `createCpuBackend(): CpuBackend` — independent instance; implements
-  every required op plus the optional `geglu`, `meanPool`, `flush` (no-op),
-  `destroy`, and every general-numerics op natively (comparisons, logical
-  ops, `sqrt`, `rsqrt`, `pow`, `neg`, `abs`, `tanh`, `sigmoid`, `erf`,
-  `argmax`, `argmin`, `mean`, `min`, `cumsum`). `CpuBackend` is
-  `Backend<CpuTensor>` with those optional members required.
-- `class CpuTensor` — `shape`, `dtype`, `data` (row-major `Float32Array` |
-  `Int32Array` | `Uint8Array`; may be shared between tensors, never mutate),
-  `disposed`.
-- `erf(x)`, `erfc(x)`, `geluScalar(x)` — double-precision special functions
-  (≈1e-15 relative vs libm) used by `gelu`.
-- `gemmNT(A, aOff, lda, B, bOff, ldb, C, cOff, ldc, M, N, K)` — the single
-  matmul kernel (C = A·Bᵀ, 4×4 register blocking, f64 accumulation).
+Unchanged from 0.2.0 except for one removal:
 
-## Behaviour
+- `createCpuBackend()`, `CpuTensor`, `type CpuBackend`, `erf`, `erfc`,
+  `geluScalar` are re-exported from `@johnhenry/math-plus-tensor-cpu`.
+- **Removed:** `gemmNT`. The GEMM now lives once, in
+  `@johnhenry/math-plus-tensor-core/kernels`, and works over packed f64
+  panels.
 
-- Storage: f32 for all floats. `fromHost` widens f16 (`Float16Array`) and
-  bf16 (raw `Uint16Array` bits) to f32; i32 → `Int32Array`; bool → `Uint8Array`.
-- `supports("f16" | "bf16")` is **false**; `cast(x, "f16" | "bf16")` throws.
-- Eager and synchronous. `fromHost` copies the host data when called and
-  returns an already-resolved Promise; `read` resolves immediately with a copy.
-- General numerics are computed in f64 and rounded to f32 once: `erf` is the
-  double-precision `erf` above (the algorithm math-plus tensor-core adopted
-  as its canonical erf), `sigmoid` avoids overflow for x ≪ 0, `argmax` /
-  `argmin` return the first index on ties (NaN counts as the maximum and the
-  minimum, like NumPy), `neg` / `abs` keep i32, and `cumsum` of i32 or bool is i32.
-- `reshape` and same-dtype `cast` share the buffer (no copy).
-- Reductions, softmax, LayerNorm, attention and matmul accumulate in f64,
-  then round to f32 once. GELU is exact erf GELU.
-- `rope` emulates the f32 angle computation of MLX/PyTorch
-  (`inv_freq` and `pos · inv_freq` rounded to f32).
-- `sdpa` accepts bool masks (true = attend) or additive float masks,
-  broadcast to `[B, H, Lq, Lk]`; K/V may have fewer heads (GQA). Fully
-  masked rows return zeros (undefined behaviour in the contract).
-- `scope(fn)` tracks every tensor created inside `fn` (nested scopes
-  supported); returned tensors (directly, or one level deep in an
-  array/object) move to the enclosing scope, everything else is released.
-  `dispose` is idempotent; using a disposed tensor throws.
+The backend's behaviour (dtype rules, f16/bf16 widening, scopes, the ops it
+implements natively, NaN semantics, limitations and benchmarks against 0.2.0)
+is documented in
+[math-plus-tensor-cpu's README](https://github.com/johnhenry/math-plus/tree/main/packages/tensor-cpu#readme).
+Differences from 0.2.0 that callers might notice:
 
-## Performance
-
-About 5–8 GFLOP/s single-threaded on an Apple M2 (Node 24 / Bun 1.2).
-See `@johnhenry/laya`'s README for measured end-to-end timings on the
-published checkpoints. Good for tests, parity checks and small models; use
-`@johnhenry/backend-mlx` or `@johnhenry/backend-webgpu` for real workloads.
-
-## Limitations
-
-- Single-threaded; no SIMD/WASM kernels.
-- f32 only (no f16/bf16 compute), so f16-specific numerics are not reproduced.
-- Sliding-window attention computes the full L×L score matrix and masks it.
-- Float weights are held as f32 in memory (2× the size of fp16 checkpoints).
+- `max`, `min`, `argmax` and `argmin` no longer propagate NaN NumPy-style.
+  They use tensor-core's strict comparisons, and NaN results are
+  backend-defined in the contract.
+- `where` with a bool value operand and an i32 value operand now returns
+  i32.
 
 ## Tests
 
-`npm test` (typecheck + node:test) and `npm run test:bun` run the shared
-conformance suite (`@johnhenry/tensor-backend/conformance`, MLX-generated
-cases) plus backend-specific tests.
+`npm test` and `npm run test:bun` run the shared conformance suite and this
+package's tests against the re-exported backend.
 
 ## Family
 
