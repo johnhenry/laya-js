@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3
+
+### Patch Changes
+
+- 790e1e0: Depend on `@johnhenry/laya` 0.2 (async device uploads). No API change: both use `load()` / `predict()`, which are unchanged.
+- Updated dependencies [790e1e0]
+- Updated dependencies [944e3c0]
+  - @johnhenry/laya@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes

@@ -1,11 +1,11 @@
 {
   "name": "@johnhenry/backend-webgpu",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "license": "MIT",
   "exports": "./src/index.ts",
   "imports": {
     "#dawn": "./src/dawn-node.ts",
-    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.1.2",
+    "@johnhenry/tensor-backend": "jsr:@johnhenry/tensor-backend@^0.2.0",
     "@webgpu/types": "npm:@webgpu/types@^0.1.74",
     "webgpu": "npm:webgpu@^0.6.1"
   },

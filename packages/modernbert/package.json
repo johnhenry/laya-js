@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/modernbert",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "ModernBERT / mmBERT encoder on any @johnhenry/tensor-backend, loading safetensors",
   "keywords": [
     "modernbert",
@@ -47,11 +47,11 @@
     "bun": ">=1.2.0"
   },
   "dependencies": {
-    "@johnhenry/tensor-backend": "^0.1.2"
+    "@johnhenry/tensor-backend": "^0.2.0"
   },
   "devDependencies": {
     "@johnhenry/math-plus-safetensors": "^0.1.0",
-    "@johnhenry/backend-cpu": "^0.1.2",
+    "@johnhenry/backend-cpu": "^0.2.0",
     "@johnhenry/laya-fixtures": "^0.0.0"
   },
   "publishConfig": {

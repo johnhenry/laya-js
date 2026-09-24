@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- 944e3c0: Quantized checkpoints (q8/q4, dequantize-on-load). `load()` / `readWeights()` detect `__metadata__.laya_quant` in `model.safetensors` and dequantize 8-bit (symmetric, groups of 64) and 4-bit (affine, groups of 64, optional q8 tensors) weights to f16/f32 tensor by tensor while loading, so downloads shrink to ~52% (q8) or ~28–35% (q4) with no backend changes. New `quantizeMatrix` / `dequantizeMatrix` / `quantizeSafetensors` / `quantMetadata` exports; `load()` in Node/Bun now also accepts an http(s) base URL (Range reads, as in browsers). New `laya quantize --model <repo|dir> --bits 8|4 --out <dir>` command writes a complete quantized checkpoint directory.
+
+### Patch Changes
+
+- 790e1e0: Depend on `@johnhenry/laya` 0.2 (async device uploads). No API change: both use `load()` / `predict()`, which are unchanged.
+- Updated dependencies [790e1e0]
+- Updated dependencies [790e1e0]
+- Updated dependencies [944e3c0]
+  - @johnhenry/laya-router@0.1.3
+  - @johnhenry/laya@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes
