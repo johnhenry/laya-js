@@ -1,4 +1,4 @@
-import type { Backend, DType, HostTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
+import type { Backend, DType, HostQuantized, HostTensor, QuantizedLinearOptions, QuantizedTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
 import { f32ToBf16Bits } from "@johnhenry/tensor-backend";
 import { Runtime, Storage, type CompiledKernel, type KernelSource } from "./runtime.ts";
 import {
@@ -17,6 +17,9 @@ import {
   grid,
   layerNormKernel,
   meanPoolKernel,
+  quantGatherKernel,
+  quantKey,
+  type QuantSpec,
   naryKernel,
   reduceKernel,
   ropeKernel,
@@ -133,6 +136,9 @@ function promote(a: DType, b: DType): DType {
   if (isFloat(b)) return b;
   return "i32";
 }
+
+/** Subgroup-matrix tile for quantized Linears with 16 < M ≤ 64. */
+const QUANT_SG_SMALL_M: SgGemmConfig = { BM: 32, BN: 64, BK: 8, WM: 1, WN: 2, pad: 0 };
 
 /** A Linear kernel choice: skinny, direct, or an index into `GemmConfig.sg`. */
 export type GemmChoice = "skinny" | "direct" | number;
@@ -684,37 +690,44 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     aBatchStrides: number[],
     bBatchStrides: number[],
     outShape: number[],
+    quant: { spec: QuantSpec; bufs: GPUBuffer[] } | null = null,
   ): WebGpuTensor {
-    const outDtype = [a.dtype, b.dtype, ...(bias ? [bias.dtype] : [])].reduce(promote);
+    // a quantized B (u32 words) takes a's float dtype; its values are read through qw4()
+    const outDtype = [a.dtype, ...(quant ? [] : [b.dtype]), ...(bias ? [bias.dtype] : [])].reduce(promote);
     const outFloat = isFloat(outDtype) ? outDtype : "f32";
     const out = this.alloc(outShape, outFloat);
     const batch = numel(batchShape);
     if (!M || !N || !batch) return out;
     const ak = this.kind(a.dtype), bk = this.kind(b.dtype), ok = this.kind(outFloat);
     const biask = bias ? this.kind(bias.dtype) : null;
+    const q = quant?.spec ?? null;
+    const qk = q ? `:${quantKey(q)}` : "";
+    const bBufs = quant ? quant.bufs : [b.storage.buffer];
     const vecA = K % 4 === 0 && a.offset % 4 === 0 && aBatchStrides.every((s) => s % 4 === 0);
     const vecB = (transB ? K % 4 === 0 : N % 4 === 0) && b.offset % 4 === 0 && bBatchStrides.every((s) => s % 4 === 0);
     const linearPath = transB && vecA && vecB && batch === 1;
-    const choice = linearPath ? this.pickLinear(M, N, K, ak) : undefined;
+    if (q && !linearPath) throw new Error("webgpu quantizedLinear: needs K % 4 == 0 and an aligned, unbatched x");
+    const choice = linearPath ? this.pickLinear(M, N, K, ak, !!q) : undefined;
     const sk = choice?.skinny;
     if (sk) {
       const TM = Math.ceil(M / sk.WY);
-      this.run(`gemmskinny:${keyOf(ak, bk, biask, ok, sk, TM)}`, () => gemmSkinnyKernel(ak, bk, biask, ok, sk, TM),
-        [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+      const q8step = !!q && K % 8 === 0 && q.g % 8 === 0;
+      this.run(`gemmskinny:${keyOf(ak, bk, biask, ok, sk, TM)}${qk}${q8step ? ":8" : ""}`, () => gemmSkinnyKernel(ak, bk, biask, ok, sk, TM, q, q8step),
+        [a.storage.buffer, ...bBufs, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
         { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
         [Math.ceil(N / (sk.WX * sk.TN)), 1, 1]);
       return out;
     }
     const sg = choice?.sg;
     if (sg) {
-      const wide = (sg.wide ?? true) && ak.st === "f16" && bk.st === "f16" && K % 8 === 0 && a.offset % 8 === 0 && b.offset % 8 === 0;
-      const cfgKey = `${sg.BM}x${sg.BN}x${sg.BK}/${sg.WM}x${sg.WN}/${sg.db ?? false}/${sg.epi ?? "frag"}/${sg.pad ?? 4}/${wide}`;
+      const wide = !q && (sg.wide ?? true) && ak.st === "f16" && bk.st === "f16" && K % 8 === 0 && a.offset % 8 === 0 && b.offset % 8 === 0;
+      const cfgKey = `${sg.BM}x${sg.BN}x${sg.BK}/${sg.WM}x${sg.WN}/${sg.db ?? false}/${sg.epi ?? "frag"}/${sg.pad ?? 4}/${wide}${qk}`;
       const grid: [number, number, number] = [Math.ceil(N / sg.BN), Math.ceil(M / sg.BM), 1];
       const groups = grid[0] * grid[1];
       const S = Math.min(sg.splitK?.find((c) => M <= (c.maxM ?? Infinity) && groups <= (c.maxGroups ?? Infinity))?.S ?? 1, Math.floor(K / sg.BK));
       if (S <= 1) {
-        this.run(`gemmsg:${keyOf(ak, bk, biask, ok)}:${cfgKey}`, () => gemmSgKernel(ak, bk, biask, ok, sg, false, wide),
-          [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+        this.run(`gemmsg:${keyOf(ak, bk, biask, ok)}:${cfgKey}`, () => gemmSgKernel(ak, bk, biask, ok, sg, false, wide, q),
+          [a.storage.buffer, ...bBufs, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
           { M, N, K, kc: K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 }, grid);
         return out;
       }
@@ -723,8 +736,8 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       grid[2] = Math.ceil(K / kc);
       const f32: Kind = { st: "f32" };
       const part = this.rt.acquire(grid[2] * M * N * 4);
-      this.run(`gemmsg:${keyOf(ak, bk, "-", f32)}:${cfgKey}:split`, () => gemmSgKernel(ak, bk, null, f32, sg, true, wide),
-        [a.storage.buffer, b.storage.buffer, part.buffer],
+      this.run(`gemmsg:${keyOf(ak, bk, "-", f32)}:${cfgKey}:split`, () => gemmSgKernel(ak, bk, null, f32, sg, true, wide, q),
+        [a.storage.buffer, ...bBufs, part.buffer],
         { M, N, K, kc, oa: a.offset, ob: b.offset, obias: 0 }, grid);
       const n = M * N;
       this.run(`splitk:${keyOf(biask, ok)}:${grid[2]}`, () => splitKReduceKernel(biask, ok, grid[2]),
@@ -735,17 +748,17 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     }
     const dc = this.gemmConfig.direct;
     if (dc && linearPath) {
-      this.run(`gemmdirect:${keyOf(ak, bk, biask, ok, dc)}`, () => gemmDirectKernel(ak, bk, biask, ok, dc),
-        [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
+      this.run(`gemmdirect:${keyOf(ak, bk, biask, ok, dc)}${qk}`, () => gemmDirectKernel(ak, bk, biask, ok, dc, q),
+        [a.storage.buffer, ...bBufs, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer],
         { M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0 },
         [Math.ceil(N / (dc.WX * dc.TN)), Math.ceil(M / (dc.WY * dc.TM)), 1]);
       return out;
     }
     const cfg = this.gemmConfig.tiled;
-    const key = `gemm:${keyOf(ak, bk, biask, ok)}:${transB}:${vecA}:${vecB}:${cfg.BM}x${cfg.BN}x${cfg.BK}/${cfg.TM}x${cfg.TN}`;
-    const bufs = [a.storage.buffer, b.storage.buffer, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer];
+    const key = `gemm:${keyOf(ak, bk, biask, ok)}:${transB}:${vecA}:${vecB}:${cfg.BM}x${cfg.BN}x${cfg.BK}/${cfg.TM}x${cfg.TN}${qk}`;
+    const bufs = [a.storage.buffer, ...bBufs, ...(bias ? [bias.storage.buffer] : []), out.storage.buffer];
     if (batch > 65535) throw new Error("gemm: batch > 65535");
-    this.run(key, () => gemmKernel(ak, bk, biask, ok, transB, vecA, vecB, cfg), bufs, {
+    this.run(key, () => gemmKernel(ak, bk, biask, ok, transB, vecA, vecB, cfg, q), bufs, {
       M, N, K, oa: a.offset, ob: b.offset, obias: bias?.offset ?? 0,
       bsh: pad8(batchShape, 1), ast: pad8(aBatchStrides, 0), bst: pad8(bBatchStrides, 0),
     }, [Math.ceil(N / cfg.BN), Math.ceil(M / cfg.BM), batch]);
@@ -759,16 +772,28 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
    * whose M range, minimum workgroup count and row-padding limit all hold,
    * else the direct/tiled kernels (empty choice).
    */
-  private pickLinear(M: number, N: number, K: number, ak: Kind): { skinny?: SkinnyGemmConfig; sg?: SgGemmConfig } {
+  private pickLinear(M: number, N: number, K: number, ak: Kind, quant = false): { skinny?: SkinnyGemmConfig; sg?: SgGemmConfig } {
     const cfg = this.gemmConfig;
     const sgs = this.hasSubgroupMatrix ? cfg.sg ?? [] : [];
-    const tuned = this.gemmTuning.get(tuneKey(ak, M, N, K));
+    const tuned = this.gemmTuning.get((quant ? "q" : "") + tuneKey(ak, M, N, K));
     if (tuned !== undefined) {
       if (tuned === "skinny") {
         const sk = cfg.skinny.find((c) => M <= c.maxM) ?? cfg.skinny[cfg.skinny.length - 1];
         if (sk) return { skinny: sk };
       } else if (tuned === "direct") return {};
       else if (sgs[tuned]) return { sg: sgs[tuned] };
+    }
+    if (quant) {
+      // Quantized B (measured on M2, bench/quantized-gemm.ts): dequantizing in the
+      // skinny kernel is ALU-bound once each thread owns many rows, so only the
+      // smallest M stay skinny; up to 64 rows the subgroup-matrix kernel with
+      // split-K 2 is faster, else the wide-row skinny config.
+      if (M <= 16 && cfg.skinny[0]) return { skinny: cfg.skinny[0] };
+      if (M <= 64) {
+        if (sgs[0]) return { sg: { ...QUANT_SG_SMALL_M, splitK: [{ S: 2 }] } };
+        const sk = cfg.skinny.find((c) => c.WY >= 8 && M <= c.maxM) ?? cfg.skinny.find((c) => M <= c.maxM);
+        if (sk) return { skinny: sk };
+      }
     }
     const skinny = cfg.skinny.find((c) => M <= c.maxM);
     if (skinny) return { skinny };
@@ -899,6 +924,85 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       const tk = this.kind(table.dtype);
       this.run(`gather:e:${keyOf(tk)}`, () => gatherKernel(tk, tk, "embedding"), [table.storage.buffer, idsI.storage.buffer, out.storage.buffer], {
         n, D, V, M: 1, ot: table.offset, oi: idsI.offset,
+      }, this.flatGroups(n));
+    }
+    if (idsI !== ids) this.dispose(idsI);
+    return out;
+  }
+
+  // ---- quantized weights ---------------------------------------------------
+
+  /**
+   * Keeps a quantized matrix packed on the device: the laya-js bytes upload
+   * as-is (u32 words [out, in·bits/32]; read as little-endian words they are
+   * the MLX packing), scales / biases as `dtype` (f16 storage when the device
+   * has shader-f16). Every GEMM path (skinny, subgroup-matrix, direct, tiled)
+   * dequantizes inside its B tile load and accumulates in f32. Resolves to
+   * null when the group size is not a multiple of 4.
+   */
+  async fromHostQuantized(h: HostQuantized, dtype: DType): Promise<QuantizedTensor<WebGpuTensor> | null> {
+    const [N, K] = h.shape;
+    if (h.groupSize % 4 || (K * h.bits) % 32) return null;
+    if (!isFloat(dtype)) throw new TypeError(`webgpu fromHostQuantized: dtype must be float, got ${dtype}`);
+    const words = [N, (K * h.bits) / 32];
+    const { buffer, bytes, writeHazard } = this.rt.acquire(Math.max(4, h.data.byteLength));
+    this.rt.write(buffer, writeHazard, h.data);
+    const w = this.track(new WebGpuTensor(words, "i32", new Storage(buffer, bytes), 0));
+    const up = (t: HostTensor) => {
+      const u = this.upload(t);
+      if (u.dtype === dtype) return u;
+      const c = this.cast(u, dtype);
+      this.dispose(u);
+      return c;
+    };
+    const { bits, groupSize, mode } = h;
+    return { shape: [N, K], bits, groupSize, mode, dtype, native: true, w, scales: up(h.scales), biases: h.biases ? up(h.biases) : null };
+  }
+
+  private quantSpec(scales: WebGpuTensor, biases: WebGpuTensor | null, opts: QuantizedLinearOptions, r16 = false): { spec: QuantSpec; bufs: GPUBuffer[] } {
+    const sym = opts.mode === "symmetric";
+    if (!sym && !biases) throw new Error("webgpu: affine quantized weights need biases");
+    if (opts.groupSize % 4) throw new Error("webgpu: quantized group size must be a multiple of 4");
+    this.live(scales);
+    if (biases) this.live(biases);
+    return {
+      spec: { bits: opts.bits, g: opts.groupSize, sym, scale: this.kind(scales.dtype), ...(r16 ? { r16 } : {}) },
+      bufs: [scales.storage.buffer, ...(sym ? [] : [biases!.storage.buffer])],
+    };
+  }
+
+  quantizedLinear(x: WebGpuTensor, w: WebGpuTensor, scales: WebGpuTensor, biases: WebGpuTensor | null, opts: QuantizedLinearOptions, bias?: WebGpuTensor | null): WebGpuTensor {
+    this.live(x);
+    this.live(w);
+    if (bias) this.live(bias);
+    if (!isFloat(x.dtype)) throw new Error(`quantizedLinear: x must be float, got ${x.dtype}`);
+    const K = x.shape[x.shape.length - 1]!;
+    const N = scales.shape[0]!;
+    if (w.shape[0] !== N || (w.shape[1]! * 32) / opts.bits !== K) throw new Error(`quantizedLinear: x [${x.shape}] vs packed w [${w.shape}] (q${opts.bits})`);
+    // f16 activations: round each weight to f16 like host dequantization does
+    const q = this.quantSpec(scales, biases, opts, this.kind(x.dtype).st === "f16");
+    q.bufs.unshift(w.storage.buffer);
+    const M = x.size / K;
+    const xc = x.offset % 4 ? this.copyContig(x) : x;
+    try {
+      return this.gemm(xc, w, bias ?? null, M, N, K, true, [], [], [], [...x.shape.slice(0, -1), N], q);
+    } finally {
+      if (xc !== x) this.dispose(xc);
+    }
+  }
+
+  quantizedEmbedding(w: WebGpuTensor, scales: WebGpuTensor, biases: WebGpuTensor | null, opts: QuantizedLinearOptions, ids: WebGpuTensor): WebGpuTensor {
+    this.live(w);
+    this.live(ids);
+    const V = scales.shape[0]!, K = (w.shape[1]! * 32) / opts.bits;
+    const q = this.quantSpec(scales, biases, opts);
+    const idsI = ids.dtype === "i32" ? ids : this.cast(ids, "i32");
+    const out = this.alloc([...ids.shape, K], scales.dtype);
+    const n = (ids.size * K) / 4;
+    if (n) {
+      const ok = this.kind(scales.dtype);
+      this.run(`qgather:${quantKey(q.spec)}:${keyOf(ok)}`, () => quantGatherKernel(q.spec, ok), [w.storage.buffer, ...q.bufs, idsI.storage.buffer, out.storage.buffer], {
+        n, K, V, oi: idsI.offset,
       }, this.flatGroups(n));
     }
     if (idsI !== ids) this.dispose(idsI);

@@ -96,6 +96,19 @@ detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
   bool runs on i32, as the contract specifies. Extras:
   `readSync(t)`, `memory()` (MLX active and peak bytes), `liveTensors()`
   and `info`.
+- **Quantized weights** (tensor-backend 0.3's optional trio, native):
+  `fromHostQuantized` keeps a laya-js q8/q4 matrix packed in MLX's own
+  affine layout (uint32 words + scales + biases in the compute dtype),
+  `quantizedLinear` is `mlx_quantized_matmul` (transposed), and
+  `quantizedEmbedding` gathers packed rows and runs `mlx_dequantize`. The
+  laya bytes read as little-endian u32 words already are MLX's packing, so
+  q4 (affine) uploads as-is; symmetric q8 becomes affine by flipping each
+  byte's sign bit (q + 128) with bias = −128·scale — a repack, never a
+  dequantization, and bit-exact: the device weights dequantize to exactly
+  fl32(q·scale + bias). Groups of 32, 64 or 128 without a partial last
+  group; anything else resolves to null and runs through the default
+  composition. Use it through `uploadQuantized` / `quantizedLinear` /
+  `quantizedEmbedding` from `@johnhenry/tensor-backend`.
 - `libCandidates()`, `resolveLib()`, `mlxPlatformSupported()` and
   `PLATFORM_PACKAGE` (the platform package's npm name).
 
@@ -195,6 +208,11 @@ is GPU time in the same libmlx that Python uses.
   hand and two ABI variants are detected; an unknown Homebrew mlx-c could
   misalign arguments. Prefer the platform package.
 - There is no zero-copy weight upload (one copy per tensor).
+- Quantized weights: MLX's `quantized_matmul` computes each group as
+  scale·Σx·q + bias·Σx, so symmetric weights (run as affine with
+  bias = −128·scale) lose a little to cancellation: ≈1e-6 of Σ|x·w|, or up
+  to ≈1e-4 of a small output. Group sizes other than 32/64/128 and partial
+  groups fall back to the composition (no memory saving).
 - `compile` is the identity on `device: "cpu"`, so the CPU device also has
   no fused GELU.
 - Compiled functions must be pure in their tensor arguments. Captured

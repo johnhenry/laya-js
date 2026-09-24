@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { fixturePath, loadJson } from "@johnhenry/laya-fixtures";
 import { openSafetensors, readSafetensors, writeSafetensors } from "@johnhenry/math-plus-safetensors";
 import type { PredictResult, Questions } from "@johnhenry/laya-core";
+import { createCpuBackend } from "@johnhenry/backend-cpu";
+import { unpackQuantized, type Backend, type HostQuantized, type HostTensor } from "@johnhenry/tensor-backend";
 import {
   dequantizeMatrix,
   load,
@@ -188,7 +190,7 @@ for (const bits of [8, 4] as QuantBits[]) {
     // the weights come back within the per-group bound
     const ws = await readWeights(bytes, { dtype: "f32" });
     const name = "encoder.layers.1.mlp.Wi.weight";
-    const got = ws.get(name)!;
+    const got = ws.get(name)! as HostTensor;
     assert.equal(got.dtype, "f32");
     assert.deepEqual(got.shape, src.info(name).shape);
     const want = src.toF32(name), scales = f.toF32(name + ".scales");
@@ -227,14 +229,14 @@ test("q4 with q8 patterns stores the matching tensors as I8 (mixed precision) an
   assert.equal(f.info("encoder.layers.0.mlp.Wi.weight").dtype, "U8");
   assert.deepEqual(report.promoted.sort(), report.quantized.filter((n) => /attn\./.test(n)).sort());
   const ws = await readWeights(bytes);
-  const t = ws.get("encoder.layers.0.attn.Wqkv.weight")!;
+  const t = ws.get("encoder.layers.0.attn.Wqkv.weight")! as HostTensor;
   assert.equal(t.dtype, "f16");
   assert.ok(t.data instanceof Float16Array);
 });
 
 test("readWeights: plain checkpoints are untouched; corrupt quantized files fail loudly", async () => {
   const plain = await readWeights(tinyBytes, { dtype: "f16" });
-  assert.equal(plain.get("encoder.layers.0.attn.Wqkv.weight")!.dtype, "f32", "dtype only applies to dequantized tensors");
+  assert.equal((plain.get("encoder.layers.0.attn.Wqkv.weight")! as HostTensor).dtype, "f32", "dtype only applies to dequantized tensors");
   const { bytes } = await quantizedTiny(4);
   const f = readSafetensors(bytes);
   const tensors = new Map(f.names().map((n) => [n, { dtype: f.info(n).dtype, shape: f.info(n).shape, data: f.bytes(n) }]));
@@ -276,3 +278,82 @@ test("load() from an http URL in Node: quantized checkpoint over Range requests"
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------------ on-device quantized weights
+
+/**
+ * The CPU reference with the quantized trio declared (declining every
+ * upload), so `load` takes the "device" path and the model holds
+ * `QuantizedTensor`s through tensor-backend's default composition.
+ */
+function cpuWithQuantizedPath(): Backend {
+  const cpu = createCpuBackend() as unknown as Backend;
+  const extra: Record<PropertyKey, unknown> = {
+    fromHostQuantized: async () => null,
+    quantizedLinear: () => {
+      throw new Error("unreachable: uploads were declined");
+    },
+    quantizedEmbedding: () => {
+      throw new Error("unreachable: uploads were declined");
+    },
+  };
+  return new Proxy(cpu, {
+    get(target, prop) {
+      if (prop in extra) return extra[prop];
+      const v = Reflect.get(target, prop, target) as unknown;
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+}
+
+for (const bits of [8, 4] as QuantBits[]) {
+  test(`readWeights(quantized: "device") hands out q${bits} matrices packed (HostQuantized, zero-copy) and plain tensors as-is`, async () => {
+    const { bytes, report } = await quantizedTiny(bits);
+    const f = readSafetensors(bytes);
+    const ws = await readWeights(bytes, { quantized: "device" });
+    const name = report.quantized.find((n) => n.endsWith("mlp.Wi.weight"))!;
+    const h = ws.get(name) as HostQuantized;
+    assert.equal(h.bits, bits);
+    assert.equal(h.mode, bits === 8 ? "symmetric" : "affine");
+    assert.equal(h.groupSize, 64);
+    assert.deepEqual(h.shape, src(name).shape);
+    assert.equal(h.data.byteLength, (h.shape[0] * h.shape[1] * bits) / 8);
+    assert.equal(h.scales.dtype, "f16");
+    assert.equal(h.biases === null, bits === 8);
+    // the q values are the file's
+    const q = unpackQuantized(h);
+    const raw = f.bytes(name);
+    if (bits === 8) assert.deepEqual([...q.slice(0, 64)], [...new Int8Array(raw.buffer, raw.byteOffset, 64)]);
+    else assert.deepEqual([q[0], q[1]], [raw[0]! & 15, raw[0]! >> 4]);
+    const plain = ws.get("encoder.final_norm.weight") as HostTensor;
+    assert.equal(plain.dtype, "f32");
+  });
+
+  test(`load(quantized: "device") keeps q${bits} weights quantized when the backend has the quantized ops, and matches dequantize-on-load`, async () => {
+    const { bytes } = await quantizedTiny(bits);
+    const dir = await tinyDir(bytes);
+    try {
+      const deq = await load(dir, { backend: "cpu", batchSize: 2, warn: () => {} });
+      assert.equal(deq.model.quantizedOnDevice, false, "cpu has no quantized ops: dequantize on load");
+      const want = await deq.predict(fx.state, fx.questions);
+      deq.dispose();
+      const be = cpuWithQuantizedPath();
+      const dev = await load(dir, { backend: be, batchSize: 2, warn: () => {} });
+      assert.equal(dev.model.quantizedOnDevice, true);
+      const got = await dev.predict(fx.state, fx.questions);
+      dev.dispose();
+      assert.ok(maxDelta(got, want) <= 1e-5, `max |Δ| vs dequantize-on-load ${maxDelta(got, want)}`);
+      const forced = await load(dir, { backend: be, batchSize: 2, quantized: "dequantize", warn: () => {} });
+      assert.equal(forced.model.quantizedOnDevice, false);
+      forced.dispose();
+      await assert.rejects(load(dir, { backend: be, quantized: "gpu" as never }), /quantized must be/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+const tinySrc = readSafetensors(tinyBytes);
+function src(name: string) {
+  return tinySrc.info(name);
+}

@@ -326,6 +326,98 @@ ${ENTRY(WG)} {
 // Tiles live in workgroup memory as vec4 along M / N ([k][m/4], [k][n/4]) so
 // the inner loop does TM/4 + TN/4 vec4 loads per TM·TN FMAs; accumulation f32.
 
+// ---------------------------------------------------------------------------
+// Quantized weights (Linear B operand): packed u32 words QW [N, K·bits/32]
+// (little-endian fields, the MLX / laya-js layout), per-group scales QS
+// [N, ⌈K/g⌉] and, for affine, biases QB. The GEMM kernels read B through
+// `qw4(row, k)`, which dequantizes 4 consecutive values (k % 4 == 0, all in
+// one group since g % 4 == 0) to f32 inside the tile load: w = q·s (+ b).
+
+export interface QuantSpec {
+  bits: 4 | 8;
+  /** Group size (a multiple of 4). */
+  g: number;
+  /** Symmetric (signed q, no biases) or affine (unsigned q, biases). */
+  sym: boolean;
+  /** Storage kind of the scales / biases. */
+  scale: Kind;
+  /**
+   * Round each dequantized weight to f16 before the multiply (f16
+   * activations): the same weights host dequantization uploads, so f16
+   * results track the dequantize-on-load model.
+   */
+  r16?: boolean;
+}
+
+export const quantKey = (q: QuantSpec | null | undefined): string => (q ? `q${q.bits}${q.sym ? "s" : "a"}g${q.g}${kindKey(q.scale)}${q.r16 ? "r" : ""}` : "");
+
+/** Bindings that replace `B` for a quantized weight (in this order). */
+export function quantBindings(q: QuantSpec): BindingSpec[] {
+  return [
+    { name: "QW", elem: "u32", access: "read" },
+    { name: "QS", elem: q.scale.st, access: "read" },
+    ...(q.sym ? [] : [{ name: "QB", elem: q.scale.st, access: "read" as const }]),
+  ];
+}
+
+/** WGSL `fn qw4(row, k) -> vec4<f32>`: dequantized W[row, k..k+3] (needs P.K). */
+export function quantHelper(q: QuantSpec): string {
+  const G = `((P.K + ${q.g - 1}u) / ${q.g}u)`;
+  let v: string;
+  if (q.bits === 8) {
+    const w = "let w = QW[row * (P.K / 4u) + k / 4u];";
+    v = q.sym
+      ? `${w}
+  let v = vec4<f32>(vec4<i32>(bitcast<i32>(w << 24u) >> 24u, bitcast<i32>(w << 16u) >> 24u, bitcast<i32>(w << 8u) >> 24u, bitcast<i32>(w) >> 24u));`
+      : `${w}
+  let v = vec4<f32>(vec4<u32>(w & 255u, (w >> 8u) & 255u, (w >> 16u) & 255u, w >> 24u));`;
+  } else {
+    const w = "let w = QW[row * (P.K / 8u) + k / 8u] >> ((k & 4u) * 4u);";
+    v = q.sym
+      ? `${w}
+  let v = vec4<f32>(vec4<i32>(bitcast<i32>(w << 28u) >> 28u, bitcast<i32>(w << 24u) >> 28u, bitcast<i32>(w << 20u) >> 28u, bitcast<i32>(w << 16u) >> 28u));`
+      : `${w}
+  let v = vec4<f32>(vec4<u32>(w & 15u, (w >> 4u) & 15u, (w >> 8u) & 15u, (w >> 12u) & 15u));`;
+  }
+  const gi = `row * ${G} + k / ${q.g}u`;
+  const b = q.sym ? "0.0" : `f32(QB[${gi}])`;
+  return `
+fn qw4(row: u32, k: u32) -> vec4<f32> {
+  ${v}
+  let gi = ${gi};
+  let d = fma(v, vec4<f32>(f32(QS[gi])), vec4<f32>(${b}));
+  return ${q.r16 ? "vec4<f32>(vec4<f16>(d))" : "d"};
+}
+`;
+}
+
+/**
+ * Dequantizing row gather (quantizedEmbedding): out[r, d] = W[ids[r], d],
+ * one thread per 4 consecutive values (D % 4 == 0).
+ */
+export function quantGatherKernel(q: QuantSpec, out: Kind): KernelSource {
+  const WG = 256;
+  const body = `const WG = ${WG}u;
+${quantHelper(q)}
+${ENTRY(WG)} {
+  let lid = lid3;${FLAT_IDX}
+  if (i >= P.n) { return; }
+  let D4 = P.K / 4u;
+  let r = i / D4; let d = (i % D4) * 4u;
+  let src = u32(clamp(ids[P.oi + r], 0, i32(P.V) - 1));
+  let v = qw4(src, d);
+  let o = r * P.K + d;
+  outp[o] = ${st(out, "v.x", "f32")}; outp[o + 1u] = ${st(out, "v.y", "f32")}; outp[o + 2u] = ${st(out, "v.z", "f32")}; outp[o + 3u] = ${st(out, "v.w", "f32")};
+}`;
+  return {
+    key: `qgather:${quantKey(q)}:${kindKey(out)}`,
+    bindings: [...quantBindings(q), { name: "ids", elem: "i32", access: "read" }, { name: "outp", elem: out.st, access: "read_write" }],
+    params: [["n", "u32"], ["K", "u32"], ["V", "u32"], ["oi", "u32"]],
+    body: (out.bf16 ? HELPERS : "") + body,
+    f16: needsF16(q.scale, out, ...(q.r16 ? [{ st: "f16" as const }] : [])),
+  };
+}
+
 /** Workgroup-memory tiled GEMM (batched matmul, and Linear when unaligned). */
 export interface TiledGemmConfig {
   BM: number;
@@ -404,14 +496,16 @@ export function gemmKernel(
   vecA: boolean,
   vecB: boolean,
   cfg: TiledGemmConfig,
+  quant: QuantSpec | null = null,
 ): KernelSource {
   const { BM, BN, BK, TM, TN } = cfg;
   const TX = BN / TN, TY = BM / TM, WG = TX * TY;
   if (TN % 4 || TM % 4 || BK % 4) throw new Error("gemm: TM, TN, BK must be multiples of 4");
+  if (quant && !(transB && vecB)) throw new Error("gemm: quantized B needs transB and K % 4 == 0");
   const BM4 = BM / 4, BN4 = BN / 4;
   const bindings: BindingSpec[] = [
     { name: "A", elem: vecA ? `vec4<${a.st}>` : a.st, access: "read" },
-    { name: "B", elem: vecB ? `vec4<${b.st}>` : b.st, access: "read" },
+    ...(quant ? quantBindings(quant) : [{ name: "B", elem: vecB ? `vec4<${b.st}>` : b.st, access: "read" as const }]),
   ];
   if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
   bindings.push({ name: "C", elem: out.st, access: "read_write" });
@@ -426,9 +520,10 @@ export function gemmKernel(
     const rowsOf = (m4: string) => [0, 1, 2, 3].map((i) => `${rowBase} + ${m4} * 4u + ${i}u`);
     if (vec) {
       const n = R4 * (BK / 4);
+      const vload = (row: string) => (quant && name === "B" ? `qw4(${row}, kk)` : f4(kind, `${name}[(${base} + (${row}) * P.K + kk) / 4u]`));
       const loads = rowsOf("m4")
         .map((row, i) => `      var q${i} = vec4<f32>(0.0);
-      if (${row} < ${lim} && kk < P.K) { q${i} = ${f4(kind, `${name}[(${base} + (${row}) * P.K + kk) / 4u]`)}; }`)
+      if (${row} < ${lim} && kk < P.K) { q${i} = ${vload(row)}; }`)
         .join("\n");
       return `    for (var t = lid; t < ${n}u; t += ${WG}u) {
       let m4 = t / ${BK / 4}u; let kq = t % ${BK / 4}u;
@@ -499,7 +594,7 @@ ${loads}
   }
   void vecStore;
 
-  const body = `${out.bf16 ? HELPERS : ""}
+  const body = `${out.bf16 ? HELPERS : ""}${quant ? quantHelper(quant) : ""}
 var<workgroup> As: array<vec4<f32>, ${BK * BM4}>;
 var<workgroup> Bs: array<vec4<f32>, ${BK * BN4}>;
 @compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
@@ -524,12 +619,12 @@ ${inner}    }
     workgroupBarrier();
   }
 ${store}}`;
-  const key = `gemm:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${transB ? "T" : "N"}:${vecA ? "v" : "s"}${vecB ? "v" : "s"}:${BM}x${BN}x${BK}/${TM}x${TN}`;
+  const key = `gemm:${kindKey(a)}:${quant ? quantKey(quant) : kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${transB ? "T" : "N"}:${vecA ? "v" : "s"}${vecB ? "v" : "s"}:${BM}x${BN}x${BK}/${TM}x${TN}`;
   const params: ParamSpec = [
     ["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"],
     ["bsh", "vec8"], ["ast", "vec8"], ["bst", "vec8"],
   ];
-  return { key, bindings, params, body, f16: needsF16(a, b, out, ...(bias ? [bias] : [])) };
+  return { key, bindings, params, body, f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])) };
 }
 
 /**
@@ -538,22 +633,22 @@ ${store}}`;
  * A rows and W rows straight from global memory (served by L1/L2 on Apple and
  * most discrete GPUs). Accumulates dot4 products in f32.
  */
-export function gemmDirectKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: DirectGemmConfig): KernelSource {
+export function gemmDirectKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: DirectGemmConfig, quant: QuantSpec | null = null): KernelSource {
   const { TM, TN, WX, WY } = cfg;
   const bindings: BindingSpec[] = [
     { name: "A", elem: `vec4<${a.st}>`, access: "read" },
-    { name: "B", elem: `vec4<${b.st}>`, access: "read" },
+    ...(quant ? quantBindings(quant) : [{ name: "B", elem: `vec4<${b.st}>`, access: "read" as const }]),
   ];
   if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
   bindings.push({ name: "C", elem: out.st, access: "read_write" });
   const f4 = (k: Kind, e: string) => (k.st === "f32" ? e : `vec4<f32>(${e})`);
   let s = "";
   for (let i = 0; i < TM; i++) s += `  let ar${i} = aBase + min(row0 + ${i}u, P.M - 1u) * K4;\n`;
-  for (let j = 0; j < TN; j++) s += `  let br${j} = bBase + min(col0 + ${j}u, P.N - 1u) * K4;\n`;
+  for (let j = 0; j < TN; j++) s += quant ? `  let br${j} = min(col0 + ${j}u, P.N - 1u);\n` : `  let br${j} = bBase + min(col0 + ${j}u, P.N - 1u) * K4;\n`;
   for (let i = 0; i < TM; i++) for (let j = 0; j < TN; j++) s += `  var c${i}_${j} = 0.0;\n`;
   s += `  for (var k = 0u; k < K4; k++) {\n`;
   for (let i = 0; i < TM; i++) s += `    let a${i} = ${f4(a, `A[ar${i} + k]`)};\n`;
-  for (let j = 0; j < TN; j++) s += `    let b${j} = ${f4(b, `B[br${j} + k]`)};\n`;
+  for (let j = 0; j < TN; j++) s += `    let b${j} = ${quant ? `qw4(br${j}, k * 4u)` : f4(b, `B[br${j} + k]`)};\n`;
   for (let i = 0; i < TM; i++) for (let j = 0; j < TN; j++) s += `    c${i}_${j} += dot(a${i}, b${j});\n`;
   s += `  }\n`;
   for (let i = 0; i < TM; i++) {
@@ -564,7 +659,7 @@ export function gemmDirectKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind,
     }
     s += `  }\n`;
   }
-  const body = `${out.bf16 ? HELPERS : ""}
+  const body = `${out.bf16 ? HELPERS : ""}${quant ? quantHelper(quant) : ""}
 @compute @workgroup_size(${WX}, ${WY}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let K4 = P.K / 4u;
   let col0 = (wid.x * ${WX}u + lid.x) * ${TN}u;
@@ -573,11 +668,11 @@ export function gemmDirectKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind,
   let cBase = 0u;
 ${s}}`;
   return {
-    key: `gemmdirect:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${TM}x${TN}:${WX}x${WY}`,
+    key: `gemmdirect:${kindKey(a)}:${quant ? quantKey(quant) : kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${TM}x${TN}:${WX}x${WY}`,
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, b, out, ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
   };
 }
 
@@ -602,24 +697,57 @@ export interface SkinnyGemmConfig {
  * Designed for the latency path (one short question: M = tokens ≈ 16–64).
  * f32 accumulation.
  */
-export function gemmSkinnyKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SkinnyGemmConfig, TM: number): KernelSource {
+export function gemmSkinnyKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SkinnyGemmConfig, TM: number, quant: QuantSpec | null = null, q8step = false): KernelSource {
   const { WX, TN, WY, KS, KP4 } = cfg;
+  // q8step (quantized, g % 8 == 0, K % 8 == 0, KP4 == 0): 8 values per step
+  // with one scale/bias, y += s·Σx·q + b·Σx (Σx shared by every column).
+  const fast = !!quant && q8step && quant.g % 8 === 0 && KP4 === 0;
   const WG = WX * WY * KS, RM = WY * TM;
   const bindings: BindingSpec[] = [
     { name: "A", elem: `vec4<${a.st}>`, access: "read" },
-    { name: "B", elem: `vec4<${b.st}>`, access: "read" },
+    ...(quant ? quantBindings(quant) : [{ name: "B", elem: `vec4<${b.st}>`, access: "read" as const }]),
   ];
   if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
   bindings.push({ name: "C", elem: out.st, access: "read_write" });
   const f4 = (k: Kind, e: string) => (k.st === "f32" ? e : `vec4<f32>(${e})`);
   let s = "";
-  for (let j = 0; j < TN; j++) s += `  let br${j} = bBase + min(c0 + ${j * WX}u, P.N - 1u) * K4;\n`;
+  for (let j = 0; j < TN; j++) s += quant ? `  let br${j} = min(c0 + ${j * WX}u, P.N - 1u);\n` : `  let br${j} = bBase + min(c0 + ${j * WX}u, P.N - 1u) * K4;\n`;
+  const bload = (j: number, k: string) => (quant ? `qw4(br${j}, (${k}) * 4u)` : f4(b, `B[br${j} + ${k}]`));
   for (let i = 0; i < TM; i++) for (let j = 0; j < TN; j++) s += `  var c${i}_${j} = 0.0;\n`;
-  if (KP4 === 0) {
+  if (fast) {
+    const q = quant!;
+    const aff = !q.sym;
+    const wpr = q.bits / 4; // u32 words per 8 values
+    s += `  let K8 = P.K / 8u; let WPR = P.K / ${32 / q.bits}u; let G = (P.K + ${q.g - 1}u) / ${q.g}u;\n`;
+    for (let j = 0; j < TN; j++) s += `  let wb${j} = br${j} * WPR; let sb${j} = br${j} * G;\n`;
+    for (let i = 0; i < TM; i++) s += `  let ar${i} = aBase + min(ty * ${TM}u + ${i}u, P.M - 1u) * K4;\n`;
+    const unpack = (w: string, shift: number, bits: number, sym: boolean) => {
+      const f = (o: number) => (sym ? `bitcast<i32>(${w} << ${32 - bits - o}u) >> ${32 - bits}u` : `(${w} >> ${o}u) & ${(1 << bits) - 1}u`);
+      return `vec4<f32>(vec4<${sym ? "i32" : "u32"}>(${[0, 1, 2, 3].map((t) => f(shift + t * bits)).join(", ")}))`;
+    };
+    s += `  for (var k8 = ks; k8 < K8; k8 += ${KS}u) {\n    let gi = (k8 * 8u) / ${q.g}u;\n`;
+    for (let i = 0; i < TM; i++) {
+      s += `    let a${i}l = ${f4(a, `A[ar${i} + 2u * k8]`)}; let a${i}h = ${f4(a, `A[ar${i} + 2u * k8 + 1u]`)};\n`;
+      if (aff && !q.r16) s += `    let sa${i} = dot(a${i}l + a${i}h, vec4<f32>(1.0));\n`;
+    }
+    for (let j = 0; j < TN; j++) {
+      if (wpr === 1) s += `    { let w = QW[wb${j} + k8]; let ql = ${unpack("w", 0, 4, q.sym)}; let qh = ${unpack("w", 16, 4, q.sym)};\n`;
+      else s += `    { let w0 = QW[wb${j} + 2u * k8]; let w1 = QW[wb${j} + 2u * k8 + 1u]; let ql = ${unpack("w0", 0, 8, q.sym)}; let qh = ${unpack("w1", 0, 8, q.sym)};\n`;
+      s += `      let sc = f32(QS[sb${j} + gi]);${aff ? ` let bi = f32(QB[sb${j} + gi]);` : ""}\n`;
+      if (q.r16) {
+        // weights rounded to f16 (as host dequantization does), then plain dots
+        const d = (v: string) => `vec4<f32>(vec4<f16>(fma(${v}, vec4<f32>(sc), vec4<f32>(${aff ? "bi" : "0.0"}))))`;
+        s += `      let wl = ${d("ql")}; let wh = ${d("qh")};\n`;
+        for (let i = 0; i < TM; i++) s += `      c${i}_${j} += dot(a${i}l, wl) + dot(a${i}h, wh);\n`;
+      } else for (let i = 0; i < TM; i++) s += `      c${i}_${j} += sc * (dot(a${i}l, ql) + dot(a${i}h, qh))${aff ? ` + bi * sa${i}` : ""};\n`;
+      s += `    }\n`;
+    }
+    s += `  }\n`;
+  } else if (KP4 === 0) {
     // A straight from global memory (small; stays in cache), no barriers in the K loop.
     for (let i = 0; i < TM; i++) s += `  let ar${i} = aBase + min(ty * ${TM}u + ${i}u, P.M - 1u) * K4;\n`;
     s += `  for (var k = ks; k < K4; k += ${KS}u) {\n`;
-    for (let j = 0; j < TN; j++) s += `    let b${j} = ${f4(b, `B[br${j} + k]`)};\n`;
+    for (let j = 0; j < TN; j++) s += `    let b${j} = ${bload(j, "k")};\n`;
     for (let i = 0; i < TM; i++) {
       s += `    { let a = ${f4(a, `A[ar${i} + k]`)};\n`;
       for (let j = 0; j < TN; j++) s += `      c${i}_${j} += dot(a, b${j});\n`;
@@ -637,7 +765,7 @@ export function gemmSkinnyKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind,
       workgroupBarrier();
       let kn = min(${KP4}u, K4 - kp);
       for (var kk = ks; kk < kn; kk += ${KS}u) {\n`;
-    for (let j = 0; j < TN; j++) s += `      let b${j} = ${f4(b, `B[br${j} + kp + kk]`)};\n`;
+    for (let j = 0; j < TN; j++) s += `      let b${j} = ${bload(j, "kp + kk")};\n`;
     for (let i = 0; i < TM; i++) {
       s += `      { let a = As[(ty * ${TM}u + ${i}u) * ${KP4}u + kk];\n`;
       for (let j = 0; j < TN; j++) s += `        c${i}_${j} += dot(a, b${j});\n`;
@@ -671,7 +799,7 @@ export function gemmSkinnyKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind,
       s += `    }\n  }\n`;
     }
   }
-  const body = `${out.bf16 ? HELPERS : ""}
+  const body = `${out.bf16 ? HELPERS : ""}${quant ? quantHelper(quant) : ""}
 ${KP4 ? `var<workgroup> As: array<vec4<f32>, ${RM * KP4}>;` : ""}
 ${KS > 1 ? `var<workgroup> red: array<f32, ${WG}>;` : ""}
 @compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
@@ -682,11 +810,11 @@ ${KS > 1 ? `var<workgroup> red: array<f32, ${WG}>;` : ""}
   let aBase = P.oa / 4u; let bBase = P.ob / 4u;
 ${s}}`;
   return {
-    key: `gemmskinny:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${WX}x${WY}x${KS}/${TM}x${TN}/${KP4}`,
+    key: `gemmskinny:${kindKey(a)}:${quant ? quantKey(quant) + (fast ? "8" : "") : kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${WX}x${WY}x${KS}/${TM}x${TN}/${KP4}`,
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, b, out, ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
   };
 }
 
@@ -1230,7 +1358,7 @@ export interface SgGemmConfig {
  * rounded once). With `split` (split-K), workgroup z covers K range
  * [z·P.kc, (z+1)·P.kc) and writes f32 partials at z·M·N (no bias).
  */
-export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SgGemmConfig, split = false, wide = false): KernelSource {
+export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg: SgGemmConfig, split = false, wide = false, quant: QuantSpec | null = null): KernelSource {
   const { BM, BN, BK, WM, WN } = cfg;
   const db = cfg.db ?? false;
   const epi = cfg.epi ?? "frag";
@@ -1239,14 +1367,14 @@ export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg
   const FM = SBM / 8, FN = SBN / 8; // fragments per subgroup
   if (FM % 1 || FN % 1 || BK % 8) throw new Error("gemmSg: bad tile config");
   if (split && bias) throw new Error("gemmSg: split-K partials take no bias");
-  if (wide && (a.st !== "f16" || b.st !== "f16")) throw new Error("gemmSg: wide loads need f16 operands");
+  if (wide && (a.st !== "f16" || b.st !== "f16" || quant)) throw new Error("gemmSg: wide loads need f16 operands");
   const BKP = BK + (cfg.pad ?? 4); // padded row stride (floats) of the staged tiles
   // V elements per global load: vec4<f16>/<f32> (4), or 8 f16 as vec4<u32> (wide).
   const V = wide ? 8 : 4;
   const elem = (k: Kind) => (wide ? "vec4<u32>" : `vec4<${k.st}>`);
   const bindings: BindingSpec[] = [
     { name: "A", elem: elem(a), access: "read" },
-    { name: "B", elem: elem(b), access: "read" },
+    ...(quant ? quantBindings(quant) : [{ name: "B", elem: elem(b), access: "read" as const }]),
   ];
   if (bias) bindings.push({ name: "bias", elem: bias.st, access: "read" });
   bindings.push({ name: "C", elem: out.st, access: "read_write" });
@@ -1259,14 +1387,16 @@ export function gemmSgKernel(a: Kind, b: Kind, bias: Kind | null, out: Kind, cfg
   const guard = (rows: number, v: number) => ((v + 1) * WG > rows * KV ? `if (lid + ${v * WG}u < ${rows * KV}u) ` : "");
   const regs = (p: string, n: number) =>
     Array.from({ length: n }, (_, v) => `  var ${p}${v} = vec4<f32>(0.0);\n${wide ? `  var ${p}${v}h = vec4<f32>(0.0);\n` : ""}`).join("");
-  const load = (p: string, v: number, name: string, kind: Kind, idx: string) =>
-    wide
+  const load = (p: string, v: number, name: string, kind: Kind, idx: string, gr: string, kk: string) =>
+    quant && name === "B"
+      ? `${p}${v} = qw4(${gr}, (${kk}) * 4u);`
+      : wide
       ? `let u = ${name}[${idx}]; ${p}${v} = vec4<f32>(unpack2x16float(u.x), unpack2x16float(u.y)); ${p}${v}h = vec4<f32>(unpack2x16float(u.z), unpack2x16float(u.w));`
       : `${p}${v} = ${f4(kind, `${name}[${idx}]`)};`;
   const zero = (p: string, v: number) => `${p}${v} = vec4<f32>(0.0);${wide ? ` ${p}${v}h = vec4<f32>(0.0);` : ""}`;
   const fetch = (p: string, n: number, name: string, kind: Kind, base: string, lim: string, gbase: string, rows: number) =>
     Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let gr = ${base} + t / ${KV}u; let kk = k0n / ${V}u + t % ${KV}u;
-      if (gr < ${lim} && kk < kEndV) { ${load(p, v, name, kind, `${gbase} + gr * KV + kk`)} } else { ${zero(p, v)} } }\n`).join("");
+      if (gr < ${lim} && kk < kEndV) { ${load(p, v, name, kind, `${gbase} + gr * KV + kk`, "gr", "kk")} } else { ${zero(p, v)} } }\n`).join("");
   const stash = (p: string, n: number, S: string, rows: number) =>
     Array.from({ length: n }, (_, v) => `    ${guard(rows, v)}{ let t = lid + ${v * WG}u; let o = ${S} + (t / ${KV}u) * ${BKP}u + (t % ${KV}u) * ${V}u;
       Sh[o] = ${p}${v}.x; Sh[o + 1u] = ${p}${v}.y; Sh[o + 2u] = ${p}${v}.z; Sh[o + 3u] = ${p}${v}.w;${
@@ -1344,7 +1474,7 @@ ${mma("0u")}
     workgroupBarrier();
   }
 `;
-  const body = `${out.bf16 ? HELPERS : ""}
+  const body = `${out.bf16 ? HELPERS : ""}${quant ? quantHelper(quant) : ""}
 // Panels: A at 0, B at ${BOFF}${db ? `, second buffer at ${TILE}` : ""}; epilogue scratch ${epi === "block" ? "reuses them" : `at ${PANELS}`}.
 var<workgroup> Sh: array<f32, ${SH}>;
 @compute @workgroup_size(${WG}) fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
@@ -1359,11 +1489,11 @@ ${decl}
 ${regs("pa", NA)}${regs("pb", NB)}${loop}
 ${epilogue}}`;
   return {
-    key: `gemmsg:${kindKey(a)}:${kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${BM}x${BN}x${BK}/${WM}x${WN}:${db ? "db" : "sb"}:${epi}:${BKP}:${V}${split ? ":split" : ""}`,
+    key: `gemmsg:${kindKey(a)}:${quant ? quantKey(quant) : kindKey(b)}:${bias ? kindKey(bias) : "-"}:${kindKey(out)}:${BM}x${BN}x${BK}/${WM}x${WN}:${db ? "db" : "sb"}:${epi}:${BKP}:${V}${split ? ":split" : ""}`,
     bindings,
     params: [["M", "u32"], ["N", "u32"], ["K", "u32"], ["kc", "u32"], ["oa", "u32"], ["ob", "u32"], ["obias", "u32"]],
     body,
-    f16: needsF16(a, b, out, ...(bias ? [bias] : [])),
+    f16: needsF16(a, out, ...(quant ? [quant.scale, ...(quant.r16 ? [{ st: "f16" as const }] : [])] : [b]), ...(bias ? [bias] : [])),
     enables: ["chromium_experimental_subgroup_matrix"],
     // Offsets differ per subgroup (derived from local_invocation_index), which is fine:
     // each subgroup executes the matrix ops in subgroup-uniform control flow.

@@ -1,7 +1,7 @@
 /** Runtime-neutral pieces shared by io-node.ts and io-browser.ts. */
 import type { Backend } from "@johnhenry/tensor-backend";
 import type { AgentConfig, LayaTokenizer } from "@johnhenry/laya-core";
-import type { ConsumingWeights } from "./weights.ts";
+import type { ConsumingWeights, QuantizedLoad } from "./weights.ts";
 import type { DequantDtype } from "./quant.ts";
 
 export type BackendName = "mlx" | "webgpu" | "cpu";
@@ -29,8 +29,11 @@ export interface Checkpoint {
   agentConfig: AgentConfig;
   encoderConfig: Record<string, unknown>;
   tokenizer: LayaTokenizer & { encodeWithSpecialTokens(text: string): number[] };
-  /** Reads the weights; `dtype` is what a quantized checkpoint dequantizes to (default "f16"). */
-  weights: (opts?: { dtype?: DequantDtype }) => Promise<ConsumingWeights>;
+  /**
+   * Reads the weights; `dtype` is what a quantized checkpoint dequantizes to
+   * (default "f16"); `quantized: "device"` keeps its matrices quantized (`readWeights`).
+   */
+  weights: (opts?: { dtype?: DequantDtype; quantized?: QuantizedLoad }) => Promise<ConsumingWeights>;
 }
 
 /** Files fetched from the Hub (resolve_model's allow_patterns minus mlx_config.json). */

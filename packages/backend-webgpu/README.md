@@ -68,7 +68,8 @@ gpu.destroy();
     sleep; raise the threshold if latency matters more than CPU.
 - `isWebGpuAvailable(): Promise<boolean>`: use it to skip tests.
 - `WebGpuBackend` implements every required op plus `geglu`, `meanPool`,
-  `flush` and `destroy`. Extras:
+  `flush`, `destroy` and the quantized-weight trio of tensor-backend 0.3
+  (below). Extras:
   - `adapterInfo`: vendor, architecture, device, description, source, features, limits.
   - `sync()`: wait for submitted work.
   - `tuneGemm(shapes, { dtype?, rounds? })`: measures every applicable
@@ -98,6 +99,18 @@ gpu.destroy();
   - Exported classes and types: `Runtime`, `Storage`, `KernelSource`,
     `BindingSpec`, `ParamSpec`, `ParamType`, `CompiledKernel` and
     `RuntimeStats`.
+- **Quantized weights** (native): `fromHostQuantized` uploads a laya-js
+  q8/q4 matrix unchanged — the packed bytes as a `u32` storage buffer, the
+  per-group scales / biases as f16 (f32 without `shader-f16`).
+  `quantizedLinear` runs the same Linear kernels as fp16 weights (skinny for
+  small M, subgroup-matrix with split-K, direct, tiled): their B-operand
+  loads go through one WGSL helper that unpacks 4 values from a word
+  (sign-extended for symmetric), applies `fma(q, scale, bias)` in f32 and
+  stages the tile, so accumulation stays f32. `quantizedEmbedding` is a
+  dequantizing gather. Any group size that is a multiple of 4 works,
+  including a partial last group; other group sizes resolve to null (the
+  default composition). Use them through `uploadQuantized` /
+  `quantizedLinear` / `quantizedEmbedding` from `@johnhenry/tensor-backend`.
 - `WebGpuTensor` has `shape`, `dtype`, `storage` (a refcounted `GPUBuffer`),
   `offset` (element offset: views share storage) and `disposed`.
 - `getGpu({ unsafe? })` / `requestAdapter(powerPreference?, unsafe?)` give
@@ -259,6 +272,28 @@ understate it there. Multilingual shapes (768 / 2304 / 1152) move the same way
 portable-kernel numbers. In Deno (wgpu) the large GEMM matches, but small
 dispatches cost more.
 
+**Quantized Linear** (`bench/quantized-gemm.ts`; f16 activations, groups of
+64, best of 3 interleaved rounds). GFLOP/s of fp16 → q8 / q4 on the English
+shapes with the default kernel choice per M:
+
+| M = B·L | qkv 3072×1024 | o 1024×1024 | wi 5248×1024 | mlp-o 1024×2624 |
+|---:|---:|---:|---:|---:|
+| 1 | 73 → 62 / 77 | 34 → 18 / 28 | 77 → 72 / 78 | 62 → 40 / 33 |
+| 16 | 734 → 539 / 570 | 565 → 430 / 458 | 779 → 532 / 563 | 627 → 442 / 424 |
+| 33 | 833 → 454 / 597 | 657 → 551 / 549 | 829 → 585 / 653 | 982 → 590 / 539 |
+| 64 | 908 → 781 / 759 | 730 → 683 / 648 | 924 → 842 / 818 | 807 → 755 / 712 |
+| 512 | 1620 → 1587 / 1574 | 1487 → 1246 / 1277 | 1913 → 1667 / 1644 | 1687 → 1399 / 1352 |
+| 1488 | 1908 → 1667 / 1637 | 1793 → 1565 / 1535 | 1941 → 1685 / 1658 | 1912 → 1633 / 1574 |
+
+For M ≥ 64 the quantized kernels run at ≈0.85–0.9× fp16 (the dequantization
+in the tile load costs ALU); for 16 < M ≤ 64 they use the subgroup-matrix
+kernel with split-K 2 (the skinny kernel with many rows per thread was 2–3×
+slower), ≈0.55–0.95×; for M ≤ 16 an 8-values-per-step skinny variant.
+Small shapes at M = 1 are dispatch-bound, so fewer bytes do not help. Single
+M = 93 cells swing both ways between runs (thermal state and split-K choice).
+The model-level cost is 9–16% (see docs/RESULTS.md), for 52% / 28% of the
+fp16 weight memory.
+
 **Laya English checkpoint (ModernBERT-large, 28 layers), f16, median ms per
 forward (upload + forward + readback)** — `bench/grid.ts`, synthetic ids,
 WebGPU and MLX interleaved per cell in one Node process.
@@ -324,6 +359,10 @@ L=512 18.8 s.
   undefined behaviour, as in the contract.
 - `sdpa` accepts bool masks only. A float mask is cast to bool (nonzero means attend), so additive 0/−∞ masks are *not* supported.
 - Bool tensors take 4 bytes per element, and bf16 takes f32 memory.
+- Quantized Linears are ≈0.85–0.9× the fp16 GFLOP/s for large M and
+  ≈0.55–0.95× for 16 < M ≤ 64 (dequantization in the tile load is ALU work;
+  there is no integer-dot or f16-accumulation path). Group sizes must be
+  multiples of 4.
 - Node/Bun need the platform's prebuilt Dawn addon (`webgpu` package:
   darwin universal, linux x64/arm64, win32 x64/arm64).
 

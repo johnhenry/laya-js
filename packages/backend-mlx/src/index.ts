@@ -9,8 +9,8 @@
  * to the host; `flush` evaluates without copying. Fused ops map to `mlx.fast`
  * kernels; `compile` maps to `mlx_compile`.
  */
-import type { Backend, DType, HostData, HostTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
-import { f32ToBf16Bits } from "@johnhenry/tensor-backend";
+import type { Backend, DType, HostData, HostQuantized, HostTensor, QuantizedLinearOptions, QuantizedTensor, Shape, Tensor } from "@johnhenry/tensor-backend";
+import { f32ToBf16Bits, toF32 } from "@johnhenry/tensor-backend";
 import { openNative, type Native } from "./ffi.ts";
 import { mlxPlatformSupported, resolveLib } from "./lib.ts";
 
@@ -68,6 +68,10 @@ export interface MlxBackend extends Backend<MlxTensor> {
   mean(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
   min(x: MlxTensor, axis: number, keepDims?: boolean): MlxTensor;
   cumsum(x: MlxTensor, axis: number): MlxTensor;
+  // quantized weights: native (mlx quantized_matmul / dequantize, affine groups of 32/64/128)
+  fromHostQuantized(h: HostQuantized, dtype: DType): Promise<QuantizedTensor<MlxTensor> | null>;
+  quantizedLinear(x: MlxTensor, w: MlxTensor, scales: MlxTensor, biases: MlxTensor | null, opts: QuantizedLinearOptions, bias?: MlxTensor | null): MlxTensor;
+  quantizedEmbedding(w: MlxTensor, scales: MlxTensor, biases: MlxTensor | null, opts: QuantizedLinearOptions, ids: MlxTensor): MlxTensor;
   compile<A extends MlxTensor[], R>(fn: (...args: A) => R): (...args: A) => R;
   /** Synchronous `read`. */
   readSync(t: MlxTensor): HostTensor;
@@ -78,6 +82,9 @@ export interface MlxBackend extends Backend<MlxTensor> {
 }
 
 // mlx_dtype enum (mlx/c/array.h)
+const MLX_UINT32 = 3;
+/** Group sizes MLX's affine quantization supports. */
+const MLX_GROUP_SIZES = new Set([32, 64, 128]);
 const MLX_DTYPE: Record<DType, number> = { bool: 0, i32: 7, f16: 9, f32: 10, bf16: 12 };
 const FROM_MLX: Record<number, DType> = { 0: "bool", 7: "i32", 9: "f16", 10: "f32", 12: "bf16" };
 const BYTES: Record<DType, number> = { bool: 1, i32: 4, f16: 2, f32: 4, bf16: 2 };
@@ -140,6 +147,7 @@ class MlxBackendImpl implements MlxBackend {
   private readonly sI32 = new Int32Array(1);
   private readonly sU8 = new Uint8Array(1);
   private readonly sdpaMaskArray = cstr("array");
+  private readonly affine = cstr("affine");
   private readonly sdpaMaskNone = cstr("");
   // compile support
   private closureTramp = 0;
@@ -648,6 +656,73 @@ class MlxBackendImpl implements MlxBackend {
     return this.out(this.n.cumsum(this.base, this.h(x), axis, false, true, this.stream), "cumsum");
   }
 
+  // ---- quantized weights ---------------------------------------------------
+
+  /**
+   * Repacks (never dequantizes) a laya-js quantized matrix into MLX's affine
+   * layout: the packed bytes read as little-endian u32 words already are
+   * MLX's packing, so affine data uploads as-is (uint32 [out, in·bits/32]).
+   * Symmetric q → unsigned q + 2^(bits−1) (a per-byte XOR of 0x80 / 0x88)
+   * with bias = −2^(bits−1)·scale, exact in f16/f32. Scales and biases are
+   * stored in `dtype`. Resolves to null for what MLX lacks: group sizes other
+   * than 32/64/128, or a partial last group.
+   */
+  async fromHostQuantized(h: HostQuantized, dtype: DType): Promise<QuantizedTensor<MlxTensor> | null> {
+    const [N, K] = h.shape;
+    if (!MLX_GROUP_SIZES.has(h.groupSize) || K % h.groupSize || (K * h.bits) % 32) return null;
+    if (!isFloat(dtype)) throw new TypeError(`backend-mlx fromHostQuantized: dtype must be float, got ${dtype}`);
+    const G = K / h.groupSize;
+    let data = h.data;
+    let biases: HostTensor | null = h.biases;
+    if (h.mode === "symmetric") {
+      const flip = h.bits === 8 ? 0x80 : 0x88;
+      const d = new Uint8Array(data.length);
+      for (let i = 0; i < d.length; i++) d[i] = data[i]! ^ flip;
+      data = d;
+      const s = toF32(h.scales), off = -(1 << (h.bits - 1));
+      const b = new Float32Array(s.length);
+      for (let i = 0; i < s.length; i++) b[i] = off * s[i]!;
+      biases = { dtype: "f32", shape: [N, G], data: b };
+    }
+    const shape = [N, (K * h.bits) / 32];
+    const wh = this.n.mlx_array_new_data(data, this.ints(INTS_A, shape), 2, MLX_UINT32);
+    if (!wh) throw new Error(`backend-mlx fromHostQuantized: ${this.n.takeError()}`);
+    const w = this.wrap(wh, shape, "i32"); // u32 words; "i32" is only the label (not read by other ops)
+    const up = (t: HostTensor) => this.scope(() => {
+      const u = this.upload(t);
+      return u.dtype === dtype ? u : this.cast(u, dtype);
+    });
+    const { bits, groupSize, mode } = h;
+    return { shape: [N, K], bits, groupSize, mode, dtype, native: true, w, scales: up(h.scales), biases: up(biases!) };
+  }
+
+  quantizedLinear(x: MlxTensor, w: MlxTensor, scales: MlxTensor, biases: MlxTensor | null, opts: QuantizedLinearOptions, bias?: MlxTensor | null): MlxTensor {
+    if (!biases) throw new Error("backend-mlx quantizedLinear: weights must come from this backend's fromHostQuantized");
+    return this.scope(() => {
+      let y: MlxTensor = this.out(
+        this.n.mlx_quantized_matmul(this.base, this.h(x), this.h(w), this.h(scales), this.h(biases), true, optInt(opts.groupSize), optInt(opts.bits), this.affine, this.stream),
+        "quantizedLinear",
+      );
+      if (bias) y = this.add(y, bias);
+      return y.dtype === x.dtype || !isFloat(x.dtype) ? y : this.cast(y, x.dtype);
+    });
+  }
+
+  quantizedEmbedding(w: MlxTensor, scales: MlxTensor, biases: MlxTensor | null, opts: QuantizedLinearOptions, ids: MlxTensor): MlxTensor {
+    if (!biases) throw new Error("backend-mlx quantizedEmbedding: weights must come from this backend's fromHostQuantized");
+    return this.scope(() => {
+      const n = ids.shape.reduce((a, d) => a * d, 1);
+      const flat = this.reshape(ids, [n]);
+      const rows = (t: MlxTensor) => this.embedding(t, flat);
+      const dt = scales.dtype;
+      const d = this.out(
+        this.n.mlx_dequantize(this.base, this.h(rows(w)), this.h(rows(scales)), this.h(rows(biases)), optInt(opts.groupSize), optInt(opts.bits), this.affine, 0, optDtype(MLX_DTYPE[dt]), this.stream),
+        "quantizedEmbedding", undefined, dt,
+      );
+      return this.reshape(d, [...ids.shape, d.shape[1]!]);
+    });
+  }
+
   // ---- compile ---------------------------------------------------------------
 
   compile<A extends MlxTensor[], R>(fn: (...args: A) => R): (...args: A) => R {
@@ -760,6 +835,15 @@ const u32b = new Uint32Array(f32b.buffer);
 function optFloat(v: number): bigint {
   f32b[0] = v;
   return BigInt(u32b[0]!) | (1n << 32n);
+}
+
+/** mlx_optional_int {int value; bool has_value} as one 8-byte register. */
+function optInt(v: number): bigint {
+  return BigInt(v >>> 0) | (1n << 32n);
+}
+/** mlx_optional_dtype {mlx_dtype value; bool has_value}. */
+function optDtype(d: number): bigint {
+  return BigInt(d) | (1n << 32n);
 }
 
 function cstr(s: string): Uint8Array {

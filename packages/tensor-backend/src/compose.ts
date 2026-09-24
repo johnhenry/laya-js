@@ -23,8 +23,13 @@
  *   built with `cumsum`, so they need a native `cumsum`.
  * - `cumsum` has no composition (it needs an iota or a triangular constant,
  *   which in turn need an upload or a scan): it is required-if-used.
+ * - Quantized weights (`uploadQuantized` → `quantizedLinear` /
+ *   `quantizedEmbedding`) compose by storing the integer values as floats and
+ *   dequantizing on the device per call: correct on every backend, but it
+ *   saves no memory — only the native ops keep weights packed.
  */
-import type { Backend, DType, Tensor } from "./index.ts";
+import type { Backend, DType, HostQuantized, HostTensor, QuantizedTensor, Tensor } from "./index.ts";
+import { toF32, unpackQuantized, validateQuantized } from "./host.ts";
 
 /** The optional "general numerics" ops (math-plus RFC 0001 §12 Q7). */
 export const NUMERICS_OPS = [
@@ -42,7 +47,7 @@ export const NATIVE_ONLY_OPS: readonly NumericsOp[] = ["cumsum"];
 export const COMPOSITION_NEEDS: Readonly<Partial<Record<NumericsOp, readonly NumericsOp[]>>> = { argmax: ["cumsum"], argmin: ["cumsum"] };
 
 /** Whether `b` implements optional op `op` natively (else the helper composes it). */
-export function hasNative(b: Backend<any>, op: NumericsOp | "geglu" | "meanPool" | "compile"): boolean {
+export function hasNative(b: Backend<any>, op: NumericsOp | QuantizedOp | "geglu" | "meanPool" | "compile"): boolean {
   return typeof (b as unknown as Record<string, unknown>)[op] === "function";
 }
 
@@ -281,4 +286,138 @@ export function argmax<T extends Tensor>(b: Backend<T>, x: T, axis: number, keep
 export function argmin<T extends Tensor>(b: Backend<T>, x: T, axis: number, keepDims = false): T {
   if (b.argmin) return b.argmin(x, axis, keepDims);
   return argReduce(b, x, axis, keepDims, "argmin");
+}
+
+// ---------------------------------------------------------------- quantized
+
+/** The optional quantized-weight ops (a backend implements all three or none). */
+export const QUANTIZED_OPS = ["fromHostQuantized", "quantizedLinear", "quantizedEmbedding"] as const;
+export type QuantizedOp = (typeof QUANTIZED_OPS)[number];
+
+/** Whether `b` keeps quantized weights quantized on the device (has the native quantized ops). */
+export function hasNativeQuantized(b: Backend<any>): boolean {
+  return QUANTIZED_OPS.every((op) => typeof (b as unknown as Record<string, unknown>)[op] === "function");
+}
+
+/** Whether `x` is a `QuantizedTensor` (from `uploadQuantized`) rather than a plain tensor. */
+export function isQuantized<T extends Tensor>(x: T | QuantizedTensor<T> | null | undefined): x is QuantizedTensor<T> {
+  return !!x && typeof x === "object" && "scales" in x && "native" in x;
+}
+
+/** Uploads a float host tensor and casts it to `dtype` on the device (when it differs). */
+async function uploadFloat<T extends Tensor>(b: Backend<T>, h: HostTensor, dtype: DType): Promise<T> {
+  const t = await b.fromHost(h.dtype === "f32" || b.supports(h.dtype) ? h : { dtype: "f32", shape: h.shape, data: toF32(h) });
+  if (t.dtype === dtype) return t;
+  const c = b.cast(t, dtype);
+  b.dispose(t);
+  return c;
+}
+
+/**
+ * Uploads a quantized matrix. With the backend's native quantized ops
+ * (`fromHostQuantized`) it stays packed on the device (bits/8 bytes per value
+ * plus the per-group parameters). Otherwise — or when the backend declines
+ * this configuration — the default composition uploads the integer values
+ * as `dtype` floats [out, in] and the scales/biases as `dtype`, and
+ * `quantizedLinear` dequantizes on the device per call: correct everywhere,
+ * but no memory saving (a caller that only wants the float matrix should
+ * dequantize on the host instead). `dtype` is the float dtype the values
+ * dequantize to (`quantizedEmbedding` results; `quantizedLinear` follows x).
+ */
+export async function uploadQuantized<T extends Tensor>(b: Backend<T>, h: HostQuantized, dtype: DType): Promise<QuantizedTensor<T>> {
+  validateQuantized(h);
+  if (!isFloat(dtype)) throw new TypeError(`uploadQuantized: dtype must be float, got ${dtype}`);
+  if (b.fromHostQuantized && b.quantizedLinear && b.quantizedEmbedding) {
+    const q = await b.fromHostQuantized(h, dtype);
+    if (q) return q;
+  }
+  const [N, K] = h.shape;
+  const q = unpackQuantized(h);
+  const jobs = [
+    uploadFloat(b, { dtype: "f32", shape: [N, K], data: Float32Array.from(q) }, dtype),
+    uploadFloat(b, h.scales, dtype),
+    ...(h.mode === "affine" ? [uploadFloat(b, h.biases!, dtype)] : []),
+  ];
+  const r = await Promise.allSettled(jobs);
+  const bad = r.find((x): x is PromiseRejectedResult => x.status === "rejected");
+  const ok = r.flatMap((x) => (x.status === "fulfilled" ? [x.value] : []));
+  if (bad) {
+    for (const t of ok) b.dispose(t);
+    throw bad.reason;
+  }
+  const { bits, groupSize, mode } = h;
+  return { shape: [N, K], bits, groupSize, mode, dtype, native: false, w: ok[0]!, scales: ok[1]!, biases: ok[2] ?? null };
+}
+
+/** Frees a `QuantizedTensor`'s device tensors. */
+export function disposeQuantized<T extends Tensor>(b: Backend<T>, q: QuantizedTensor<T>): void {
+  b.dispose(q.w);
+  b.dispose(q.scales);
+  if (q.biases) b.dispose(q.biases);
+}
+
+/**
+ * Compose layout: rows of q values as floats w [R, in], per-group scales /
+ * biases [R, G] → dequantized [R, in] in `dtype`, computed in f32 and rounded
+ * once. A partial last group is handled separately.
+ */
+function dequantRows<T extends Tensor>(b: Backend<T>, w: T, scales: T, biases: T | null, groupSize: number, dtype: DType): T {
+  return b.scope(() => {
+    const [R, K] = w.shape as [number, number];
+    const G = Math.ceil(K / groupSize), full = Math.floor(K / groupSize);
+    const f = (t: T) => b.cast(t, "f32");
+    const part = (w0: number, w1: number, g0: number, g1: number): T => {
+      const n = g1 - g0, gs = (w1 - w0) / n;
+      const wq = b.reshape(f(b.slice(w, [0, w0], [R, w1])), [R, n, gs]);
+      const s = b.reshape(f(b.slice(scales, [0, g0], [R, g1])), [R, n, 1]);
+      let v = b.mul(wq, s);
+      if (biases) v = b.add(v, b.reshape(f(b.slice(biases, [0, g0], [R, g1])), [R, n, 1]));
+      return b.reshape(v, [R, w1 - w0]);
+    };
+    const pieces: T[] = [];
+    if (full) pieces.push(part(0, full * groupSize, 0, full));
+    if (G > full) pieces.push(part(full * groupSize, K, full, G));
+    const v = pieces.length === 1 ? pieces[0]! : b.concat(pieces, 1);
+    return v.dtype === dtype ? v : b.cast(v, dtype);
+  });
+}
+
+/** Dequantized matrix [out, in] in `q.dtype` (compose-layout tensors only). */
+export function dequantize<T extends Tensor>(b: Backend<T>, q: QuantizedTensor<T>): T {
+  if (q.native) throw new Error(`dequantize: ${b.name} keeps this matrix in its native layout; use quantizedLinear / quantizedEmbedding`);
+  return dequantRows(b, q.w, q.scales, q.biases, q.groupSize, q.dtype);
+}
+
+/** y = x · dequant(q)ᵀ (+ bias), in x's dtype, f32 accumulation. */
+export function quantizedLinear<T extends Tensor>(b: Backend<T>, x: T, q: QuantizedTensor<T>, bias?: T | null): T {
+  if (x.shape[x.shape.length - 1] !== q.shape[1]) throw new Error(`quantizedLinear: x [${x.shape}] vs w [${q.shape}]`);
+  if (q.native) {
+    if (!b.quantizedLinear) throw new Error(`quantizedLinear: the ${b.name} backend has no native quantizedLinear for its native-layout weight`);
+    return b.quantizedLinear(x, q.w, q.scales, q.biases, q, bias ?? null);
+  }
+  return b.scope(() => b.linear(x, dequantRows(b, q.w, q.scales, q.biases, q.groupSize, isFloat(x.dtype) ? x.dtype : "f32"), bias ?? null));
+}
+
+/** Row gather of dequant(q) by ids i32 [...] → [..., in] in `q.dtype`. */
+export function quantizedEmbedding<T extends Tensor>(b: Backend<T>, q: QuantizedTensor<T>, ids: T): T {
+  if (q.native) {
+    if (!b.quantizedEmbedding) throw new Error(`quantizedEmbedding: the ${b.name} backend has no native quantizedEmbedding for its native-layout weight`);
+    return b.quantizedEmbedding(q.w, q.scales, q.biases, q, ids);
+  }
+  return b.scope(() => {
+    const n = ids.shape.reduce((a, d) => a * d, 1);
+    const flat = b.reshape(ids, [n]);
+    const rows = dequantRows(b, b.embedding(q.w, flat), b.embedding(q.scales, flat), q.biases ? b.embedding(q.biases, flat) : null, q.groupSize, q.dtype);
+    return b.reshape(rows, [...ids.shape, q.shape[1]]);
+  });
+}
+
+/** `linear` for a weight that may be quantized: plain tensors go to `b.linear`. */
+export function linearAny<T extends Tensor>(b: Backend<T>, x: T, w: T | QuantizedTensor<T>, bias?: T | null): T {
+  return isQuantized(w) ? quantizedLinear(b, x, w, bias) : b.linear(x, w, bias ?? null);
+}
+
+/** `embedding` for a table that may be quantized. */
+export function embeddingAny<T extends Tensor>(b: Backend<T>, table: T | QuantizedTensor<T>, ids: T): T {
+  return isQuantized(table) ? quantizedEmbedding(b, table, ids) : b.embedding(table, ids);
 }

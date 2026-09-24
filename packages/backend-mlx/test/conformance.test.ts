@@ -4,8 +4,8 @@ import * as nodeTest from "node:test";
 // @ts-ignore -- bun types are not installed
 const bunTest: unknown = (globalThis as { Bun?: unknown }).Bun ? await import("bun:test") : null;
 const { describe, it } = (bunTest ?? nodeTest) as Pick<typeof nodeTest, "describe" | "it">;
-import { NUMERICS_OPS } from "@johnhenry/tensor-backend";
-import { loadOpCases, runConformance, withoutOptionalOps, type TestApi } from "@johnhenry/tensor-backend/conformance";
+import { NUMERICS_OPS, QUANTIZED_OPS } from "@johnhenry/tensor-backend";
+import { OP_CASE_FILES, loadOpCases, runConformance, withoutOptionalOps, type TestApi } from "@johnhenry/tensor-backend/conformance";
 import { createMlxBackend } from "../src/index.ts";
 import { skipReason } from "./env.ts";
 
@@ -21,5 +21,9 @@ if (skipReason) {
   // compose.ts default compositions in f32/f16/bf16 (cumsum has none, so it stays native).
   describe("default compositions (numerics ops hidden)", () => {
     runConformance(() => withoutOptionalOps(createMlxBackend(), NUMERICS_OPS.filter((o) => o !== "cumsum")), loadOpCases(), api);
+  });
+  // quantized weights through the default composition (dequantize on the device)
+  describe("default compositions (quantized ops hidden)", () => {
+    runConformance(() => withoutOptionalOps(createMlxBackend(), QUANTIZED_OPS), loadOpCases(OP_CASE_FILES[2]!), api);
   });
 }

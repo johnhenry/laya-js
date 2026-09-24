@@ -17,6 +17,10 @@
  *   `sqrt(b, x)`, …), which uses the native kernel when the backend has
  *   one and a default composition otherwise (`cumsum` has none; see
  *   `NUMERICS_OPS`).
+ * - Quantized weights (int8 / int4 with per-group scales) are an optional
+ *   trio (`fromHostQuantized`, `quantizedLinear`, `quantizedEmbedding`)
+ *   called through compose.ts (`uploadQuantized`, `quantizedLinear`, …);
+ *   without it, the default composition dequantizes on the device.
  * - dtype names match @johnhenry/math-plus-tensor-core ("f32", "f16", ...),
  *   so a HostTensor feeds `Tensor.fromTypedArray` without a copy.
  */
@@ -42,6 +46,65 @@ export interface HostTensor {
 export interface Tensor {
   readonly shape: Shape;
   readonly dtype: DType;
+}
+
+// ---- quantized weights (optional; see compose.ts `uploadQuantized`) --------
+
+export type QuantBits = 4 | 8;
+/**
+ * - "symmetric": w = q · scale, q signed (8-bit: int8 in [−128, 127]; 4-bit:
+ *   a two's-complement nibble in [−8, 7]); no biases.
+ * - "affine": w = q · scale + bias, q unsigned (8-bit: [0, 255]; 4-bit:
+ *   [0, 15]); biases required (MLX-style affine quantization).
+ */
+export type QuantMode = "symmetric" | "affine";
+
+export interface QuantizedLinearOptions {
+  readonly bits: QuantBits;
+  /** Values per scale (and bias) along the input dim. The last group of a row may be partial. */
+  readonly groupSize: number;
+  readonly mode: QuantMode;
+}
+
+/**
+ * A quantized matrix W [out, in] on the host (laya-js quantized checkpoint
+ * layout, format version 1):
+ * - `data`: row-major packed values, `in · bits / 8` bytes per row. 8-bit:
+ *   one byte per value; 4-bit: two per byte, the even column in the low
+ *   nibble. Read as little-endian u32 words this is MLX's packing: value j
+ *   of a row sits at bit `(j mod 32/bits) · bits` of word `⌊j · bits/32⌋`.
+ *   `in · bits` must be a multiple of 32.
+ * - `scales` and (affine only) `biases`: float [out, G], G = ⌈in / groupSize⌉;
+ *   value (r, j) uses group ⌊j / groupSize⌋.
+ */
+export interface HostQuantized extends QuantizedLinearOptions {
+  /** [out, in] of the logical (dequantized) matrix. */
+  readonly shape: readonly [number, number];
+  readonly data: Uint8Array;
+  readonly scales: HostTensor;
+  readonly biases: HostTensor | null;
+}
+
+/**
+ * A quantized matrix on a backend, made by compose.ts `uploadQuantized`.
+ * Pass it to `quantizedLinear` / `quantizedEmbedding` (compose.ts) and free
+ * it with `disposeQuantized`; its tensors are not meant for other ops.
+ */
+export interface QuantizedTensor<T extends Tensor = Tensor> extends QuantizedLinearOptions {
+  /** [out, in] of the logical (dequantized) matrix. */
+  readonly shape: readonly [number, number];
+  /** Float dtype the values dequantize to (`quantizedEmbedding` returns it; scales/biases are stored in it). */
+  readonly dtype: DType;
+  /**
+   * true: `w`/`scales`/`biases` are in the backend's own layout (from its
+   * `fromHostQuantized`) and only its quantized ops read them. false: the
+   * compose layout — `w` holds the integer q values as floats [out, in],
+   * `scales`/`biases` are [out, G] — dequantized on the device per call.
+   */
+  readonly native: boolean;
+  readonly w: T;
+  readonly scales: T;
+  readonly biases: T | null;
 }
 
 export interface Backend<T extends Tensor = Tensor> {
@@ -146,6 +209,24 @@ export interface Backend<T extends Tensor = Tensor> {
   meanPool?(x: T, mask: T): T;
   /** Wrap a pure function of tensors for graph compilation (MLX). */
   compile?<A extends T[], R>(fn: (...args: A) => R): (...args: A) => R;
+
+  // ---- optional quantized weights (call through compose.ts) ---------------
+  // A backend implements all three or none. The weight tensors these ops take
+  // are the ones its own `fromHostQuantized` returned (native layout).
+  /**
+   * Uploads a quantized matrix in the backend's native layout, keeping it
+   * quantized on the device; values dequantize to `dtype`. Resolves to null
+   * when the backend has no kernel for this configuration (bits, mode, group
+   * size, shape): `uploadQuantized` then uses the default composition.
+   */
+  fromHostQuantized?(h: HostQuantized, dtype: DType): Promise<QuantizedTensor<T> | null>;
+  /**
+   * y = x · dequant(w)ᵀ (+ bias): x [..., in] → [..., out] in x's dtype,
+   * accumulated in f32 (like `linear`).
+   */
+  quantizedLinear?(x: T, w: T, scales: T, biases: T | null, opts: QuantizedLinearOptions, bias?: T | null): T;
+  /** Row gather of dequant(w) by ids i32 [...] → [..., in], in the scales' dtype (like `embedding`). */
+  quantizedEmbedding?(w: T, scales: T, biases: T | null, opts: QuantizedLinearOptions, ids: T): T;
 
   // ---- optional general numerics (call through compose.ts) ----------------
   // Elementwise ops broadcast like numpy. Comparisons and logical ops return

@@ -1,4 +1,5 @@
-import { loadOpCases, runConformance, type TestApi } from "@johnhenry/tensor-backend/conformance";
+import { QUANTIZED_OPS } from "@johnhenry/tensor-backend";
+import { OP_CASE_FILES, loadOpCases, runConformance, withoutOptionalOps, type TestApi } from "@johnhenry/tensor-backend/conformance";
 import { createWebGpuBackend, isWebGpuAvailable, type WebGpuBackend } from "../src/index.ts";
 import { harness, isBun } from "./harness.ts";
 
@@ -23,6 +24,9 @@ if (!available) {
   });
   h.describe("webgpu (f32 only, preferF16=false)", () => {
     runConformance(make(false), loadOpCases(), t);
+  });
+  h.describe("webgpu quantized ops hidden (default composition)", () => {
+    runConformance(async () => withoutOptionalOps(await make(true)(), QUANTIZED_OPS), loadOpCases(OP_CASE_FILES[2]!), t);
   });
   h.after(() => {
     for (const b of created) b.destroy();

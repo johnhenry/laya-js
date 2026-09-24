@@ -3,8 +3,8 @@
  * backend in one upload batch. Browser-safe (no fs import of our own).
  */
 import { openSafetensors, type LazySafetensors } from "@johnhenry/math-plus-safetensors";
-import type { HostTensor, DType } from "@johnhenry/tensor-backend";
-import type { WeightGetter } from "@johnhenry/modernbert";
+import type { HostQuantized, HostTensor, DType } from "@johnhenry/tensor-backend";
+import type { HostWeight, WeightGetter } from "@johnhenry/modernbert";
 import { dequantizeMatrix, groupQuantized, quantMetadata, type DequantDtype, type QuantizedMatrix, type RawTensor } from "./quant.ts";
 
 type Source = Parameters<typeof openSafetensors>[0];
@@ -65,13 +65,33 @@ export async function readAllTensors(file: LazySafetensors): Promise<Map<string,
 }
 
 /**
+ * A laya-js quantized matrix as a tensor-backend `HostQuantized` (zero-copy
+ * views): q8 → 8-bit "symmetric", q4 → 4-bit "affine", F16 scales/biases.
+ */
+export function hostQuantized(m: QuantizedMatrix): HostQuantized {
+  const G = m.cols / m.groupSize;
+  return {
+    shape: [m.rows, m.cols],
+    bits: m.bits,
+    groupSize: m.groupSize,
+    mode: m.bits === 8 ? "symmetric" : "affine",
+    data: new Uint8Array(m.data.buffer, m.data.byteOffset, m.data.byteLength),
+    scales: { dtype: "f16", shape: [m.rows, G], data: m.scales },
+    biases: m.biases ? { dtype: "f16", shape: [m.rows, G], data: m.biases } : null,
+  };
+}
+
+/**
  * A consuming weight source over a quantized checkpoint's tensors
  * (see quant.ts). Quantized matrices stay packed until asked for; `get`
  * dequantizes one to `dtype` (f16 or f32) and forgets the packed copy, so
  * at most one dequantized tensor exists on the host at a time (the backend
  * upload follows immediately). Plain tensors are handed out as-is.
+ * With `keepQuantized`, `get` instead hands out each quantized matrix as a
+ * `HostQuantized` (no dequantization): the loaders then keep it quantized
+ * on the device (`uploadQuantized`).
  */
-export function dequantizingWeights(tensors: ReadonlyMap<string, RawTensor>, dtype: DequantDtype = "f16"): ConsumingWeights {
+export function dequantizingWeights(tensors: ReadonlyMap<string, RawTensor>, dtype: DequantDtype = "f16", keepQuantized = false): ConsumingWeights {
   const { quantized, plain } = groupQuantized(tensors);
   const q = new Map<string, QuantizedMatrix>();
   for (const [name, m] of quantized) {
@@ -89,20 +109,31 @@ export function dequantizingWeights(tensors: ReadonlyMap<string, RawTensor>, dty
   const plainKeys = new Set(rest.remaining());
   for (const key of q.keys()) if (plainKeys.has(key)) throw new Error(`Duplicate checkpoint parameter after conversion: ${key}`);
   return {
-    get: (name) => {
+    get: (name): HostWeight | undefined => {
       const m = q.get(name);
       if (!m) return rest.get(name);
       q.delete(name);
+      if (keepQuantized) return hostQuantized(m);
       return { dtype, shape: [m.rows, m.cols], data: dequantizeMatrix(m, dtype) };
     },
     remaining: () => [...q.keys(), ...rest.remaining()],
   };
 }
 
+/** How a quantized checkpoint's matrices reach the model. */
+export type QuantizedLoad = "device" | "dequantize";
+
 /** Options for `readWeights`: safetensors open options plus the dequantization target. */
 export type ReadWeightsOptions = OpenOptions & {
   /** Values dtype for dequantized tensors of a quantized checkpoint (default "f16"; ignored otherwise). */
   dtype?: DequantDtype;
+  /**
+   * Quantized checkpoints only: "dequantize" (default here) rebuilds float
+   * tensors on the host; "device" hands out `HostQuantized` matrices for the
+   * backend to keep quantized (`load` picks this when the backend has native
+   * quantized ops).
+   */
+  quantized?: QuantizedLoad;
 };
 
 /**
@@ -112,7 +143,7 @@ export type ReadWeightsOptions = OpenOptions & {
  * detected and dequantized tensor by tensor as the model asks for them.
  */
 export async function readWeights(source: Source, options?: ReadWeightsOptions): Promise<ConsumingWeights> {
-  const { dtype, ...open } = options ?? {};
+  const { dtype, quantized, ...open } = options ?? {};
   const file = await openSafetensors(source, open);
   try {
     const meta = quantMetadata(file.metadata);
@@ -123,7 +154,7 @@ export async function readWeights(source: Source, options?: ReadWeightsOptions):
       const info = file.info(name);
       raw.set(name, { dtype: info.dtype, shape: info.shape, data });
     }
-    return dequantizingWeights(raw, dtype ?? "f16");
+    return dequantizingWeights(raw, dtype ?? "f16", quantized === "device");
   } finally {
     await file.close();
   }

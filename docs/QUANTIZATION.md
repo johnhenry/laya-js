@@ -1,11 +1,14 @@
 # Quantized checkpoints (laya-js format, version 1)
 
 laya-js can load Laya checkpoints whose large weight matrices are stored as
-8-bit or 4-bit integers. The weights are **dequantized on the host while
-loading** (to float16, or float32 on the CPU backend). This makes the
-download smaller. It does not reduce GPU memory or speed up inference: once
-loaded, the model is the float model with slightly perturbed weights. No
-backend changes are needed; the tensor-backend contract is untouched.
+8-bit or 4-bit integers. On MLX and WebGPU the weights **stay quantized on the
+device**: the int8/int4 values and their per-group scales are uploaded as
+they are stored, and the matrix multiplies dequantize inside the kernel
+(MLX `quantized_matmul`; WGSL kernels that dequantize while loading each
+tile). That cuts device memory as well as the download. The CPU backend (and
+`load(..., { quantized: "dequantize" })`) instead **dequantizes on the host
+while loading**, to float16 (float32 on the CPU backend), so the model there
+is the float model with slightly perturbed weights.
 
 ## Making one
 
@@ -46,11 +49,19 @@ browser-safe and returns the bytes.
 ## Loading one
 
 Nothing changes: `load(dirOrRepoOrUrl)` reads the file's `__metadata__`, and
-when it finds `laya_quant` it dequantizes each quantized tensor as the model
-asks for it. The quantized bytes (about half or a quarter of the float file)
-stay in memory until loading finishes. At most one dequantized tensor exists
-on the host at a time, because the backend upload follows immediately. This
-works in Node, Bun and browsers.
+when it finds `laya_quant` it hands the quantized tensors to the model:
+
+| `load` option | backend | what happens |
+|---|---|---|
+| `quantized: "device"` (default) | MLX, WebGPU | Linear weights and the token embedding stay int8/int4 on the device ([below](#on-the-device)) |
+| `quantized: "device"` (default) | CPU (no quantized kernels) | same as `"dequantize"` |
+| `quantized: "dequantize"` | any | each tensor is dequantized on the host as the model asks for it, then uploaded as float |
+
+`agent.model.quantizedOnDevice` says which one happened. The quantized bytes
+(about half or a quarter of the float file) stay in host memory until loading
+finishes; when dequantizing, at most one dequantized tensor exists on the host
+at a time, because the backend upload follows immediately. This works in
+Node, Bun and browsers.
 
 `load()` accepts:
 - a local directory;
@@ -142,13 +153,52 @@ from double to the target dtype. For q4 it uses a 16-entry lookup table per
 group. Dequantizing the whole 842 MB English checkpoint takes about 1 s in
 Node on an M2.
 
-## Why dequantize-on-load (and what a follow-up would do)
+## On the device
 
-Keeping the weights quantized on the GPU (int8/int4 matmul kernels, as MLX
-`quantized_matmul` or WebGPU shaders would do) would also cut GPU memory and
-could speed up the memory-bound batch-1 case. That needs a new op in the
-tensor-backend contract (for example `quantizedMatmul(x, q, scales, biases,
-groupSize, bits)`) and kernels in every backend. The file format above is
-already shaped for this: MLX-style affine groups along the input dimension.
-Only the packing would need converting at upload (MLX packs 8 nibbles into a
-uint32).
+The tensor-backend contract (0.3) has an optional trio of ops, called
+through its `compose.ts` helpers:
+
+- `uploadQuantized(backend, hostQuantized, dtype)` → a `QuantizedTensor`;
+- `quantizedLinear(backend, x, q, bias?)` = x · dequant(W)ᵀ (+ bias), f32
+  accumulation, result in x's dtype;
+- `quantizedEmbedding(backend, q, ids)` = rows of dequant(W), in `dtype`.
+
+`HostQuantized` is exactly the file layout above (bytes + scales + biases,
+`mode: "symmetric"` for q8 and `"affine"` for q4), so nothing is converted on
+the host. A backend without the native ops (CPU) gets a default composition
+that stores the integer values as floats and dequantizes on the device per
+call: correct everywhere, but no memory saving, which is why `load` falls
+back to host dequantization there.
+
+**MLX** (`mlx_quantized_matmul`, `mlx_dequantize`; the same mlx-c signature
+in both ABIs backend-mlx supports). Read as little-endian u32 words, the laya
+bytes already are MLX's packing (value j of a row at bit (j mod 32/bits)·bits
+of word ⌊j·bits/32⌋), so affine q4 uploads as-is as a uint32 array. MLX only
+has affine quantization, so symmetric q8 is repacked, never dequantized:
+q_u = q + 128 (an XOR of every byte with 0x80), bias = −128·scale, both
+exact. The repacked weights dequantize bit-for-bit to fl32(q·scale + bias)
+(checked in `backend-mlx/test/quantized.test.ts`). MLX supports groups of
+32, 64 and 128 with no partial last group; other configurations fall back to
+the default composition.
+
+**WebGPU**: the packed words go into a `u32` storage buffer and the scales /
+biases into f16 buffers (f32 without `shader-f16`). Every Linear kernel —
+skinny (small M), subgroup-matrix (split-K too), direct and tiled — reads its
+B operand through one helper that unpacks 4 values from a word, sign-extends
+them for symmetric, and applies `fma(q, scale, bias)` in f32 while staging
+the tile; accumulation stays f32, as for fp16 weights. Group sizes must be
+multiples of 4 (partial last groups are fine). The embedding is a
+dequantizing gather.
+
+Numerically the on-device path matches host dequantization: WebGPU rounds
+each dequantized weight to f16 when the activations are f16 (as the host
+does) and keeps f32 otherwise; MLX computes in its own order. On the parity
+set every argmax and every q4 flip is identical in both modes and the
+probabilities differ by at most 5e-3; in f32 they agree to 4 decimals.
+
+**What it buys** (M2, f16; [RESULTS.md](RESULTS.md#quantized-checkpoints)):
+device memory after load is 52–55% of fp16 for q8 and 28% for q4 (English on
+MLX: 804 → 441 / 228 MiB). One short question is 1.16× faster on MLX
+(batch 1 is memory-bound), 9–14% slower on WebGPU; 16-question batches are
+10–16% slower on both, since dequantizing inside the GEMM costs ALU time
+once the multiply is compute-bound.

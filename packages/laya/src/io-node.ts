@@ -72,7 +72,7 @@ export async function readCheckpoint(modelIdOrPath: string, opts: ResolveOptions
     agentConfig: agentConfig as AgentConfig,
     encoderConfig,
     tokenizer,
-    weights: (w) => readWeights(join(dir, "model.safetensors"), w?.dtype ? { dtype: w.dtype } : undefined),
+    weights: (w) => readWeights(join(dir, "model.safetensors"), { ...(w?.dtype ? { dtype: w.dtype } : {}), ...(w?.quantized ? { quantized: w.quantized } : {}) }),
   };
 }
 

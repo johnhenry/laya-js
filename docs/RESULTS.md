@@ -132,17 +132,90 @@ the linear layers are about 85% of GPU time (B=16, L=256: 1545 of 1827 ms, at
 ## Quantized checkpoints
 
 `laya quantize` writes q8 (8-bit symmetric, groups of 64) and q4 (4-bit
-affine, groups of 64, least-squares refit) copies of a checkpoint. `load()`
-dequantizes them to f16 on the host while loading, so on the GPU the model is
-the fp16 model with slightly perturbed weights. The format is described in
-[QUANTIZATION.md](QUANTIZATION.md).
+affine, groups of 64, least-squares refit) copies of a checkpoint. On MLX and
+WebGPU, `load()` keeps them quantized on the device (`quantized: "device"`,
+the default): MLX runs `quantized_matmul` on the weights repacked to its
+affine layout, WebGPU dequantizes inside its Linear kernels' tile loads. With
+`quantized: "dequantize"` (and always on the CPU backend) they are
+dequantized to f16 on the host while loading, so on the GPU the model is the
+fp16 model with slightly perturbed weights. The format and the kernels are
+described in [QUANTIZATION.md](QUANTIZATION.md).
 
 The parity run is the same 16 cases / 63 questions as above, measured against
 Python `result_fp16`:
-`LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> npm test -w @johnhenry/laya`.
+`LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> [LAYA_REAL_QUANT_MODE=device|dequantize] npm test -w @johnhenry/laya`.
 `<dir>` holds `<model>-q8` and `<model>-q4` written by `laya quantize`. The
 test requires q8 to keep every choice and argmax, with max |Δp| ≤ 0.05. q4 is
-reported, not asserted.
+reported, not asserted. It also asserts that the weights really are
+quantized on the device (or not) in the chosen mode.
+
+**Quantized on the device vs dequantized on load** (f16, same checkpoints,
+2026-09-24). Every argmax and every q4 flip is identical in both modes; the
+largest probability differs by at most 5e-3:
+
+| checkpoint | backend | device: choices / argmax / max \|Δp\| | dequantize-on-load: choices / argmax / max \|Δp\| |
+|---|---|---|---|
+| english q8 | mlx f16 | 22/22 / 63/63 / 4.28e-2 | 22/22 / 63/63 / 4.28e-2 |
+| english q8 | webgpu f16 | 22/22 / 63/63 / 4.65e-2 | 22/22 / 63/63 / 4.65e-2 |
+| english q4 | mlx f16 | 21/22 / 58/63 / 0.432 | 21/22 / 58/63 / 0.432 |
+| english q4 | webgpu f16 | 21/22 / 58/63 / 0.430 | 21/22 / 58/63 / 0.430 |
+| multilingual q8 | mlx f16 | 22/22 / 63/63 / 4.10e-2 | 22/22 / 63/63 / 3.77e-2 |
+| multilingual q8 | webgpu f16 | 22/22 / 63/63 / 4.05e-2 | 22/22 / 63/63 / 4.05e-2 |
+| multilingual q4 | mlx f16 | 21/22 / 62/63 / 0.598 | 21/22 / 62/63 / 0.597 |
+| multilingual q4 | webgpu f16 | 21/22 / 62/63 / 0.600 | 21/22 / 62/63 / 0.600 |
+
+The q4 flips are the ones listed below in both modes (English: hi q2, ja q0,
+ja q1, ru q1, empty_state q1; multilingual: empty_state q0). In f32 the two
+modes agree to 4 decimals on every probability. In f16 the WebGPU kernels
+round each dequantized weight to f16 before multiplying (as host
+dequantization does); without that, the weights kept in f32 were slightly
+*more* accurate per Linear but moved English `hi q2` by 6e-3, to 0.052.
+
+**Device memory, latency, throughput** (M2 MacBook Air, fanless; f16; each
+cell in a fresh process after 20 s idle; `packages/laya/bench/quantized.ts`).
+Memory is MLX `memory().active` after load (peak: `memory().peak` over the
+process) or WebGPU `rt.stats.liveBytes` after load (peak: live + pooled
+buffers after the runs). "1 question" is the P50 of `predict` with the first
+question of the first fixture case; "16 questions" is one `predict` of 16
+questions (one batch of 16).
+
+| checkpoint | backend | weights | device memory after load | peak | load | 1 question P50 | 16 questions |
+|---|---|---|---:|---:|---:|---:|---:|
+| english | mlx | fp16 | 804 MiB | 1413 MiB | 0.4 s | 39.1 ms | 414 ms (38.7 q/s) |
+| english | mlx | q8, dequantize on load | 804 MiB | 1413 MiB | 0.8 s | 39.7 ms | 414 ms (38.7 q/s) |
+| english | mlx | **q8 on device** | **441 MiB (55%)** | 1193 MiB | 0.6 s | 33.8 ms | 458 ms (34.9 q/s) |
+| english | mlx | q4, dequantize on load | 804 MiB | 1413 MiB | 0.7 s | 40.2 ms | 415 ms (38.5 q/s) |
+| english | mlx | **q4 on device** | **228 MiB (28%)** | 1047 MiB | 0.1 s | 34.4 ms | 466 ms (34.3 q/s) |
+| english | webgpu | fp16 | 891 MiB | 999 MiB | 0.2 s | 53.4 ms | 635 ms (25.2 q/s) |
+| english | webgpu | q8, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
+| english | webgpu | **q8 on device** | **460 MiB (52%)** | 568 MiB | 0.2 s | 58.0 ms | 723 ms (22.1 q/s) |
+| english | webgpu | q4, dequantize on load | 891 MiB | 999 MiB | 0.7 s | 53.4 ms | 636 ms (25.2 q/s) |
+| english | webgpu | **q4 on device** | **251 MiB (28%)** | 359 MiB | 0.1 s | 60.6 ms | 739 ms (21.6 q/s) |
+| multilingual | mlx | fp16 | 614 MiB | 1338 MiB | 0.8 s | 15.9 ms | 151 ms (106.1 q/s) |
+| multilingual | mlx | q8, dequantize on load | 614 MiB | 1338 MiB | 1.1 s | 16.1 ms | 152 ms (105.5 q/s) |
+| multilingual | mlx | **q8 on device** | **338 MiB (55%)** | 1124 MiB | 1.1 s | 16.1 ms | 168 ms (95.4 q/s) |
+| multilingual | mlx | q4, dequantize on load | 614 MiB | 1338 MiB | 1.2 s | 16.1 ms | 152 ms (105.5 q/s) |
+| multilingual | mlx | **q4 on device** | **175 MiB (28%)** | 950 MiB | 0.6 s | 15.9 ms | 172 ms (93.2 q/s) |
+| multilingual | webgpu | fp16 | 635 MiB | 713 MiB | 0.7 s | 22.4 ms | 234 ms (68.4 q/s) |
+| multilingual | webgpu | q8, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (67.1 q/s) |
+| multilingual | webgpu | **q8 on device** | **328 MiB (52%)** | 406 MiB | 0.6 s | 24.4 ms | 271 ms (59.0 q/s) |
+| multilingual | webgpu | q4, dequantize on load | 635 MiB | 713 MiB | 1.2 s | 22.8 ms | 239 ms (66.9 q/s) |
+| multilingual | webgpu | **q4 on device** | **179 MiB (28%)** | 257 MiB | 0.6 s | 25.5 ms | 278 ms (57.5 q/s) |
+
+- **Resident weights shrink with the file:** 52–55% of fp16 for q8 and 28%
+  for q4, on both backends. The MLX peak falls by 210–390 MiB; the rest of
+  its peak is activations and allocator cache of the 16-row batch. WebGPU's
+  peak (every buffer it holds) falls to 57% / 36% of fp16.
+- **Speed:** on MLX one short question is 1.16× faster on English (33.8 vs
+  39.1 ms: batch-1 is memory-bound and `quantized_matmul` reads a quarter to
+  half the bytes) and unchanged on multilingual; 16-question batches are
+  10–12% slower (dequantization in the GEMM is not free once it is
+  compute-bound). WebGPU is 9–14% slower for one question and 12–16% slower
+  for 16: its kernels dequantize in the tile load at ≈0.85–0.9× the fp16
+  GFLOP/s for M ≥ 64 and ≈0.55–0.8× for M = 16–33 (see the backend-webgpu
+  README), and at these sizes WebGPU is not bandwidth-bound.
+- **Load time** drops for the device path on MLX/WebGPU (no host
+  dequantization): English q4 loads in 0.1 s against 0.7 s dequantizing.
 
 | checkpoint | backend | choices | argmax | max \|Δp\| vs fp16 | worst field |
 |---|---|---|---|---|---|
@@ -185,10 +258,10 @@ compressed columns use `gzip -9` and `brotli -q 9 -w 24`.
 
 - **Transfer compression adds only about 5–8%**, for fp16 and quantized files
   alike. The size win comes from the format.
-- **Load time** is 0.6–1.3 s for q8/q4 on MLX, against 0.4 s for fp16. The
-  host dequantization takes the extra time.
-- **Inference speed and GPU memory** are the same as fp16, because the
-  weights are dequantized on load.
+- **Load time** with `quantized: "dequantize"` is 0.6–1.3 s for q8/q4 on
+  MLX, against 0.4 s for fp16; the host dequantization takes the extra time.
+  Kept on the device (the default on MLX/WebGPU), q4 loads faster than fp16.
+- **Inference speed and GPU memory**: see the device table above.
 - **Converter time:** about 10 s for q8 and 30 s for q4 on the M2, with a
   peak of about 1.1 GB.
 
@@ -211,8 +284,8 @@ For q8, groups of 64 are needed. Per-row scales lose 2 argmaxes on English
 row.
 
 **Recommendation.**
-- **q8** is a safe drop-in: half the download, identical decisions on this
-  set, and probabilities within 0.05.
+- **q8** is a safe drop-in: half the download and half the device memory,
+  identical decisions on this set, and probabilities within 0.05.
 - **q4** is a quarter of the download, but it flips 1–5 of 63 argmaxes per
   checkpoint and moves probabilities by up to 0.6. Use it only where a
   smaller download matters more than matching the fp16 model. Validate it on
@@ -225,6 +298,10 @@ row.
 LAYA_REAL=1 npm test -w @johnhenry/laya
 # quantized checkpoints (write them first: laya quantize --model <repo> --bits 8|4 --out <dir>/<model>-q8|q4)
 LAYA_REAL=1 LAYA_REAL_QUANT=q8,q4 LAYA_REAL_QUANT_DIR=<dir> LAYA_REAL_BACKENDS=mlx-f16 npm test -w @johnhenry/laya
+# quantized: device memory, latency, throughput (fresh process per cell, 20 s cooldowns; ~12 minutes)
+QDIR=<dir> node --conditions=source packages/laya/bench/quantized.ts
+# quantized GEMM GFLOP/s vs fp16 on WebGPU
+MODEL=both node --conditions=source packages/backend-webgpu/bench/quantized-gemm.ts
 # latency grid (takes a lock on ~/gpu.lock; about 10 minutes because of cooldowns)
 node --conditions=source packages/backend-webgpu/bench/grid.ts
 # regenerate golden fixtures from Python
