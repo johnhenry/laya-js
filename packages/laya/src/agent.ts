@@ -120,24 +120,15 @@ class Agent<T extends Tensor> implements LayaAgent {
   readonly model: DecisionModel<T>;
   private readonly temps: Temperatures;
   private readonly cache: PrefixCache | null;
-  private readonly run: (batch: Batch) => { logits: T; act: T };
+  private readonly run: (batch: Batch) => Promise<{ logits: T; act: T }>;
   private readonly ownsBackend: boolean;
   private disposed = false;
 
-  constructor(parts: AgentParts<T>) {
-    const batchSize = parts.batchSize ?? 16;
-    if (!isPosInt(batchSize)) throw new Error("batch_size must be a positive integer");
-    const pad = parts.padToMultiple ?? null;
-    if (pad !== null && !isPosInt(pad)) throw new Error("pad_to_multiple must be a positive integer or None");
-    const want = parts.dtype ?? "f16";
-    if (want !== "f16" && want !== "f32") throw new Error(`dtype must be one of ["f16", "f32"]`);
-    const enc = isParsed(parts.encoderConfig) ? parts.encoderConfig : parseModernBertConfig(parts.encoderConfig);
-    validateConfig(parts.agentConfig, enc);
-    const temps = resolveTemperatures(parts.agentConfig);
-    if (temps.warning) (parts.warn ?? console.warn)(temps.warning);
-
+  /** Use `createAgent` (weights upload asynchronously). */
+  constructor(parts: AgentParts<T>, v: Validated, model: DecisionModel<T>) {
+    const { enc, temps, batchSize, pad } = v;
     this.backend = parts.backend;
-    this.dtype = want === "f16" && parts.backend.name !== "cpu" && parts.backend.supports("f16") ? "f16" : "f32";
+    this.dtype = v.dtype;
     this.modelId = parts.modelId ?? "<local>";
     this.config = parts.agentConfig;
     this.encoderConfig = enc;
@@ -151,13 +142,7 @@ class Agent<T extends Tensor> implements LayaAgent {
     this.temperatureByOptionsRaw = temps.temperatureByOptionsRaw as Record<string, number>;
     this.cache = parts.cachePrompts ? new PrefixCache() : null;
     this.ownsBackend = parts.ownsBackend ?? false;
-    this.model = loadDecisionModel(parts.backend, {
-      encoderConfig: enc,
-      agentConfig: parts.agentConfig,
-      weights: toWeightGetter(parts.weights),
-      dtype: this.dtype,
-    });
-    parts.backend.flush?.();
+    this.model = model;
     const compiled = parts.compile ? this.model.compiled() : null;
     this.run = compiled ?? ((batch) => this.model.forwardTensors(batch));
   }
@@ -172,7 +157,7 @@ class Agent<T extends Tensor> implements LayaAgent {
 
   async forward(batch: Batch): Promise<BatchOutputs> {
     this.live();
-    return this.model.readOutputs(this.run(batch));
+    return this.model.readOutputs(await this.run(batch));
   }
 
   async predict(state: State, questions: Questions): Promise<PredictResult> {
@@ -239,12 +224,45 @@ function isParsed(c: Record<string, unknown> | ModernBertConfig): c is ModernBer
   return typeof (c as ModernBertConfig).hiddenSize === "number" && Array.isArray((c as ModernBertConfig).layerTypes);
 }
 
+interface Validated {
+  enc: ModernBertConfig;
+  temps: Temperatures;
+  batchSize: number;
+  pad: number | null;
+  dtype: Dtype;
+}
+
+/** `Agent.__init__` option and config validation; throws Python's messages. */
+function validateParts<T extends Tensor>(parts: AgentParts<T>): Validated {
+  const batchSize = parts.batchSize ?? 16;
+  if (!isPosInt(batchSize)) throw new Error("batch_size must be a positive integer");
+  const pad = parts.padToMultiple ?? null;
+  if (pad !== null && !isPosInt(pad)) throw new Error("pad_to_multiple must be a positive integer or None");
+  const want = parts.dtype ?? "f16";
+  if (want !== "f16" && want !== "f32") throw new Error(`dtype must be one of ["f16", "f32"]`);
+  const enc = isParsed(parts.encoderConfig) ? parts.encoderConfig : parseModernBertConfig(parts.encoderConfig);
+  validateConfig(parts.agentConfig, enc);
+  const temps = resolveTemperatures(parts.agentConfig);
+  if (temps.warning) (parts.warn ?? console.warn)(temps.warning);
+  const dtype: Dtype = want === "f16" && parts.backend.name !== "cpu" && parts.backend.supports("f16") ? "f16" : "f32";
+  return { enc, temps, batchSize, pad, dtype };
+}
+
 /**
  * Builds an agent from parts already in memory (no I/O): for browsers,
  * tests, or checkpoints from elsewhere. Validates like `Agent.__init__`,
  * clamps the calibration temperatures (warning through `warn`), and uploads
- * the weights to `backend`.
+ * the weights to `backend` (all tensors in one batch; the Promise resolves
+ * once they are on the device).
  */
-export function createAgent<T extends Tensor>(parts: AgentParts<T>): LayaAgent {
-  return new Agent(parts);
+export async function createAgent<T extends Tensor>(parts: AgentParts<T>): Promise<LayaAgent> {
+  const v = validateParts(parts);
+  const model = await loadDecisionModel(parts.backend, {
+    encoderConfig: v.enc,
+    agentConfig: parts.agentConfig,
+    weights: toWeightGetter(parts.weights),
+    dtype: v.dtype,
+  });
+  parts.backend.flush?.();
+  return new Agent(parts, v, model);
 }

@@ -88,9 +88,10 @@ not held twice.
   `temperatureRaw` and `temperatureByOptionsRaw` (as shipped).
 - `dispose()` frees the weights, and the backend when `load` created it. It is idempotent.
 
-### `createAgent(parts) → LayaAgent`
+### `createAgent(parts) → Promise<LayaAgent>`
 
-This does no I/O. `parts` is `{ backend, encoderConfig, agentConfig, weights,
+This does no I/O; it resolves once every weight is on the device (all
+uploads are started together and awaited once). `parts` is `{ backend, encoderConfig, agentConfig, weights,
 tokenizer, dtype?, batchSize?, padToMultiple?, cachePrompts?, compile?,
 modelId?, ownsBackend?, warn? }`. `weights` is any `WeightSource`, such as
 `safetensorsWeights(readSafetensors(bytes))` or
@@ -109,9 +110,22 @@ modelId?, ownsBackend?, warn? }`. `weights` is any `WeightSource`, such as
 ### Lower level
 
 - `loadDecisionModel(backend, { encoderConfig, agentConfig, weights, dtype })`
-  returns a `DecisionModel` with `forward`, `forwardTensors`, `uploadBatch`,
-  `forwardCore` (pure function of device tensors), `compiled`, `readOutputs`,
-  `headLayer` and `dispose`.
+  resolves to a `DecisionModel` (encoder and head uploads in one batch) with
+  `forward`, `forwardTensors` (async), `uploadBatch` (async: the batch's
+  eight tensors are uploaded together), `disposeInputs`, `forwardCore`
+  (synchronous, a pure function of device tensors), `compiled` (returns an
+  async function, or null), `readOutputs`, `headLayer` and `dispose`. The
+  forward pass's three constants (−1e4, 1e-9, 255) are uploaded with the
+  weights (`weights.constants`), so `forwardCore` never uploads.
+
+### Migrating from 0.1
+
+Device uploads are async in `@johnhenry/tensor-backend` 0.2. `load()` and
+`predict()` are unchanged. Lower-level calls now return Promises:
+`await createAgent(parts)`, `await loadDecisionModel(...)`,
+`await model.forwardTensors(batch)`, `await model.uploadBatch(batch)`, and
+`model.compiled()` returns `(batch) => Promise<{ logits, act }>`.
+`DecisionWeights` gained `constants`.
 - `readWeights`, `consumingWeights`, `sanitizeName` (upstream PyTorch names →
   laya-mlx names), `createBackend(name)`, `readCheckpoint(id)`, `validateConfig`.
 

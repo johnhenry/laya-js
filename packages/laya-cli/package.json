@@ -55,8 +55,8 @@
     "@johnhenry/pyjson": "^0.1.2"
   },
   "peerDependencies": {
-    "@johnhenry/backend-mlx": "^0.0.0 || ^0.1.0",
-    "@johnhenry/backend-webgpu": "^0.0.0 || ^0.1.0"
+    "@johnhenry/backend-mlx": "^0.0.0 || ^0.1.0 || ^0.2.0",
+    "@johnhenry/backend-webgpu": "^0.0.0 || ^0.1.0 || ^0.2.0"
   },
   "peerDependenciesMeta": {
     "@johnhenry/backend-mlx": {

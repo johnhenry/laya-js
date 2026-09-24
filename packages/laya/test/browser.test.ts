@@ -46,7 +46,7 @@ test("io-browser: checkpoint from a base URL (Range reads for the weights) predi
     const ckpt = await readCheckpoint(`http://127.0.0.1:${port}/models/tiny`);
     assert.equal(ckpt.location, `http://127.0.0.1:${port}/models/tiny/`);
     const weights = await ckpt.weights();
-    const agent = createAgent({ backend: createCpuBackend(), encoderConfig: ckpt.encoderConfig, agentConfig: ckpt.agentConfig, weights: weights.get, tokenizer: ckpt.tokenizer, batchSize: 2, warn: () => {} });
+    const agent = await createAgent({ backend: createCpuBackend(), encoderConfig: ckpt.encoderConfig, agentConfig: ckpt.agentConfig, weights: weights.get, tokenizer: ckpt.tokenizer, batchSize: 2, warn: () => {} });
     assert.deepEqual(weights.remaining(), ["temperature"]);
     assert.deepEqual(await agent.predict(fx.state, fx.questions), fx.result);
     assert.ok(ranges.length >= 1, "weights were read with Range requests");

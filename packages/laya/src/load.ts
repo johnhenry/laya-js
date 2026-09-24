@@ -51,7 +51,7 @@ export async function load(modelIdOrPath: string, opts: LoadOptions = {}): Promi
   let agent: LayaAgent | undefined;
   try {
     const weights = await ckpt.weights();
-    agent = createAgent({
+    agent = await createAgent({
       backend,
       encoderConfig: ckpt.encoderConfig,
       agentConfig: ckpt.agentConfig,

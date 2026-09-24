@@ -9,10 +9,11 @@ import type { Backend, DType, HostTensor, Tensor } from "@johnhenry/tensor-backe
 import { toF32 } from "@johnhenry/tensor-backend";
 import {
   attentionMasks,
+  loadInBatch,
   loadModernBert,
   parseModernBertConfig,
+  settleUploads,
   toWeightGetter,
-  uploadAs,
   type ModernBert,
   type ModernBertConfig,
   type NormWeights,
@@ -43,6 +44,12 @@ export interface DecisionWeights<T> {
   readonly scorer: { readonly norm: NormWeights<T>; readonly w1: T; readonly b1: T; readonly w2: T; readonly b2: T };
   /** act_head = Linear(D + 4, 256) → GELU → Linear(256, nAct) */
   readonly act: { readonly w1: T; readonly b1: T; readonly w2: T; readonly b2: T };
+  /**
+   * f32 [1] constants of the forward pass (masked-logit fill −1e4, entropy
+   * floor 1e-9, option-count scale 255), uploaded with the weights so
+   * `forwardCore` stays synchronous (uploads are async).
+   */
+  readonly constants: { readonly maskedLogit: T; readonly probFloor: T; readonly kScale: T };
 }
 
 export interface LoadDecisionModelOptions {
@@ -126,9 +133,10 @@ export class DecisionModel<T extends Tensor = Tensor> {
    * Host → device upload of one collated batch: token ids, both encoder
    * attention masks (`attentionMasks`), the head key-padding mask, clamped
    * marker positions, marker mask, qtype and per-row option counts
-   * k = max(#markers, 2). Caller disposes (or runs inside a scope).
+   * k = max(#markers, 2). All eight uploads are started together and
+   * awaited once. Caller disposes (`disposeInputs`).
    */
-  uploadBatch(batch: Batch): ForwardInputs<T> {
+  async uploadBatch(batch: Batch): Promise<ForwardInputs<T>> {
     const b = this.backend;
     const { size: B, length: L, markerCount: M } = batch;
     if (M < 2) throw new RangeError("DecisionModel: markerCount must be >= 2 (collate pads to two slots)");
@@ -141,16 +149,22 @@ export class DecisionModel<T extends Tensor = Tensor> {
       for (let m = 0; m < M; m++) n += batch.markerMask[r * M + m] ? 1 : 0;
       k[r] = Math.max(n, 2);
     }
-    return {
-      inputIds: b.fromHost({ dtype: "i32", shape: [B, L], data: batch.inputIds }),
-      fullMask: b.fromHost(hm.full),
-      slidingMask: b.fromHost(hm.sliding),
-      headMask: b.fromHost({ dtype: "bool", shape: [B, 1, 1, L], data: batch.attentionMask }),
-      qtype: b.fromHost({ dtype: "i32", shape: [B], data: batch.qtype }),
-      markerPos: b.fromHost({ dtype: "i32", shape: [B, M], data: pos }),
-      markerMask: b.fromHost({ dtype: "bool", shape: [B, M], data: batch.markerMask }),
-      k: b.fromHost({ dtype: "f32", shape: [B], data: k }),
-    };
+    const t = await settleUploads(b, new Map<keyof ForwardInputs<T>, Promise<T>>([
+      ["inputIds", b.fromHost({ dtype: "i32", shape: [B, L], data: batch.inputIds })],
+      ["fullMask", b.fromHost(hm.full)],
+      ["slidingMask", b.fromHost(hm.sliding)],
+      ["headMask", b.fromHost({ dtype: "bool", shape: [B, 1, 1, L], data: batch.attentionMask })],
+      ["qtype", b.fromHost({ dtype: "i32", shape: [B], data: batch.qtype })],
+      ["markerPos", b.fromHost({ dtype: "i32", shape: [B, M], data: pos })],
+      ["markerMask", b.fromHost({ dtype: "bool", shape: [B, M], data: batch.markerMask })],
+      ["k", b.fromHost({ dtype: "f32", shape: [B], data: k })],
+    ]));
+    return Object.fromEntries(t) as unknown as ForwardInputs<T>;
+  }
+
+  /** Frees `uploadBatch` results. */
+  disposeInputs(inp: ForwardInputs<T>): void {
+    for (const t of Object.values(inp) as T[]) this.backend.dispose(t);
   }
 
   /**
@@ -169,7 +183,7 @@ export class DecisionModel<T extends Tensor = Tensor> {
       if (own) kept.push(t);
       return own;
     };
-    const f32 = (shape: number[], data: ArrayLike<number>): HostTensor => ({ dtype: "f32", shape, data: Float32Array.from(data) });
+    const cst = w.constants;
     const out = b.scope(() => {
       // ModernBERT encoder (same stage order and names as ModernBert.forward, prefixed "encoder.")
       const masks = { full_attention: inp.fullMask, sliding_attention: inp.slidingMask };
@@ -194,15 +208,15 @@ export class DecisionModel<T extends Tensor = Tensor> {
       const markers = b.gatherRows(h, inp.markerPos);
       const s = w.scorer;
       const scored = b.linear(b.gelu(b.linear(b.layerNorm(markers, s.norm.weight, s.norm.bias, HEAD_EPS), s.w1, s.b1)), s.w2, s.b2);
-      const logits = b.where(inp.markerMask, b.cast(b.reshape(scored, [B, M]), "f32"), b.fromHost(f32([1], [-1e4])));
+      const logits = b.where(inp.markerMask, b.cast(b.reshape(scored, [B, M]), "f32"), cst.maskedLogit);
       // action features [top1, top1 - top2, entropy / log(k), k / 255], k = max(#markers, 2)
       const p = b.softmax(logits, -1);
-      const plogp = b.mul(p, b.log(b.maximum(p, b.fromHost(f32([1], [1e-9])))));
+      const plogp = b.mul(p, b.log(b.maximum(p, cst.probFloor)));
       const entropy = b.div(b.scale(b.sum(plogp, -1), -1), b.log(inp.k));
       const top = b.slice(b.sort(p, -1), [0, M - 2], [B, M]);
       const top2 = b.slice(top, [0, 0], [B, 1]);
       const top1 = b.slice(top, [0, 1], [B, 2]);
-      const kScaled = b.div(b.reshape(inp.k, [B, 1]), b.fromHost(f32([1], [255])));
+      const kScaled = b.div(b.reshape(inp.k, [B, 1]), cst.kScale);
       const features = b.concat([top1, b.sub(top1, top2), b.reshape(entropy, [B, 1]), kScaled], -1);
       const cls = b.cast(b.reshape(b.slice(h, [0, 0, 0], [B, 1, D]), [B, D]), "f32");
       const pooled = b.cast(b.concat([cls, features], -1), this.dtype);
@@ -217,13 +231,12 @@ export class DecisionModel<T extends Tensor = Tensor> {
    * Runs one collated batch; returns backend tensors logits f32 [B, M]
    * (masked slots = -1e4) and act f32 [B, nAct]. Caller disposes both.
    */
-  forwardTensors(batch: Batch, opts: DecisionForwardOptions<T> = {}): { logits: T; act: T } {
-    const b = this.backend;
-    const inp = this.uploadBatch(batch);
+  async forwardTensors(batch: Batch, opts: DecisionForwardOptions<T> = {}): Promise<{ logits: T; act: T }> {
+    const inp = await this.uploadBatch(batch);
     try {
       return this.forwardCore(inp, opts);
     } finally {
-      for (const t of Object.values(inp) as T[]) b.dispose(t);
+      this.disposeInputs(inp);
     }
   }
 
@@ -232,7 +245,7 @@ export class DecisionModel<T extends Tensor = Tensor> {
    * per input shape signature, like Python `mx.compile(model)`); returns
    * null when the backend has no `compile`. No stage observation.
    */
-  compiled(): ((batch: Batch) => { logits: T; act: T }) | null {
+  compiled(): ((batch: Batch) => Promise<{ logits: T; act: T }>) | null {
     const b = this.backend;
     if (!b.compile) return null;
     const fn = b.compile((...ts: T[]): T[] => {
@@ -240,13 +253,13 @@ export class DecisionModel<T extends Tensor = Tensor> {
       const r = this.forwardCore({ inputIds, fullMask, slidingMask, headMask, qtype, markerPos, markerMask, k });
       return [r.logits, r.act];
     });
-    return (batch) => {
-      const inp = this.uploadBatch(batch);
+    return async (batch) => {
+      const inp = await this.uploadBatch(batch);
       try {
         const [logits, act] = fn(inp.inputIds, inp.fullMask, inp.slidingMask, inp.headMask, inp.qtype, inp.markerPos, inp.markerMask, inp.k);
         return { logits: logits!, act: act! };
       } finally {
-        for (const t of Object.values(inp) as T[]) b.dispose(t);
+        this.disposeInputs(inp);
       }
     };
   }
@@ -266,21 +279,15 @@ export class DecisionModel<T extends Tensor = Tensor> {
 
   /** Runs one collated batch and reads the outputs back (f32). */
   async forward(batch: Batch, opts: DecisionForwardOptions<T> = {}): Promise<BatchOutputs> {
-    return this.readOutputs(this.forwardTensors(batch, opts));
+    return this.readOutputs(await this.forwardTensors(batch, opts));
   }
 
   /** Frees all weights (encoder included). */
   dispose(): void {
-    const b = this.backend, w = this.weights;
-    const free = (...ts: (T | null)[]) => ts.forEach((t) => t && b.dispose(t));
     this.encoder.dispose();
-    for (const l of w.head) {
-      free(l.norm1.weight, l.norm1.bias, l.norm2.weight, l.norm2.bias, l.inProj, l.inProjBias, l.outProj, l.outProjBias);
-      free(l.linear1, l.linear1Bias, l.linear2, l.linear2Bias);
-    }
-    free(w.typeEmb, w.scorer.norm.weight, w.scorer.norm.bias, w.scorer.w1, w.scorer.b1, w.scorer.w2, w.scorer.b2);
-    free(w.act.w1, w.act.b1, w.act.w2, w.act.b2);
+    disposeWeights(this.backend, this.weights);
   }
+
 }
 
 function isParsed(c: ModernBertConfig | Record<string, unknown>): c is ModernBertConfig {
@@ -292,9 +299,10 @@ function isParsed(c: ModernBertConfig | Record<string, unknown>): c is ModernBer
  * (`encoder.*`, `head.layers.N.self_attn.in_proj.weight`, `scorer.layers.{0,1,3}`,
  * `act_head.layers.{0,2}`, `type_emb.weight`); upstream PyTorch spellings
  * (`in_proj_weight`, `scorer.0.weight`, `act_head.0.weight`) are accepted too.
+ * Every upload (encoder and heads) is started before any is awaited.
  * Call outside any `backend.scope` (weights must outlive it).
  */
-export function loadDecisionModel<T extends Tensor>(backend: Backend<T>, opts: LoadDecisionModelOptions): DecisionModel<T> {
+export async function loadDecisionModel<T extends Tensor>(backend: Backend<T>, opts: LoadDecisionModelOptions): Promise<DecisionModel<T>> {
   const dtype = opts.dtype ?? "f32";
   const config = isParsed(opts.encoderConfig) ? opts.encoderConfig : parseModernBertConfig(opts.encoderConfig);
   const get = toWeightGetter(opts.weights);
@@ -304,57 +312,92 @@ export function loadDecisionModel<T extends Tensor>(backend: Backend<T>, opts: L
   const nh = Math.max(1, Math.floor(D / 64));
   if (D % nh) throw new Error("Decision head dimensions must be divisible by its head count");
 
-  const encoder = loadModernBert(backend, config, get, { dtype, prefix: "encoder." });
-  const loaded: T[] = [];
-  const need = (names: string[], shape: number[]): T => {
-    for (const n of names) {
-      const h = get(n);
-      if (!h) continue;
-      if (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i])) {
-        throw new Error(`DecisionModel: ${n} has shape [${h.shape}], want [${shape}]`);
-      }
-      const t = uploadAs(backend, h, dtype);
-      loaded.push(t);
-      return t;
-    }
-    throw new Error(`DecisionModel: missing weight ${names[0]}`);
-  };
-  const seq = (prefix: string, i: number, what: string) => [`${prefix}.layers.${i}.${what}`, `${prefix}.${i}.${what}`];
-  try {
-    const head: HeadLayerWeights<T>[] = [];
-    for (let j = 0; j < headLayers; j++) {
-      const p = `head.layers.${j}`;
-      head.push({
-        norm1: { weight: need([`${p}.norm1.weight`], [D]), bias: need([`${p}.norm1.bias`], [D]) },
-        norm2: { weight: need([`${p}.norm2.weight`], [D]), bias: need([`${p}.norm2.bias`], [D]) },
-        inProj: need([`${p}.self_attn.in_proj.weight`, `${p}.self_attn.in_proj_weight`], [3 * D, D]),
-        inProjBias: need([`${p}.self_attn.in_proj.bias`, `${p}.self_attn.in_proj_bias`], [3 * D]),
-        outProj: need([`${p}.self_attn.out_proj.weight`], [D, D]),
-        outProjBias: need([`${p}.self_attn.out_proj.bias`], [D]),
-        linear1: need([`${p}.linear1.weight`], [4 * D, D]),
-        linear1Bias: need([`${p}.linear1.bias`], [4 * D]),
-        linear2: need([`${p}.linear2.weight`], [D, 4 * D]),
-        linear2Bias: need([`${p}.linear2.bias`], [D]),
-      });
-    }
-    const typeEmb = need(["type_emb.weight"], [3, D]);
-    const scorer = {
-      norm: { weight: need(seq("scorer", 0, "weight"), [D]), bias: need(seq("scorer", 0, "bias"), [D]) },
-      w1: need(seq("scorer", 1, "weight"), [D, D]),
-      b1: need(seq("scorer", 1, "bias"), [D]),
-      w2: need(seq("scorer", 3, "weight"), [1, D]),
-      b2: need(seq("scorer", 3, "bias"), [1]),
-    };
-    const act = {
-      w1: need(seq("act_head", 0, "weight"), [256, D + 4]),
-      b1: need(seq("act_head", 0, "bias"), [256]),
-      w2: need(seq("act_head", 2, "weight"), [nAct, 256]),
-      b2: need(seq("act_head", 2, "bias"), [nAct]),
-    };
-    return new DecisionModel(backend, encoder, { head, typeEmb, scorer, act }, dtype, nAct);
-  } catch (e) {
-    encoder.dispose();
-    for (const t of loaded) backend.dispose(t);
-    throw e;
+  const hosts = new Map<string, HostTensor>();
+  const f32 = (v: number): HostTensor => ({ dtype: "f32", shape: [1], data: Float32Array.of(v) });
+  const [encoder, heads, consts] = await Promise.allSettled([
+    loadModernBert(backend, config, get, { dtype, prefix: "encoder." }),
+    loadInBatch(backend, (upload) => {
+      const need = (names: string[], shape: number[]): T => {
+        for (const n of names) {
+          const h = hosts.get(n) ?? get(n);
+          if (!h) continue;
+          hosts.set(n, h);
+          if (h.shape.length !== shape.length || h.shape.some((d, i) => d !== shape[i])) {
+            throw new Error(`DecisionModel: ${n} has shape [${h.shape}], want [${shape}]`);
+          }
+          return upload(n, h);
+        }
+        throw new Error(`DecisionModel: missing weight ${names[0]}`);
+      };
+      return buildHeadWeights(D, headLayers, nAct, need);
+    }, dtype),
+    // f32 whatever the model dtype
+    settleUploads(backend, new Map([
+      ["maskedLogit", backend.fromHost(f32(-1e4))],
+      ["probFloor", backend.fromHost(f32(1e-9))],
+      ["kScale", backend.fromHost(f32(255))],
+    ])),
+  ]);
+  hosts.clear();
+  if (encoder.status === "rejected" || heads.status === "rejected" || consts.status === "rejected") {
+    if (encoder.status === "fulfilled") encoder.value.dispose();
+    if (heads.status === "fulfilled") disposeWeights(backend, heads.value);
+    if (consts.status === "fulfilled") consts.value.forEach((t) => backend.dispose(t));
+    throw ([encoder, heads, consts].find((r) => r.status === "rejected") as PromiseRejectedResult).reason;
   }
+  const c = consts.value;
+  const constants = { maskedLogit: c.get("maskedLogit")!, probFloor: c.get("probFloor")!, kScale: c.get("kScale")! };
+  return new DecisionModel(backend, encoder.value, { ...heads.value, constants }, dtype, nAct);
+}
+
+function buildHeadWeights<T>(
+  D: number,
+  headLayers: number,
+  nAct: number,
+  need: (names: string[], shape: number[]) => T,
+): Omit<DecisionWeights<T>, "constants"> {
+  const seq = (prefix: string, i: number, what: string) => [`${prefix}.layers.${i}.${what}`, `${prefix}.${i}.${what}`];
+  const head: HeadLayerWeights<T>[] = [];
+  for (let j = 0; j < headLayers; j++) {
+    const p = `head.layers.${j}`;
+    head.push({
+      norm1: { weight: need([`${p}.norm1.weight`], [D]), bias: need([`${p}.norm1.bias`], [D]) },
+      norm2: { weight: need([`${p}.norm2.weight`], [D]), bias: need([`${p}.norm2.bias`], [D]) },
+      inProj: need([`${p}.self_attn.in_proj.weight`, `${p}.self_attn.in_proj_weight`], [3 * D, D]),
+      inProjBias: need([`${p}.self_attn.in_proj.bias`, `${p}.self_attn.in_proj_bias`], [3 * D]),
+      outProj: need([`${p}.self_attn.out_proj.weight`], [D, D]),
+      outProjBias: need([`${p}.self_attn.out_proj.bias`], [D]),
+      linear1: need([`${p}.linear1.weight`], [4 * D, D]),
+      linear1Bias: need([`${p}.linear1.bias`], [4 * D]),
+      linear2: need([`${p}.linear2.weight`], [D, 4 * D]),
+      linear2Bias: need([`${p}.linear2.bias`], [D]),
+    });
+  }
+  const typeEmb = need(["type_emb.weight"], [3, D]);
+  const scorer = {
+    norm: { weight: need(seq("scorer", 0, "weight"), [D]), bias: need(seq("scorer", 0, "bias"), [D]) },
+    w1: need(seq("scorer", 1, "weight"), [D, D]),
+    b1: need(seq("scorer", 1, "bias"), [D]),
+    w2: need(seq("scorer", 3, "weight"), [1, D]),
+    b2: need(seq("scorer", 3, "bias"), [1]),
+  };
+  const act = {
+    w1: need(seq("act_head", 0, "weight"), [256, D + 4]),
+    b1: need(seq("act_head", 0, "bias"), [256]),
+    w2: need(seq("act_head", 2, "weight"), [nAct, 256]),
+    b2: need(seq("act_head", 2, "bias"), [nAct]),
+  };
+  return { head, typeEmb, scorer, act };
+}
+
+/** Frees decision-head weights (and the constants, when present). */
+function disposeWeights<T extends Tensor>(b: Backend<T>, w: Omit<DecisionWeights<T>, "constants"> & Partial<Pick<DecisionWeights<T>, "constants">>): void {
+  const free = (...ts: (T | null)[]) => ts.forEach((t) => t && b.dispose(t));
+  for (const l of w.head) {
+    free(l.norm1.weight, l.norm1.bias, l.norm2.weight, l.norm2.bias, l.inProj, l.inProjBias, l.outProj, l.outProjBias);
+    free(l.linear1, l.linear1Bias, l.linear2, l.linear2Bias);
+  }
+  free(w.typeEmb, w.scorer.norm.weight, w.scorer.norm.bias, w.scorer.w1, w.scorer.b1, w.scorer.w2, w.scorer.b2);
+  free(w.act.w1, w.act.b1, w.act.w2, w.act.b2);
+  if (w.constants) free(w.constants.maskedLogit, w.constants.probFloor, w.constants.kScale);
 }

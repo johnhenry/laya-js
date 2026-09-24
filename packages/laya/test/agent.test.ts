@@ -200,7 +200,7 @@ test("createAgent() builds an agent from parts (no I/O) and forward() runs one b
   const tokenizer = await loadTokenizerFromDir(join(TINY, "tokenizer"));
   const file = readSafetensors(await readFile(join(TINY, "model.safetensors")));
   const backend = createCpuBackend();
-  const agent: LayaAgent = createAgent({
+  const agent: LayaAgent = await createAgent({
     backend,
     encoderConfig: await loadJson("tiny", "encoder", "config.json"),
     agentConfig: await loadJson("tiny", "rl_agent_config.json"),

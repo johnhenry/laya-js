@@ -1,6 +1,6 @@
 /**
  * Checkpoint weights from a safetensors source, read once and handed to the
- * backend one tensor at a time. Browser-safe (no fs import of our own).
+ * backend in one upload batch. Browser-safe (no fs import of our own).
  */
 import { openSafetensors, type LazySafetensors } from "@johnhenry/math-plus-safetensors";
 import type { HostTensor, DType } from "@johnhenry/tensor-backend";
@@ -23,8 +23,9 @@ export function sanitizeName(name: string): string {
 /**
  * A one-shot WeightGetter over every tensor of a safetensors file. Each
  * tensor is released (`get` forgets it) as soon as it is handed out, so after
- * the backend upload only the backend's copy stays alive: the file is never
- * held twice (host bytes + device copy) for longer than one tensor.
+ * the backend uploads only the backend's copy stays alive: the file is never
+ * held twice (host bytes + device copy) for longer than the one upload batch
+ * the loaders issue (every backend copies at `fromHost` time).
  * `remaining()` lists tensors nobody asked for (`strict` loading).
  */
 export interface ConsumingWeights {
