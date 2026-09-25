@@ -21,7 +21,8 @@ Laya.
 **Try it in your browser** (WebGPU, nothing to install):
 [playground](https://johnhenry.github.io/laya-js/playground/) ·
 [Snake](https://johnhenry.github.io/laya-js/snake/) ·
-[Flappy Bird](https://johnhenry.github.io/laya-js/flappy/) — or start at
+[Flappy Bird](https://johnhenry.github.io/laya-js/flappy/) ·
+[Checkers](https://johnhenry.github.io/laya-js/checkers/) — or start at
 <https://johnhenry.github.io/laya-js/>.
 
 **Status:** every package is on npm under `@johnhenry/*`. JSR is prepared
@@ -154,13 +155,16 @@ npx @johnhenry/laya-cli predict --state "I was billed twice. Please refund the d
 | [`@johnhenry/pyjson`](./packages/pyjson) | Byte-identical CPython `json.dumps`, `repr(float)`, `round()` |
 
 Private: [`laya-fixtures`](./packages/laya-fixtures) (golden data from
-Python) and five [examples](./examples): a terminal Snake driven by Laya
+Python) and seven [examples](./examples): a terminal Snake driven by Laya
 (Node/Bun) and the same game in the browser on WebGPU
 ([live](https://johnhenry.github.io/laya-js/snake/)); a terminal Flappy Bird
 and its browser sibling
-([live](https://johnhenry.github.io/laya-js/flappy/)), in the same
-architecture but JS-original (no Python reference); and a web playground
-([live](https://johnhenry.github.io/laya-js/playground/)). The three browser
+([live](https://johnhenry.github.io/laya-js/flappy/)); a terminal Checkers
+(Laya, a scripted bot, or a human on either side) and its browser sibling
+([live](https://johnhenry.github.io/laya-js/checkers/)) — Flappy Bird and
+Checkers are in the same architecture as Snake but JS-original, no Python
+reference; and a web playground
+([live](https://johnhenry.github.io/laya-js/playground/)). The four browser
 examples are deployed to GitHub Pages by
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
 `main`; `node scripts/build-pages.mjs` builds the same site into `_site/`.

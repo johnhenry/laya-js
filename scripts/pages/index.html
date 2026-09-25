@@ -55,11 +55,16 @@
           <h2>Flappy Bird &rarr;</h2>
           <p>The model decides flap or no-flap every tick, with a lookahead safety shield and live probabilities.</p>
         </a>
+        <a class="card" href="./checkers/">
+          <h2>Checkers &rarr;</h2>
+          <p>Laya, a scripted bot, or you -- pick who plays each side. Mandatory capture and chain rules enforced.</p>
+        </a>
       </div>
       <p class="note">
         Needs WebGPU: Chrome or Edge 113+ (f16 from 120), or Safari 26. The first load downloads the checkpoint
         (about 650 MB for the multilingual one) into your browser's Cache API; later visits load from the cache,
-        and all demos share it.
+        and all demos share it. Checkers is the one exception — it plays fully without WebGPU if you skip the
+        Laya seat.
       </p>
       <footer>
         Source: <a href="https://github.com/johnhenry/laya-js">github.com/johnhenry/laya-js</a> &middot;
