@@ -13,10 +13,17 @@ import type { BindingSpec, KernelSource, ParamSpec } from "./runtime.ts";
 
 export type SType = "f32" | "f16" | "i32" | "u32";
 export type CType = "f32" | "i32";
-/** Storage kind + whether stores must round to bf16 precision. */
+/**
+ * Storage kind + whether stores must round to bf16 precision. `bool`
+ * distinguishes the two different things `st: "u32"` can mean: the original
+ * bool-packed-as-u32 storage (0/1 only -- `st()` collapses any nonzero value
+ * to 1u) vs. the real u32 dtype added 2026-09-25, which must store its
+ * actual integer value, not a boolean collapse of it.
+ */
 export interface Kind {
   st: SType;
   bf16?: boolean;
+  bool?: boolean;
 }
 
 export const kindKey = (k: Kind) => k.st + (k.bf16 ? "b" : "");
@@ -29,13 +36,24 @@ export function ld(k: Kind, expr: string, c: CType): string {
 
 /** Store expression converting a compute value to the storage type. */
 export function st(k: Kind, expr: string, c: CType): string {
-  if (k.st === "u32") return `select(0u, 1u, (${expr}) != ${c === "f32" ? "0.0" : "0"})`;
+  if (k.st === "u32" && k.bool) return `select(0u, 1u, (${expr}) != ${c === "f32" ? "0.0" : "0"})`;
   if (k.bf16) return `bf16r(f32(${expr}))`;
   if (k.st === c) return expr;
   return `${k.st}(${expr})`;
 }
 
 const needsF16 = (...ks: Kind[]) => ks.some((k) => k.st === "f16");
+
+/**
+ * Whether a Kind's storage should be computed on as i32 (true integer
+ * arithmetic) rather than always widening to f32. i32 itself, and real u32
+ * (not the bool-packed-as-u32 kind, which is 0/1-only and always computed
+ * as a plain nonzero test) both qualify -- i32/u32 addition/subtraction are
+ * bit-identical (two's-complement wraps the same way under either
+ * interpretation), so accumulating u32 data as i32 and converting back on
+ * store is exact.
+ */
+const isIntKind = (k: Kind) => k.st === "i32" || (k.st === "u32" && !k.bool);
 
 export const HELPERS = /* wgsl */ `
 fn bf16r(v: f32) -> f32 {
@@ -144,7 +162,7 @@ export function naryKernel(op: string, expr: string, ins: NaryInput[], out: Kind
  */
 export function copyKernel(inp: Kind, out: Kind, R = 8, V = 1): KernelSource {
   const WG = 256;
-  const c: CType = inp.st === "i32" && out.st === "i32" ? "i32" : "f32";
+  const c: CType = isIntKind(inp) && isIntKind(out) ? "i32" : "f32";
   let dec = "";
   for (let d = 7; d >= 8 - R; d--) {
     const q = `${Math.floor(d / 4)}u][${d % 4}u`;
@@ -1550,6 +1568,14 @@ var<workgroup> sh: array<${c}, ${NP}>;
 /** Fallback: one thread per row, insertion sort in the output buffer (already a copy of the input). */
 export function sortSlowKernel(out: Kind): KernelSource {
   const WG = 64;
+  // Deliberately NOT isIntKind here (unlike copyKernel/cumsumKernel): +/-
+  // and pure data movement are bit-identical whether u32 storage is treated
+  // as i32 or not, but ORDERING comparisons are not -- a large u32 value
+  // (upper half of the 32-bit range) reinterpreted as i32 becomes negative
+  // and sorts as "smaller", silently corrupting the order. Sorting u32
+  // correctly needs a real u32 compute type (CType has none yet), so this
+  // keeps the pre-existing f32 fallback rather than claim untested
+  // correctness for the wraparound-affected value range.
   const c: CType = out.st === "i32" ? "i32" : "f32";
   const body = `const WG = ${WG}u;\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
   if (i >= P.rows) { return; }

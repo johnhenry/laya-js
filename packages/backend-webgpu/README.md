@@ -147,6 +147,7 @@ gpu.destroy();
 | `bf16` | `f32` | Converted on upload. Every op producing bf16 rounds its output to bf16 precision (round-to-nearest-even). `read` returns raw bf16 bits (`Uint16Array`). |
 | `i32` | `i32` | |
 | `bool` | `u32` (0/1) | Uses 4 bytes per element. |
+| `u32` | `u32` | Added 2026-09-25 — a real core WGSL type, unlike the other new dtypes below. `add`/`sub`/`cumsum`/copies compute correctly for the full u32 range; `sort` does not yet (see Limitations). |
 
 **Numerics**
 - Every kernel loads storage values, computes in f32 (or i32 for
@@ -461,6 +462,24 @@ L=512 18.8 s.
   undefined behaviour, as in the contract.
 - `sdpa` accepts bool masks only. A float mask is cast to bool (nonzero means attend), so additive 0/−∞ masks are *not* supported.
 - Bool tensors take 4 bytes per element, and bf16 takes f32 memory.
+- **`i8`/`u8`/`i16`/`u16`/`i64`/`u64`/`f64` are permanently unsupported
+  (`supports()` returns `false`), not a gap to close: i8/u8/i16/u16 aren't
+  in the WGSL spec at all (an open, unresolved proposal,
+  [gpuweb/gpuweb#5152](https://github.com/gpuweb/gpuweb/issues/5152));
+  i64/u64 exist only behind `SHADER_INT64`, a non-standard native wgpu
+  feature not part of the WebGPU spec and unreliable in browsers; f64 has
+  no WGSL type at all, and separately isn't supported on any Apple GPU
+  either (see `@johnhenry/backend-mlx`'s README). `u32` is the one dtype
+  added 2026-09-25 that WebGPU genuinely gains, since it's a real core
+  WGSL type.
+- `sort`/`argsort` on `u32` is not verified correct for values in the upper
+  half of the 32-bit range (≥ 2³¹): the fast bitonic-sort kernel's ordering
+  comparison is not bit-identical between signed and unsigned
+  interpretation the way `add`/`sub`/`cumsum`/copies are, and there is no
+  real unsigned compute type wired through the WGSL codegen yet (`CType` is
+  `"f32" | "i32"` only). `add`/`sub`/`cumsum`/`equal`/`less`/etc. and plain
+  data movement (`reshape`/`transpose`/`slice`/`concat`/`cast`) are
+  unaffected and correct for the full u32 range.
 - Quantized Linears match or beat fp16 for most shapes and M, but not all:
   0.92–0.97× on the large-N Laya shapes around M = 33 and 0.83–0.97× in a
   few cells at M = 93–128 (table above). The kernel choice

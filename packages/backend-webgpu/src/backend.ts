@@ -185,8 +185,36 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
     if (opts.sleepThresholdMs !== undefined) this.rt.sleepThresholdMs = opts.sleepThresholdMs;
   }
 
+  /**
+   * f32/bf16/i32/bool/u32 work on every WebGPU implementation; f16 needs
+   * native shader-f16. Every other dtype added to the contract 2026-09-25
+   * (i8/u8/i16/u16/i64/u64/f64) is permanently unsupported here -- not a
+   * gap to close, a real WGSL spec limit (see README "Limitations"):
+   * i8/u8/i16/u16 aren't in the WGSL spec at all (an open, unresolved
+   * proposal: gpuweb/gpuweb#5152); i64/u64 exist only behind the
+   * non-standard, browser-unreliable `SHADER_INT64` native wgpu feature;
+   * f64 has no WGSL type at all. u32 is the one dtype added 2026-09-25 that
+   * WebGPU genuinely gains, since it's already a real core WGSL type.
+   */
   supports(dtype: DType): boolean {
-    return dtype === "f16" ? this.hasF16 : true;
+    switch (dtype) {
+      case "f16":
+        return this.hasF16;
+      case "f32":
+      case "bf16":
+      case "i32":
+      case "bool":
+      case "u32":
+        return true;
+      case "u8":
+      case "i8":
+      case "u16":
+      case "i16":
+      case "u64":
+      case "i64":
+      case "f64":
+        return false;
+    }
   }
 
   // ---- storage kinds -------------------------------------------------------
@@ -202,7 +230,17 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
       case "i32":
         return { st: "i32" };
       case "bool":
+        return { st: "u32", bool: true };
+      case "u32":
         return { st: "u32" };
+      case "u8":
+      case "i8":
+      case "u16":
+      case "i16":
+      case "u64":
+      case "i64":
+      case "f64":
+        throw new TypeError(`backend-webgpu: dtype ${d} is not supported (WGSL has no ${d} type; see README "Limitations")`);
     }
   }
   private bytesPer(d: DType): number {
@@ -324,6 +362,18 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
         data = out;
         break;
       }
+      case "u32":
+        data = d instanceof Uint32Array ? d : Uint32Array.from(d as ArrayLike<number>);
+        break;
+      case "u8":
+      case "i8":
+      case "u16":
+      case "i16":
+      case "u64":
+      case "i64":
+      case "f64":
+        // Unreachable: this.kind(h.dtype) above already threw for these.
+        throw new TypeError(`backend-webgpu: dtype ${h.dtype} is not supported`);
     }
     const bytes = Math.max(4, n * this.bytesPer(h.dtype));
     const { buffer, bytes: cls, writeHazard } = this.rt.acquire(bytes);
@@ -360,6 +410,17 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
         return { dtype: "i32", shape, data: new Int32Array(raw) };
       case "bool":
         return { dtype: "bool", shape, data: Uint8Array.from(new Uint32Array(raw)) };
+      case "u32":
+        return { dtype: "u32", shape, data: new Uint32Array(raw) };
+      case "u8":
+      case "i8":
+      case "u16":
+      case "i16":
+      case "u64":
+      case "i64":
+      case "f64":
+        // Unreachable: this.kind(t.dtype) above already threw for these.
+        throw new TypeError(`backend-webgpu: dtype ${t.dtype} is not supported`);
     }
   }
 
@@ -1283,7 +1344,12 @@ export class WebGpuBackend implements Backend<WebGpuTensor> {
   cumsum(x: WebGpuTensor, axis: number): WebGpuTensor {
     this.live(x);
     const { outer, R, inner } = this.axis3(x, axis);
-    const outDtype: DType = isFloat(x.dtype) ? x.dtype : "i32";
+    // bool -> i32 (unchanged); every other dtype (float, i32, and u32 added
+    // 2026-09-25) keeps its own dtype -- was previously force-cast to i32
+    // unconditionally for any non-float input, silently discarding u32
+    // (a real conformance failure this was added to fix: `cumsum/u32`
+    // returning i32). Matches the same rule `sum` above already applies.
+    const outDtype: DType = x.dtype === "bool" ? "i32" : x.dtype;
     const out = this.alloc(x.shape, outDtype);
     const n = outer * inner;
     if (!n || !R) return out;
