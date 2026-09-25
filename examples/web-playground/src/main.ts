@@ -7,19 +7,10 @@ import * as layaPresets from "@johnhenry/laya-presets";
 import { detectWebGpu, type GpuCapability } from "./lib/gpu.ts";
 import { loadBrowserAgent, type BrowserAgent } from "./lib/loader.ts";
 import { CHECKPOINTS, formatBytes } from "./lib/models.ts";
+import { fromDrafts, newDraft, str, toDrafts, type QDraft, type QType } from "./lib/questions.ts";
+import { computePriorityValue, queueToCsv, queueToJson, stateSummary, type AnswerLike, type QueueEntry, type RunOutcome } from "./lib/queue.ts";
+import { batchEligible, jsonToStateFields, newStateField, stateFieldsToJson, type Json, type SFDraft, type SFType } from "./lib/state-fields.ts";
 
-type QType = "choice" | "score" | "noul";
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-interface QDraft {
-  id: string;
-  type: QType;
-  instructions: string;
-  /** choice: label + description; score: label only (the level text). */
-  rows: { label: string; desc: string }[];
-  /** noul: optional descriptions for true / false. */
-  yes: string;
-  no: string;
-}
 interface Preset {
   name: string;
   state: Json;
@@ -134,74 +125,6 @@ function packagePresets(): Preset[] {
 // ---------------------------------------------------------------- question model
 let drafts: QDraft[] = [];
 
-const str = (v: unknown) => (v === null || v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v));
-
-function toDrafts(questions: Record<string, unknown>): QDraft[] {
-  return Object.entries(questions).map(([id, raw]) => {
-    const q = raw as { type: QType; instructions?: unknown; criteria?: unknown };
-    const d: QDraft = { id, type: q.type, instructions: str(q.instructions), rows: [], yes: "", no: "" };
-    if (q.type === "choice") {
-      d.rows = Array.isArray(q.criteria)
-        ? q.criteria.map((l) => ({ label: str(l), desc: "" }))
-        : Object.entries((q.criteria ?? {}) as Record<string, unknown>).map(([label, desc]) => ({ label, desc: str(desc) }));
-    } else if (q.type === "score") {
-      d.rows = ((q.criteria ?? []) as unknown[]).map((l) => ({ label: str(l), desc: "" }));
-    } else {
-      const c = (q.criteria ?? {}) as { true?: unknown; false?: unknown };
-      d.yes = str(c.true);
-      d.no = str(c.false);
-    }
-    return d;
-  });
-}
-
-function fromDrafts(list: QDraft[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  const seen = new Set<string>();
-  for (const d of list) {
-    const id = d.id.trim();
-    if (!id) throw new Error("Every question needs an id.");
-    if (seen.has(id)) throw new Error(`Duplicate question id "${id}".`);
-    seen.add(id);
-    if (!d.instructions.trim()) throw new Error(`Question "${id}" needs instructions.`);
-    if (d.type === "choice") {
-      const rows = d.rows.filter((r) => r.label.trim());
-      if (rows.length < 2) throw new Error(`Choice "${id}" needs at least two options.`);
-      out[id] = {
-        type: "choice",
-        instructions: d.instructions,
-        criteria: rows.every((r) => !r.desc.trim())
-          ? rows.map((r) => r.label.trim())
-          : Object.fromEntries(rows.map((r) => [r.label.trim(), r.desc.trim() || null])),
-      };
-    } else if (d.type === "score") {
-      const rows = d.rows.filter((r) => r.label.trim());
-      if (rows.length < 2) throw new Error(`Score "${id}" needs at least two levels.`);
-      out[id] = { type: "score", instructions: d.instructions, criteria: rows.map((r) => r.label.trim()) };
-    } else {
-      const q: Record<string, unknown> = { type: "noul", instructions: d.instructions };
-      if (d.yes.trim() || d.no.trim()) q.criteria = { ...(d.yes.trim() ? { true: d.yes.trim() } : {}), ...(d.no.trim() ? { false: d.no.trim() } : {}) };
-      out[id] = q;
-    }
-  }
-  if (!Object.keys(out).length) throw new Error("Add at least one question.");
-  return out;
-}
-
-function newDraft(type: QType): QDraft {
-  let n = drafts.length;
-  const base = type === "noul" ? "yesno" : type;
-  while (drafts.some((d) => d.id === `${base}${n}`)) n++;
-  return {
-    id: `${base}${n}`,
-    type,
-    instructions: "",
-    rows: type === "choice" ? [{ label: "", desc: "" }, { label: "", desc: "" }] : type === "score" ? [{ label: "low", desc: "" }, { label: "medium", desc: "" }, { label: "high", desc: "" }] : [],
-    yes: "",
-    no: "",
-  };
-}
-
 function renderQuestions(): void {
   const root = $("questions");
   root.replaceChildren(
@@ -214,7 +137,7 @@ function renderQuestions(): void {
           "aria-label": `Question ${qi + 1} type`,
           onchange: (e: Event) => {
             const t = (e.target as HTMLSelectElement).value as QType;
-            const fresh = newDraft(t);
+            const fresh = newDraft(drafts, t);
             Object.assign(d, { type: t, rows: d.rows.length >= 2 && t !== "noul" ? d.rows : fresh.rows });
             renderQuestions();
             persist();
@@ -279,66 +202,9 @@ function renderQuestions(): void {
 // builder below -- not just a single free-text/JSON blob. A single default
 // text field ("text") collapses to a plain string on read, matching the
 // zero-config free-text behavior every preset and the README example expect.
-type SFType = "text" | "number" | "boolean";
-interface SFDraft {
-  key: string;
-  label: string;
-  type: SFType;
-  /** Raw draft value: the field's own text/number as typed, or "true"/"false" for boolean. */
-  value: string;
-}
-
+// The field model and its conversions live in ./lib/state-fields.ts.
 let stateFields: SFDraft[] = [{ key: "text", label: "Text", type: "text", value: "" }];
 let stateJsonMode = false;
-
-function newStateField(type: SFType): SFDraft {
-  let n = stateFields.length;
-  while (stateFields.some((f) => f.key === `field${n}`)) n++;
-  return { key: `field${n}`, label: `Field ${n + 1}`, type, value: type === "boolean" ? "false" : "" };
-}
-
-/** Fields -> the actual state value sent to predict() (validation mirrors gui-demo's resolveStateValues). */
-function stateFieldsToJson(fields: SFDraft[]): Json {
-  const out: Record<string, Json> = {};
-  const seen = new Set<string>();
-  for (const f of fields) {
-    const key = f.key.trim();
-    if (!key) throw new Error("Every state field needs a key.");
-    if (seen.has(key)) throw new Error(`Duplicate state field key "${key}".`);
-    seen.add(key);
-    if (f.type === "text") {
-      if (!f.value.trim()) throw new Error(`Field "${key}" needs a value.`);
-      out[key] = f.value;
-    } else if (f.type === "number") {
-      const n = Number(f.value);
-      if (!Number.isFinite(n)) throw new Error(`Field "${key}" needs a valid number.`);
-      out[key] = n;
-    } else {
-      out[key] = f.value === "true";
-    }
-  }
-  if (!Object.keys(out).length) throw new Error("Add at least one state field.");
-  if (fields.length === 1 && fields[0]!.key === "text" && fields[0]!.type === "text") return out.text!;
-  return out;
-}
-
-/** The inverse: an incoming state (from a preset, or "Use builder" from JSON mode) -> fields. */
-function jsonToStateFields(state: Json): SFDraft[] {
-  if (typeof state === "string") return [{ key: "text", label: "Text", type: "text", value: state }];
-  if (state && typeof state === "object" && !Array.isArray(state)) {
-    const entries = Object.entries(state as Record<string, Json>);
-    if (entries.length) {
-      return entries.map(([key, v]) => {
-        const type: SFType = typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "text";
-        const value = type === "boolean" || type === "number" ? String(v) : typeof v === "string" ? v : JSON.stringify(v);
-        return { key, label: key, type, value };
-      });
-    }
-  }
-  // Arrays, null, top-level numbers/booleans, or an empty object: not representable
-  // as typed fields -- stash as JSON text; "Edit as JSON" is the real escape hatch.
-  return [{ key: "text", label: "Text", type: "text", value: typeof state === "string" ? state : JSON.stringify(state) }];
-}
 
 function renderStateFields(): void {
   const root = $("state-fields");
@@ -376,19 +242,13 @@ function renderStateFields(): void {
   updateBatchUI();
 }
 
-/** Batch only makes sense with exactly one text field: "one value per line" is
- * ambiguous once there's more than one field to fill in per line (mirrors
- * gui-demo's exact constraint). */
-function batchEligible(): boolean {
-  return stateFields.length === 1 && stateFields[0]!.type === "text";
-}
 function batchMode(): boolean {
-  return $<HTMLInputElement>("batch").checked && batchEligible();
+  return $<HTMLInputElement>("batch").checked && batchEligible(stateFields);
 }
 function updateBatchUI(): void {
   const cb = $<HTMLInputElement>("batch");
   const hint = $("batch-hint");
-  const eligible = batchEligible();
+  const eligible = batchEligible(stateFields);
   cb.disabled = !eligible;
   if (!eligible && cb.checked) cb.checked = false;
   hint.textContent = eligible ? "" : "Batch needs exactly one text field.";
@@ -719,17 +579,6 @@ function bars(entries: [string, number][], top: string | undefined, labelFor = (
   );
 }
 
-interface AnswerLike {
-  type: QType;
-  confidence: number;
-  action: { act_probability: number };
-  choice?: string;
-  score?: number;
-  legend?: Record<string, unknown>;
-  noul?: number;
-  probabilities?: Record<string, number>;
-}
-
 function renderAnswer(id: string, a: AnswerLike, q: { instructions?: unknown }): HTMLElement {
   const head = h("div", { class: "answer-head" }, h("span", { class: `badge ${a.type}` }, a.type === "noul" ? "yes/no" : a.type), h("span", { class: "qid" }, id), h("span", { class: "ins" }, str(q.instructions)));
   const meta = h(
@@ -757,13 +606,6 @@ function renderAnswer(id: string, a: AnswerLike, q: { instructions?: unknown }):
     body = [h("div", { class: "verdict" }, v >= 0.5 ? "Yes" : "No", h("small", {}, `P(yes) = ${v.toFixed(4)}`)), bars([["yes", v]], v >= 0.5 ? "yes" : undefined)];
   }
   return h("article", { class: `answer ${a.type}`, "aria-label": `Answer ${id}` }, head, ...body, meta);
-}
-
-interface RunOutcome {
-  label: string;
-  ms?: number;
-  result?: { answers: Record<string, AnswerLike>; usage?: { input_tokens?: number } };
-  error?: string;
 }
 
 /** One backend's full result view: metrics + answers + raw response, or an error. */
@@ -889,14 +731,6 @@ async function runBatch(questions: Record<string, unknown>): Promise<void> {
 }
 
 // ---------------------------------------------------------------- queue (history)
-interface QueueEntry {
-  id: string;
-  timestamp: number;
-  state: Json;
-  questions: Record<string, unknown>;
-  outcomes: RunOutcome[];
-}
-
 let queue: QueueEntry[] = [];
 let priorityQid = "";
 let queueSeq = 0;
@@ -909,25 +743,6 @@ function renderPriorityOptions(questions: Record<string, unknown>): void {
   sel.replaceChildren(h("option", { value: "" }, "None"), ...eligible.map(([id]) => h("option", { value: id }, id)));
   sel.value = eligible.some(([id]) => id === prev) ? prev : "";
   priorityQid = sel.value;
-}
-
-/** Normalizes a priority question's answer to 0..1 for sorting, or null if not applicable to this run. */
-function computePriorityValue(entry: QueueEntry): number | null {
-  if (!priorityQid) return null;
-  const q = entry.questions[priorityQid] as { type?: QType; criteria?: unknown[] } | undefined;
-  const a = entry.outcomes[0]?.result?.answers[priorityQid] as AnswerLike | undefined;
-  if (!q || !a) return null;
-  if (q.type === "noul") return a.noul ?? null;
-  if (q.type === "score") {
-    const levels = Array.isArray(q.criteria) ? q.criteria.length : Object.keys(a.probabilities ?? {}).length;
-    return levels > 1 ? (a.score ?? 0) / (levels - 1) : null;
-  }
-  return null;
-}
-
-function stateSummary(state: Json): string {
-  const text = typeof state === "string" ? state : Object.values(state as Record<string, Json>)[0];
-  return str(text).slice(0, 80) || "(empty)";
 }
 
 function addToQueue(state: Json, questions: Record<string, unknown>, outcomes: RunOutcome[]): void {
@@ -946,11 +761,11 @@ function renderQueue(): void {
     return;
   }
   const sorted = priorityQid
-    ? [...queue].sort((a, b) => (computePriorityValue(b) ?? -1) - (computePriorityValue(a) ?? -1))
+    ? [...queue].sort((a, b) => (computePriorityValue(b, priorityQid) ?? -1) - (computePriorityValue(a, priorityQid) ?? -1))
     : queue;
   root.replaceChildren(
     ...sorted.map((entry) => {
-      const pv = computePriorityValue(entry);
+      const pv = computePriorityValue(entry, priorityQid);
       const time = new Date(entry.timestamp).toLocaleTimeString();
       const engines = entry.outcomes.map((o) => o.label).join(" vs ");
       const remove = h(
@@ -987,47 +802,12 @@ function renderQueue(): void {
   );
 }
 
-function csvCell(v: unknown): string {
-  const s = v === undefined || v === null ? "" : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-/** Columns are the union actually seen across queued runs -- not a fixed schema (mirrors gui-demo's CSV export). */
 function exportCsv(): void {
-  const stateKeys = new Set<string>();
-  const questionKeys = new Set<string>();
-  for (const e of queue) {
-    if (e.state && typeof e.state === "object" && !Array.isArray(e.state)) Object.keys(e.state).forEach((k) => stateKeys.add(k));
-    Object.keys(e.questions).forEach((k) => questionKeys.add(k));
-  }
-  const stateCols = [...stateKeys];
-  const qCols = [...questionKeys];
-  const header = ["id", "timestamp", "engine", ...stateCols, "priorityValue", "latencyMs", ...qCols.flatMap((n) => [n, `${n}.confidence`])];
-  const rows = queue.flatMap((entry) =>
-    entry.outcomes.map((o) => {
-      const stateObj = entry.state && typeof entry.state === "object" && !Array.isArray(entry.state) ? (entry.state as Record<string, Json>) : {};
-      const answers = (o.result?.answers ?? {}) as Record<string, AnswerLike>;
-      const row = [
-        entry.id,
-        new Date(entry.timestamp).toISOString(),
-        o.label,
-        ...stateCols.map((k) => str(stateObj[k])),
-        String(computePriorityValue(entry) ?? ""),
-        String(o.ms ?? ""),
-        ...qCols.flatMap((n) => {
-          const a = answers[n];
-          const val = a?.choice ?? (a?.score !== undefined ? String(a.score) : a?.noul !== undefined ? String(a.noul) : "");
-          return [val, a?.confidence !== undefined ? String(a.confidence) : ""];
-        }),
-      ];
-      return row.map(csvCell).join(",");
-    }),
-  );
-  downloadBlob([header.join(","), ...rows].join("\n"), "text/csv", "laya-playground-queue.csv");
+  downloadBlob(queueToCsv(queue, priorityQid), "text/csv", "laya-playground-queue.csv");
 }
 
 function exportJson(): void {
-  downloadBlob(JSON.stringify(queue, null, 2), "application/json", "laya-playground-queue.json");
+  downloadBlob(queueToJson(queue), "application/json", "laya-playground-queue.json");
 }
 
 function downloadBlob(content: string, type: string, filename: string): void {
@@ -1098,7 +878,7 @@ async function main(): Promise<void> {
   $("state-json-toggle").addEventListener("click", () => setStateJsonMode(!stateJsonMode));
   document.querySelectorAll<HTMLButtonElement>("[data-add-field]").forEach((b) =>
     b.addEventListener("click", () => {
-      stateFields.push(newStateField(b.dataset.addField as SFType));
+      stateFields.push(newStateField(stateFields, b.dataset.addField as SFType));
       renderStateFields();
       persist();
       const inputs = $("state-fields").querySelectorAll<HTMLInputElement>(".sf:last-child .id");
@@ -1108,7 +888,7 @@ async function main(): Promise<void> {
   $("json-toggle").addEventListener("click", () => setJsonMode(!jsonMode));
   document.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
     b.addEventListener("click", () => {
-      drafts.push(newDraft(b.dataset.add as QType));
+      drafts.push(newDraft(drafts, b.dataset.add as QType));
       renderQuestions();
       persist();
       const inputs = $("questions").querySelectorAll<HTMLInputElement>(".q:last-child .ins");

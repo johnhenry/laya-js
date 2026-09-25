@@ -9,7 +9,8 @@
     "dev": "bun scripts/build.ts && node scripts/serve.ts dist --port 5173",
     "start": "node scripts/serve.ts dist --port 5173",
     "watch": "bun scripts/build.ts --watch",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts"
   },
   "dependencies": {
     "@johnhenry/laya": "^0.3.1",
