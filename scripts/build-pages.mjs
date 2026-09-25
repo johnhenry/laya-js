@@ -8,6 +8,7 @@
  *   <out>/snake/          examples/snake-web/dist
  *   <out>/flappy/         examples/flappy-web/dist
  *   <out>/checkers/       examples/checkers-web/dist
+ *   <out>/tetris/         examples/tetris-web/dist
  *
  *   node scripts/build-pages.mjs [--out _site] [--no-build]
  *
@@ -30,6 +31,7 @@ const APPS = [
   { workspace: "@johnhenry/example-snake-web", dir: "examples/snake-web", path: "snake" },
   { workspace: "@johnhenry/example-flappy-web", dir: "examples/flappy-web", path: "flappy" },
   { workspace: "@johnhenry/example-checkers-web", dir: "examples/checkers-web", path: "checkers" },
+  { workspace: "@johnhenry/example-tetris-web", dir: "examples/tetris-web", path: "tetris" },
 ];
 
 rmSync(out, { recursive: true, force: true });
