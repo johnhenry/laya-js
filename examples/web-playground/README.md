@@ -18,20 +18,38 @@ adapter has `shader-f16`).
 - **WebGPU detection**: explains a missing `navigator.gpu`, a missing adapter,
   or a non-secure context. Without `shader-f16`, the pill says "f32 only" and
   the f32 checkbox is ticked.
-- **State editor**: plain text or JSON (objects go through Python-identical
-  `json.dumps`, as in laya-mlx).
+- **State editor**: a typed field builder (text/number/boolean rows, add/
+  remove/rename) that collapses to a plain string when it's just the
+  default single text field -- so free text still works with zero setup.
+  "Edit as JSON" is always available as an escape hatch (objects go through
+  Python-identical `json.dumps`, as in laya-mlx).
 - **Question builder**: add choice, score and yes/no (`noul`) questions with
   criteria. Choice options can have descriptions, score levels are ordered,
   and yes/no questions have optional true/false meanings. You can also
   "Edit as JSON", which is sent verbatim so the agent's Python-compatible
   validation messages appear.
+- **Compare mode**: run the same state/questions on both the WebGPU backend
+  and `@johnhenry/laya`'s pure-TS CPU reference backend, side by side, with
+  per-column latency, answers and raw response, and the faster column
+  marked. The CPU agent (a second checkpoint download) loads lazily, only
+  while "Compare" is checked, and is disposed when unchecked.
+- **Batch mode**: run one `predict()` call per line of text sequentially,
+  each feeding the queue below. Enabled only when the state is exactly one
+  text field, since "one value per line" doesn't generalize to more fields.
+- **Result queue**: every run (single, compare, or batch) is added to an
+  in-memory queue, newest first, for this page load only. Pick any score/
+  yes-no question as the sort priority; click an entry to view its stored
+  results again. **Export JSON** downloads the full queue; **Export CSV**
+  derives columns from the union of state and question keys actually seen
+  across queued runs, not a fixed schema.
 - **Presets**: the README triage example (the `en` case of the parity
   fixtures), a German variant and a plain-text example, plus every
   `*Questions()` export of `@johnhenry/laya-presets` when it has any.
 - **Results**: a card per question with the verdict, a probability bar per
   option (score shows the expected value on a scale), confidence and act
   probability. Also shown: per-run latency, input tokens, question count and
-  the engine. The raw JSON result is collapsible. Cmd/Ctrl+Enter runs.
+  the engine. The raw request and response are both collapsible.
+  Cmd/Ctrl+Enter runs.
 - Accessible (labels, `role=meter` bars, `aria-live` results, focus rings,
   reduced motion) and responsive (one column below 900 px), with light, dark
   and system themes.
@@ -58,6 +76,19 @@ the bundle references a Node-only or native module**, such as
 `scripts/serve.ts` is a dependency-free static server (Node or Bun). The
 snake-web example reuses both scripts.
 
+### Tests
+
+```bash
+npm test -w @johnhenry/example-web-playground   # typecheck, then node --test test/*.test.ts
+```
+
+The question-draft, state-field and queue/export conversions live in
+`src/lib/{questions,queue,state-fields}.ts` with no DOM dependency, so
+they're covered directly by `node:test` (round-trips, validation errors,
+priority-value normalization, CSV column derivation) -- 40 cases, 0
+skipped. `main.ts` itself (DOM wiring, agent loading, WebGPU) has no
+automated coverage; see "Verified" below for how it's checked instead.
+
 ### GitHub Pages
 
 `node scripts/build-pages.mjs` (from the repo root) builds this app and
@@ -79,6 +110,17 @@ URLs and CDN redirects send `access-control-allow-origin` for any origin.
 - Latency for 3 questions and one batch: about 700 ms on the first run
   (pipeline compilation), then 70–100 ms.
 - No console errors.
+
+Compare mode, the structured state builder, batch mode, and the result
+queue/export (added after the above was recorded) have **not** been
+exercised interactively in a real browser -- they were built and checked in
+a sandbox without one. Each was verified by: a clean `tsc --noEmit`, a real
+`bun scripts/build.ts` (which fails on any Node-only/native import leaking
+into the bundle), a structural check that every new DOM id referenced from
+`main.ts` exists in the built HTML/JS and no removed id lingers, `node
+--check` on the bundle for syntax, and the `node:test` suite above for the
+pure logic. If you're the first to click through them, treat that as the
+real verification and update this section.
 
 ## Limits
 
