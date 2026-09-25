@@ -65,6 +65,9 @@ gpu.destroy();
     estimate. Dawn-node resolves `mapAsync` by
     polling in a busy loop (≈100% of a core under Bun, ≈33% under Node);
     this cuts process CPU during a forward by ~4× at the same latency.
+    `bench/sleep-after-large.ts` checks that a small shape right after a
+    large one runs at steady-state speed (B=3 L=16 after L=512: 1.01× on
+    Node, 1.03× on Bun; 12–19× before 0.5.1).
   - `sleepThresholdMs = 3`: sleep only when the expected wait is longer
     than this. Short readbacks (a few ms) can lose 15–60% latency to the
     sleep; raise the threshold if latency matters more than CPU.

@@ -147,6 +147,11 @@ jobs:
 
       - run: npm ci
 
+      # jsr publish runs Deno with --unstable-byonm, so an npm: import inside a
+      # JSR dependency (math-plus-tensor-cpu -> npm:@johnhenry/tensor-backend)
+      # resolves to this workspace's package, whose exports point at dist/.
+      - run: npm run build
+
       # jsr.json is generated FROM package.json, never hand-edited.
       - name: Sync jsr.json versions from package.json
         run: node scripts/sync-jsr-configs.mjs
