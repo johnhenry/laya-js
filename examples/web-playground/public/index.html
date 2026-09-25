@@ -112,6 +112,22 @@
             <p class="empty">Load a model, then run the questions against the state.</p>
           </div>
         </section>
+
+        <section class="panel" aria-labelledby="queue-h">
+          <div class="panel-head">
+            <h2 id="queue-h"><span class="step">5</span> Queue</h2>
+            <label class="small muted" for="priority-question">Priority</label>
+            <select id="priority-question"><option value="">None</option></select>
+          </div>
+          <div class="row">
+            <button id="export-json" class="btn ghost small" type="button" disabled>Export JSON</button>
+            <button id="export-csv" class="btn ghost small" type="button" disabled>Export CSV</button>
+            <button id="clear-queue" class="btn ghost small" type="button" disabled>Clear queue</button>
+          </div>
+          <div id="queue" class="queue">
+            <p class="empty">Runs you make appear here, newest first (this page's lifetime only).</p>
+          </div>
+        </section>
       </div>
     </main>
 
