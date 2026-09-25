@@ -81,13 +81,26 @@ export interface MlxBackend extends Backend<MlxTensor> {
   liveTensors(): number;
 }
 
-// mlx_dtype enum (mlx/c/array.h)
+// mlx_dtype enum (mlx/c/array.h) -- fetched from the real mlx-c source
+// (ml-explore/mlx-c) to confirm, not assumed:
+//   MLX_BOOL=0 MLX_UINT8=1 MLX_UINT16=2 MLX_UINT32=3 MLX_UINT64=4
+//   MLX_INT8=5 MLX_INT16=6 MLX_INT32=7 MLX_INT64=8 MLX_FLOAT16=9
+//   MLX_FLOAT32=10 MLX_FLOAT64=11 MLX_BFLOAT16=12 MLX_COMPLEX64=13
 const MLX_UINT32 = 3;
 /** Group sizes MLX's affine quantization supports. */
 const MLX_GROUP_SIZES = new Set([32, 64, 128]);
-const MLX_DTYPE: Record<DType, number> = { bool: 0, i32: 7, f16: 9, f32: 10, bf16: 12 };
-const FROM_MLX: Record<number, DType> = { 0: "bool", 7: "i32", 9: "f16", 10: "f32", 12: "bf16" };
-const BYTES: Record<DType, number> = { bool: 1, i32: 4, f16: 2, f32: 4, bf16: 2 };
+const MLX_DTYPE: Record<DType, number> = {
+  bool: 0, i32: 7, f16: 9, f32: 10, bf16: 12,
+  u8: 1, u16: 2, u32: 3, u64: 4, i8: 5, i16: 6, i64: 8, f64: 11,
+};
+const FROM_MLX: Record<number, DType> = {
+  0: "bool", 7: "i32", 9: "f16", 10: "f32", 12: "bf16",
+  1: "u8", 2: "u16", 3: "u32", 4: "u64", 5: "i8", 6: "i16", 8: "i64", 11: "f64",
+};
+const BYTES: Record<DType, number> = {
+  bool: 1, i32: 4, f16: 2, f32: 4, bf16: 2,
+  u8: 1, i8: 1, u16: 2, i16: 2, u32: 4, u64: 8, i64: 8, f64: 8,
+};
 const TWO32 = 4294967296;
 
 const HOST_CTOR = {
@@ -96,6 +109,14 @@ const HOST_CTOR = {
   bf16: Uint16Array,
   i32: Int32Array,
   bool: Uint8Array,
+  u8: Uint8Array,
+  i8: Int8Array,
+  u16: Uint16Array,
+  i16: Int16Array,
+  u32: Uint32Array,
+  f64: Float64Array,
+  u64: BigUint64Array,
+  i64: BigInt64Array,
 } as const;
 
 class MlxArray implements MlxTensor {
@@ -146,6 +167,12 @@ class MlxBackendImpl implements MlxBackend {
   private readonly sU16 = new Uint16Array(1);
   private readonly sI32 = new Int32Array(1);
   private readonly sU8 = new Uint8Array(1);
+  private readonly sI8 = new Int8Array(1);
+  private readonly sI16 = new Int16Array(1);
+  private readonly sU32 = new Uint32Array(1);
+  private readonly sF64 = new Float64Array(1);
+  private readonly sU64 = new BigUint64Array(1);
+  private readonly sI64 = new BigInt64Array(1);
   private readonly sdpaMaskArray = cstr("array");
   private readonly affine = cstr("affine");
   private readonly sdpaMaskNone = cstr("");
@@ -276,6 +303,14 @@ class MlxBackendImpl implements MlxBackend {
       case "bf16": this.sU16[0] = f32ToBf16Bits(v); buf = this.sU16; break;
       case "i32": this.sI32[0] = v; buf = this.sI32; break;
       case "bool": this.sU8[0] = v ? 1 : 0; buf = this.sU8; break;
+      case "u8": this.sU8[0] = v; buf = this.sU8; break;
+      case "i8": this.sI8[0] = v; buf = this.sI8; break;
+      case "u16": this.sU16[0] = v; buf = this.sU16; break;
+      case "i16": this.sI16[0] = v; buf = this.sI16; break;
+      case "u32": this.sU32[0] = v; buf = this.sU32; break;
+      case "f64": this.sF64[0] = v; buf = this.sF64; break;
+      case "u64": this.sU64[0] = BigInt(v); buf = this.sU64; break;
+      case "i64": this.sI64[0] = BigInt(v); buf = this.sI64; break;
     }
     const h = this.n.mlx_array_new_data(buf, this.base + INTS_A, 0, MLX_DTYPE[dtype]);
     if (!h) throw new Error(`backend-mlx scalar: ${this.n.takeError()}`);
@@ -295,6 +330,11 @@ class MlxBackendImpl implements MlxBackend {
   // ---- Backend: transfer / lifetime ------------------------------------------
 
   supports(dtype: DType): boolean {
+    // f64 is CPU-only on MLX -- confirmed against MLX's own docs and
+    // ml-explore/mlx#799: no Apple GPU has double-precision hardware, and
+    // float64 arrays throw if evaluated on the GPU stream. Every other
+    // dtype in MLX_DTYPE works on both devices.
+    if (dtype === "f64") return this.device === "cpu";
     return dtype in MLX_DTYPE;
   }
 
@@ -822,11 +862,12 @@ function handleBuffer(hs: number[]): Uint32Array {
 }
 
 function isFloat(d: DType): boolean {
-  return d === "f32" || d === "f16" || d === "bf16";
+  return d === "f32" || d === "f16" || d === "bf16" || d === "f64";
 }
 
+/** Widens any non-float dtype to f32; keeps f64 (and every other float) at its own precision. */
 function floatOr(d: DType): DType {
-  return d === "i32" || d === "bool" ? "f32" : d;
+  return isFloat(d) ? d : "f32";
 }
 
 const f32b = new Float32Array(1);

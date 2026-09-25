@@ -120,11 +120,20 @@ detects the two mlx-c ABIs that differ in the signatures it uses (sdpa
   arguments synchronizes the stream. `read` evaluates, makes the array
   row-contiguous and copies it into a new typed array. For the dtype
   mapping, see `HostData` in tensor-backend.
-- **dtypes.** `supports()` is true for f32, f16, bf16, i32 and bool. Ops run
-  in the input dtype, with MLX's type promotion. `softmax` uses
+- **dtypes.** `supports()` is true for f32, f16, bf16, i32, bool, u8, i8,
+  u16, i16, u32, u64, i64 and (on `device: "cpu"` only — see below) f64. Ops
+  run in the input dtype, with MLX's type promotion. `softmax` uses
   `precise=true` (f32 accumulation). `scale` and `relu` use a scalar of the
   input's dtype, so f16 stays f16, as with MLX's weakly typed Python
   scalars.
+- **f64 is CPU-only.** No Apple GPU has double-precision hardware, and
+  MLX's own `float64` arrays throw if evaluated on the GPU stream (confirmed
+  against [MLX's data types docs](https://ml-explore.github.io/mlx/build/html/python/data_types.html)
+  and [ml-explore/mlx#799](https://github.com/ml-explore/mlx/issues/799)).
+  `supports("f64")` is therefore `this.device === "cpu"` — construct the
+  backend with `{ device: "cpu" }` to use f64 at all; attempting it on the
+  default `"gpu"` device throws the same native mlx-c error MLX itself
+  raises, not a backend-mlx-specific message.
 - **Fused kernels.**
   - `layerNorm` uses `mlx.fast.layer_norm`.
   - `rope` uses `mlx.fast.rope` with `traditional=false`, `dims = Dh`,
