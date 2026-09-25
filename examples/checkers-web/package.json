@@ -1,0 +1,26 @@
+{
+  "name": "@johnhenry/example-checkers-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Laya Checkers demo in the browser on WebGPU: canvas board, live move probabilities, and three interchangeable opponents (Laya, a bot, a human)",
+  "type": "module",
+  "scripts": {
+    "build": "bun ../web-playground/scripts/build.ts --root .",
+    "dev": "bun ../web-playground/scripts/build.ts --root . && node ../web-playground/scripts/serve.ts dist --port 5176",
+    "start": "node ../web-playground/scripts/serve.ts dist --port 5176",
+    "watch": "bun ../web-playground/scripts/build.ts --root . --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@johnhenry/laya": "^0.3.1",
+    "@johnhenry/laya-core": "^0.1.1"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  }
+}

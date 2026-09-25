@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Laya Checkers</title>
+    <meta name="description" content="Checkers with real Laya predictions, a scripted bot, and/or a human player, on WebGPU in the browser." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23140a08'/%3E%3Ccircle cx='12' cy='12' r='5' fill='%23e0483e'/%3E%3Ccircle cx='21' cy='21' r='5' fill='%23efe6da'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <header class="top">
+        <span class="muted">LAYA / LOCAL INTELLIGENCE</span>
+        <span id="state" class="state" role="status">NOT LOADED</span>
+      </header>
+
+      <div id="unsupported" class="banner" role="alert" hidden></div>
+
+      <main class="grid">
+        <section class="left" aria-label="Game">
+          <div class="title-row">
+            <h1>C H E C K E R S</h1>
+            <span id="round" class="muted mono">ROUND 01</span>
+          </div>
+          <div class="board-wrap">
+            <canvas id="board" width="560" height="560" role="img" aria-label="Checkers board"></canvas>
+            <div id="overlay" class="overlay">
+              <div class="overlay-card">
+                <p class="overlay-title">Laya plays Checkers on your GPU</p>
+                <p class="muted small">Choose who plays each side, then load a checkpoint if either seat is Laya. Weights (≈644 MB) download once from huggingface.co and stay cached in this browser.</p>
+                <div class="seats">
+                  <label class="small muted" for="red-seat">Red</label>
+                  <select id="red-seat"><option value="laya" selected>Laya</option><option value="bot">Bot</option><option value="human">Human</option></select>
+                  <label class="small muted" for="black-seat">Black</label>
+                  <select id="black-seat"><option value="laya">Laya</option><option value="bot" selected>Bot</option><option value="human">Human</option></select>
+                </div>
+                <label class="small muted" for="model">Checkpoint</label>
+                <select id="model"></select>
+                <button id="load" class="btn primary" type="button">Play</button>
+                <progress id="progress" max="1" value="0" hidden></progress>
+                <p id="progress-text" class="small muted mono" aria-live="polite"></p>
+              </div>
+            </div>
+          </div>
+          <p id="prompt" class="prompt muted small" hidden>Your move: click a piece, then a highlighted square.</p>
+        </section>
+
+        <section class="right" aria-label="Model">
+          <div>
+            <p class="red strong">Laya · <span id="engine">WebGPU</span></p>
+            <p id="hardware" class="muted small">Browser · Local</p>
+          </div>
+          <p class="exec"><span class="muted">TO MOVE</span> <b id="to-move" class="red">RED</b></p>
+          <div>
+            <p class="row-head"><span>LAST MOVE</span><span class="muted" id="last-actor"></span></p>
+            <p id="last-move" class="mono">—</p>
+            <span id="shield" class="shield" hidden>SHIELD</span>
+          </div>
+          <div class="meter">
+            <p class="muted">MATERIAL AT RISK</p>
+            <div class="meter-row"><div class="track"><div id="risk" class="fill amber"></div></div><span id="risk-v" class="mono">0.00</span></div>
+          </div>
+          <dl class="stats mono">
+            <dt>INFERENCE</dt><dd id="inference">—</dd>
+            <dt>DECISIONS</dt><dd id="rate">—</dd>
+            <dt>INPUT TOKENS</dt><dd id="tokens">—</dd>
+            <dt>NETWORK</dt><dd id="network" class="green">LOCAL</dd>
+          </dl>
+          <p class="muted">Laya + mandatory-capture shield</p>
+          <p class="amber mono">Shield interventions <span id="interventions">0000</span></p>
+          <p class="muted small mono">Wins red <span id="red-wins">0</span> · black <span id="black-wins">0</span> · Turns <span id="turns">0</span></p>
+        </section>
+      </main>
+
+      <footer class="controls" aria-label="Controls">
+        <button id="new-game" class="btn" type="button" disabled>New game</button>
+        <label class="ctl"><input id="max" type="checkbox" /> Max speed</label>
+        <label class="ctl" for="pace">Pace <input id="pace" type="range" min="1" max="10" step="1" value="2" /> <span id="pace-v" class="mono">2/s</span></label>
+      </footer>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
