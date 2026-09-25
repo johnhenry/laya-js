@@ -308,6 +308,42 @@ else t.describe("webgpu kernels (large / edge paths)", () => {
     }
   });
 
+  t.it("u32: cumsum is bit-exact across the full range, including overflow wraparound; sort stays correctly ordered but loses exact distinctness above 2^24", async () => {
+    const bk = await get();
+    const vals = [
+      0, 1, 100,
+      16777215, 16777216, 16777217, // around f32's 24-bit exact-integer limit
+      2147483647, 2147483648, 2147483649, // around 2^31 (signed i32 boundary -- confirms no sign-flip)
+      4294967294, 4294967295, // u32::MAX and one below
+      3000000000, 1000000000, 500000000,
+    ];
+    const n = vals.length;
+    const data = Uint32Array.from(vals);
+
+    // cumsum: real WGSL u32 accumulation, must match exactly, including wraparound past u32::MAX.
+    const xCumsum = await bk.fromHost({ dtype: "u32", shape: [1, n], data });
+    const cs = await bk.read(bk.cumsum(xCumsum, 1));
+    assert.equal(cs.dtype, "u32");
+    let acc = 0n;
+    const wantCumsum = vals.map((v) => {
+      acc = (acc + BigInt(v)) & 0xffffffffn; // u32 wraps on overflow
+      return Number(acc);
+    });
+    assert.deepEqual([...cs.data], wantCumsum, "cumsum must be bit-exact for u32, including overflow wraparound");
+
+    // sort: order must always be correct (monotonic even through f32 rounding);
+    // values that round to the same float above 2^24 are allowed to tie.
+    const xSort = await bk.fromHost({ dtype: "u32", shape: [n], data });
+    const sorted = [...(await bk.read(bk.sort(xSort, 0))).data] as number[];
+    const nondecreasing = sorted.every((v, i) => i === 0 || v >= sorted[i - 1]!);
+    assert.ok(nondecreasing, `sort output must be non-decreasing: ${sorted}`);
+    const wantMultiset = [...vals].sort((a, b) => a - b);
+    // Below 2^24 every value is f32-exact, so those entries must match exactly.
+    for (let i = 0; i < wantMultiset.length; i++) {
+      if (wantMultiset[i]! < 2 ** 24) assert.equal(sorted[i], wantMultiset[i], `sort below 2^24 must be exact at [${i}]`);
+    }
+  });
+
   t.it("2-D launch grid (> 65535 workgroups) for elementwise ops", async () => {
     const bk = await get();
     const n = 65536 * 256 + 1000;

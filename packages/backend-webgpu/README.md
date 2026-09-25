@@ -147,7 +147,7 @@ gpu.destroy();
 | `bf16` | `f32` | Converted on upload. Every op producing bf16 rounds its output to bf16 precision (round-to-nearest-even). `read` returns raw bf16 bits (`Uint16Array`). |
 | `i32` | `i32` | |
 | `bool` | `u32` (0/1) | Uses 4 bytes per element. |
-| `u32` | `u32` | Added 2026-09-25 — a real core WGSL type, unlike the other new dtypes below. `add`/`sub`/`cumsum`/copies compute correctly for the full u32 range; `sort` does not yet (see Limitations). |
+| `u32` | `u32` | Added 2026-09-25 — a real core WGSL type, unlike the other new dtypes below. `add`/`sub`/`cumsum`/copies are bit-exact for the full u32 range, including overflow wraparound (`cumsum` accumulates as real WGSL `u32`, verified against values that overflow past `u32::MAX` and wrap correctly). `sort` is directionally correct everywhere but loses exact distinctness above 2²⁴ (see Limitations). |
 
 **Numerics**
 - Every kernel loads storage values, computes in f32 (or i32 for
@@ -472,14 +472,16 @@ L=512 18.8 s.
   either (see `@johnhenry/backend-mlx`'s README). `u32` is the one dtype
   added 2026-09-25 that WebGPU genuinely gains, since it's a real core
   WGSL type.
-- `sort`/`argsort` on `u32` is not verified correct for values in the upper
-  half of the 32-bit range (≥ 2³¹): the fast bitonic-sort kernel's ordering
-  comparison is not bit-identical between signed and unsigned
-  interpretation the way `add`/`sub`/`cumsum`/copies are, and there is no
-  real unsigned compute type wired through the WGSL codegen yet (`CType` is
-  `"f32" | "i32"` only). `add`/`sub`/`cumsum`/`equal`/`less`/etc. and plain
-  data movement (`reshape`/`transpose`/`slice`/`concat`/`cast`) are
-  unaffected and correct for the full u32 range.
+- `sort`/`argsort` on `u32` compares in f32 (not a real unsigned compute
+  type), so the *order* is always correct (float rounding is monotonic —
+  confirmed empirically, including values spanning 0 to `u32::MAX`), but
+  distinct u32 values above 2²⁴ (f32's 24-bit exact-integer limit) that
+  round to the same float compare as equal and are not guaranteed to keep
+  their relative order among themselves. `cumsum` does not have this
+  limitation — it accumulates as real WGSL `u32` (see the dtype table
+  above) — nor do `add`/`sub`/`equal`/`less`/etc. or plain data movement
+  (`reshape`/`transpose`/`slice`/`concat`/`cast`), all bit-exact for the
+  full u32 range.
 - Quantized Linears match or beat fp16 for most shapes and M, but not all:
   0.92–0.97× on the large-N Laya shapes around M = 33 and 0.83–0.97× in a
   few cells at M = 93–128 (table above). The kernel choice

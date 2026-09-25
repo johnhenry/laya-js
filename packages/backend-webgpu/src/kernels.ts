@@ -12,7 +12,16 @@
 import type { BindingSpec, KernelSource, ParamSpec } from "./runtime.ts";
 
 export type SType = "f32" | "f16" | "i32" | "u32";
-export type CType = "f32" | "i32";
+/**
+ * "u32" is used sparingly (only where real unsigned arithmetic actually
+ * matters, currently `cumsumKernel`'s accumulator for genuine u32 data) --
+ * f32/i32 are still the default for everything else, since adding "u32"
+ * as a general third option would silently change comparison semantics in
+ * kernels that assume a binary choice (see `sortKernel`'s `big` sentinel
+ * and `st()`'s bool-collapse branch, both of which switch on `c === "i32"`
+ * specifically and would misbehave for a `c` of "u32" they don't expect).
+ */
+export type CType = "f32" | "i32" | "u32";
 /**
  * Storage kind + whether stores must round to bf16 precision. `bool`
  * distinguishes the two different things `st: "u32"` can mean: the original
@@ -1919,7 +1928,11 @@ export function argReduceKernel(op: "argmax" | "argmin", inp: Kind): KernelSourc
 /** Inclusive prefix sum along R of [outer, R, inner]: one thread per (outer, inner) lane, f32/i32 accumulator. */
 export function cumsumKernel(inp: Kind, out: Kind): KernelSource {
   const WG = 256;
-  const c: CType = out.st === "i32" ? "i32" : "f32";
+  // Genuine u32 (not the bool-packed-as-u32 kind) accumulates as real WGSL
+  // u32, not f32: f32's 24-bit mantissa silently loses precision on sums
+  // past ~16.7M and saturates/corrupts well before real u32 overflow --
+  // confirmed empirically (a real bug this fixes, not a hypothetical).
+  const c: CType = out.st === "i32" ? "i32" : out.st === "u32" && !out.bool ? "u32" : "f32";
   const body = `const WG = ${WG}u;\n${out.bf16 ? HELPERS : ""}\n${ENTRY(WG)} {\n  let lid = lid3;${FLAT_IDX}
   if (i >= P.n) { return; }
   let o = i / P.inner; let inn = i % P.inner;
