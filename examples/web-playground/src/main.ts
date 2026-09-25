@@ -371,6 +371,20 @@ async function cachedRepos(): Promise<Set<string>> {
   return out;
 }
 
+/** Files in the weights cache and their total size (from Content-Length; bodies are not read). */
+async function cachedBytes(): Promise<{ files: number; total: number }> {
+  let files = 0;
+  let total = 0;
+  try {
+    const cache = await caches.open("hf-cache");
+    for (const req of await cache.keys()) {
+      files++;
+      total += Number((await cache.match(req))?.headers.get("content-length") ?? 0);
+    }
+  } catch {}
+  return { files, total };
+}
+
 async function renderCheckpoints(): Promise<void> {
   const cached = await cachedRepos();
   const saved = store.get("repo") ?? CHECKPOINTS[0]!.repo;
@@ -629,11 +643,36 @@ async function main(): Promise<void> {
     }
   });
   $("load").addEventListener("click", loadModel);
-  $("clear-cache").addEventListener("click", async () => {
-    if (!confirm("Delete the downloaded model weights from this browser?")) return;
+  // Two-click confirm in the page, not window.confirm(): embedded webviews,
+  // sandboxed iframes and "prevent additional dialogs" make confirm() return
+  // false without showing anything, which made this button a silent no-op.
+  const clearBtn = $<HTMLButtonElement>("clear-cache");
+  const clearLabel = clearBtn.textContent!;
+  let armed: ReturnType<typeof setTimeout> | undefined;
+  let reset: ReturnType<typeof setTimeout> | undefined;
+  const disarm = (text = clearLabel) => {
+    clearTimeout(armed);
+    clearTimeout(reset);
+    armed = undefined;
+    clearBtn.textContent = text;
+    if (text !== clearLabel) reset = setTimeout(() => (clearBtn.textContent = clearLabel), 4000);
+  };
+  clearBtn.addEventListener("click", async () => {
+    if (loading) return disarm("Wait for the model to finish loading");
+    if (!armed) {
+      const { files, total } = await cachedBytes();
+      if (!files) return disarm("Nothing cached");
+      clearBtn.textContent = `Delete ${total ? formatBytes(total) : `${files} files`} of cached weights? Click again`;
+      armed = setTimeout(() => disarm(), 5000);
+      return;
+    }
+    disarm("Clearing…");
     try {
       await caches.delete("hf-cache");
-    } catch {}
+      disarm(loadedRepo ? "Cleared (the loaded model stays in memory until reload)" : "Cleared");
+    } catch (e) {
+      disarm(`Could not clear: ${(e as Error).message}`);
+    }
     void renderCheckpoints();
   });
 
