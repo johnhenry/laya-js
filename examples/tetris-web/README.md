@@ -13,12 +13,16 @@ follows the terminal layout.
 - **Decisions are per piece, not per tick** — see
   `../tetris-terminal/README.md`'s explanation of why; there's nothing
   browser-specific about this, it's the shared core's design.
-- **The fall is animated, the decision isn't** — once the model picks a
-  placement, the piece visibly descends from the spawn row to its resting
-  row (as an overlay drawn on top of the locked board, not yet part of the
-  real game state) instead of snapping there instantly. Hold **↓** to
-  speed the fall up (a soft drop, `~12 ms`/row instead of `~45 ms`) — there
-  is no hard-drop key, so it's never literally instant.
+- **The fall and the rotation are animated, the decision isn't** — once the
+  model picks a placement, if the chosen rotation isn't the piece's
+  default "0" orientation, it briefly shows "0" first (skipped when that
+  wouldn't even fit at the target column) before snapping to the chosen
+  rotation, then visibly descends from the spawn row to its resting row —
+  all as an overlay drawn on top of the locked board, not yet part of the
+  real game state, instead of appearing there fully formed and instant.
+  Hold **↓** to speed both up (a soft drop, `~12 ms`/row instead of
+  `~45 ms`) — there is no hard-drop/instant-rotate key, so neither is ever
+  literally instant.
 - **Side panel**: active piece and next-5 preview, the executed placement
   (with a `SHIELD` tag when the shield overrode the model), topping-out
   risk, line-clear likelihood, inference ms, a live decisions/s counter,

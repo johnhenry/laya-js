@@ -28,15 +28,20 @@ per-tick, applied one level further: Tetris's placement space (9-34
 reachable placements depending on piece and board state) is naturally
 enumerable as `choice` criteria, just like Checkers' legal-hop set.
 
-**The decision is instant; the fall doesn't have to look it.** Once the
-model picks a placement, `cli.ts` animates the piece's descent from the
-spawn row down to its resting row (`~45 ms`/row) before actually locking it
-into the board — a presentation-layer detail with no effect on the
-one-`predict()`-per-piece decision above, and no new game logic (the
+**The decision is instant; the fall (and the rotation) doesn't have to look
+it.** Once the model picks a placement, `cli.ts` shows it in two stages,
+neither baked in from the first frame: if the chosen rotation isn't the
+piece's default "0" orientation, it briefly appears in "0" first, then
+snaps to the chosen rotation (skipped when the default orientation
+wouldn't even fit at that column, e.g. an I-piece landing vertically at
+the board's right edge — `core/pieces.ts`'s `fitsAtColumn` checks this);
+then it descends from the spawn row to its resting row (`~45 ms`/row).
+Neither step is new game logic: the rotation preview is just showing an
+alternate, already-known shape at the same position, and the fall's
 straight-down path is already guaranteed clear by the drop-simulation that
-found the placement, so the animation never needs to re-check collisions).
-Holding **↓** shortens the per-row delay to `~12 ms` — a soft drop — but
-there's no hard-drop key: the fall is never literally instant.
+found the placement, so nothing needs re-checking. Holding **↓** speeds up
+both — but there's no hard-drop/instant-rotate key, so neither is ever
+truly instant.
 
 ## The engine
 
@@ -105,14 +110,17 @@ verified against the **post**-clear board, a constructed
 safe-empty-but-not-game-over scenario, a real (non-clearing) block-out
 reached via an actual `applyPlacement()` call — not just a directly
 constructed pathological board — 7-bag determinism and completeness over
-1,000+ bags, the shield's guard/override/empty-safe-set behavior, and a
-full-game smoke-play test (a simple lowest-resulting-height heuristic)
-across 6 seeds. **19 cases, 0 skipped** — no Python reference exists, so
-there's no fixture-parity tier.
+1,000+ bags, the shield's guard/override/empty-safe-set behavior,
+`fitsAtColumn`'s board-bounds checks used by the drop animation's rotation
+preview (a real bug — an out-of-bounds preview overflowing into the side
+panel — caught by testing the renderer manually, then given permanent
+coverage here), and a full-game smoke-play test (a simple
+lowest-resulting-height heuristic) across 6 seeds. **20 cases, 0 skipped**
+— no Python reference exists, so there's no fixture-parity tier.
 
 ## Verified so far
 
-- `npm run typecheck` clean; `node --test test/*.test.ts` 19/19 pass.
+- `npm run typecheck` clean; `node --test test/*.test.ts` 20/20 pass.
 - A real headless run against `aac6fef/laya-multilingual-mlx` on **WebGPU**
   (`--backend webgpu --headless --episodes 1 --steps 3`) completed end to
   end: agent loaded in 1.5 s, `predict()` accepted the compact prompt's

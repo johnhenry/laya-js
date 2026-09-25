@@ -15,6 +15,7 @@ import {
   buildPrompt,
   decisionFrom,
   emptyBoard,
+  fitsAtColumn,
   legalPlacements,
   placementKey,
   shapeOf,
@@ -98,6 +99,15 @@ test("T/J/L board-edge bounds hold for every one of their 4 rotations", () => {
     assert.equal(byRotation.size, 4, `${kind} should have placements in all 4 rotations`);
     for (const placements of byRotation.values()) assert.ok(placements.length > 0);
   }
+});
+
+test("fitsAtColumn agrees with the board bounds a wider/narrower rotation would actually need (regression: the drop-animation's rotation preview overflowed the board at edge columns)", () => {
+  assert.equal(fitsAtColumn("I", "0", 9), false); // horizontal I is 4 wide, can't start at the last column
+  assert.equal(fitsAtColumn("I", "0", 6), true); // its rightmost valid horizontal start
+  assert.equal(fitsAtColumn("I", "R", 9), true); // vertical I is 1 wide, fits anywhere
+  assert.equal(fitsAtColumn("O", "0", 8), true); // O's rightmost valid column
+  assert.equal(fitsAtColumn("O", "0", 9), false); // O is 2 wide
+  assert.equal(fitsAtColumn("T", "0", -1), false); // never valid off the left edge either
 });
 
 // ---------------------------------------------------------------- line clears

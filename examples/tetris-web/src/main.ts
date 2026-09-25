@@ -4,7 +4,7 @@
  * WebGPU. Decisions are made once per piece, not once per tick -- see
  * tetris-terminal/src/core/game.ts for why.
  */
-import { SPAWN_ROW, TetrisGame, LayaPolicy, TetrisSession, shapeOf, type Decision, type GameSnapshot, type PieceKind, type Placement } from "../../tetris-terminal/src/core/index.ts";
+import { SPAWN_ROW, TetrisGame, LayaPolicy, TetrisSession, fitsAtColumn, shapeOf, type Decision, type GameSnapshot, type PieceKind, type Placement } from "../../tetris-terminal/src/core/index.ts";
 import { detectWebGpu } from "../../web-playground/src/lib/gpu.ts";
 import { loadBrowserAgent, type BrowserAgent } from "../../web-playground/src/lib/loader.ts";
 import { CHECKPOINTS, formatBytes } from "../../web-playground/src/lib/models.ts";
@@ -37,6 +37,8 @@ let fallingPiece: { kind: PieceKind; row: number; col: number; rotation: Placeme
 let downHeld = false;
 const NORMAL_ROW_MS = 45;
 const FAST_ROW_MS = 12;
+const ROTATE_MS = 180;
+const ROTATE_FAST_MS = 40;
 
 // ------------------------------------------------------------------ rendering
 const canvas = $<HTMLCanvasElement>("board");
@@ -187,10 +189,18 @@ async function loop(): Promise<void> {
  * straight to instant.
  */
 async function animateDrop(target: Placement): Promise<void> {
-  for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) {
-    fallingPiece = { kind: target.kind, rotation: target.rotation, col: target.col, row };
+  const frames: { rotation: Placement["rotation"]; row: number; normalMs: number; fastMs: number }[] = [];
+  // Only preview the default "0" orientation if it actually fits at this column -- e.g. an
+  // I-piece landing vertically near the right edge has no room to also show horizontally.
+  if (target.rotation !== "0" && fitsAtColumn(target.kind, "0", target.col)) {
+    frames.push({ rotation: "0", row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
+  }
+  frames.push({ rotation: target.rotation, row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
+  for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) frames.push({ rotation: target.rotation, row, normalMs: NORMAL_ROW_MS, fastMs: FAST_ROW_MS });
+  for (const f of frames) {
+    fallingPiece = { kind: target.kind, rotation: f.rotation, col: target.col, row: f.row };
     dirty = true;
-    await sleep(downHeld ? FAST_ROW_MS : NORMAL_ROW_MS);
+    await sleep(downHeld ? f.fastMs : f.normalMs);
   }
   fallingPiece = null;
 }

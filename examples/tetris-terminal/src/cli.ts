@@ -13,6 +13,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { SPAWN_ROW, TetrisGame } from "./core/game.ts";
+import { fitsAtColumn, type RotationLabel } from "./core/pieces.ts";
 import { DEFAULT_MODEL, LayaPolicy, type Decision, type PromptStyle } from "./core/policy.ts";
 import { TetrisSession } from "./core/session.ts";
 import { Keyboard } from "./keyboard.ts";
@@ -169,22 +170,35 @@ async function main(argv: string[]): Promise<number> {
     process.on("SIGINT", onSigint);
 
     // Animate the piece's descent instead of snapping straight to its resting row: the model
-    // decides the FINAL placement in one call (no per-tick predictions -- see core/game.ts), but
-    // that's a decision-efficiency choice, not a reason the viewer has to see it teleport. Holding
-    // Down speeds the fall up (a soft drop), but never skips straight to instant.
+    // decides the FINAL placement (rotation AND column) in one call (no per-tick predictions --
+    // see core/game.ts), but that's a decision-efficiency choice, not a reason the viewer has to
+    // see it teleport there fully formed. Two things are shown as distinct steps, not baked in
+    // from frame one: the rotation (spawns in the default "0" orientation, then snaps to the
+    // chosen one, if different) and the fall. Holding Down speeds both up, but never skips
+    // straight to instant.
     const NORMAL_ROW_MS = 45;
     const FAST_ROW_MS = 12;
+    const ROTATE_MS = 180;
+    const ROTATE_FAST_MS = 40;
     async function animateDrop(board: ReturnType<TetrisGame["snapshot"]>, decision: Decision): Promise<void> {
       const target = decision.executed;
-      for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) {
+      const frames: { rotation: RotationLabel; row: number; normalMs: number; fastMs: number }[] = [];
+      // Only preview the default "0" orientation if it actually fits at this column -- e.g. an
+      // I-piece landing vertically near the right edge has no room to also show horizontally.
+      if (target.rotation !== "0" && fitsAtColumn(target.kind, "0", target.col)) {
+        frames.push({ rotation: "0", row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
+      }
+      frames.push({ rotation: target.rotation, row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
+      for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) frames.push({ rotation: target.rotation, row, normalMs: NORMAL_ROW_MS, fastMs: FAST_ROW_MS });
+      for (const f of frames) {
         const pressed = keys?.read().toLowerCase() ?? "";
         if (pressed.includes("q") || pressed.includes("\x03")) {
           quit = true;
           return;
         }
         const fast = pressed.includes("\x1b[b") || pressed.includes("s");
-        draw(compose(board, decision, stats, { kind: target.kind, rotation: target.rotation, col: target.col, row }).ansi(!noColor));
-        await sleep(fast ? FAST_ROW_MS : NORMAL_ROW_MS);
+        draw(compose(board, decision, stats, { kind: target.kind, rotation: f.rotation, col: target.col, row: f.row }).ansi(!noColor));
+        await sleep(fast ? f.fastMs : f.normalMs);
       }
     }
 

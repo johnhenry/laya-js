@@ -67,6 +67,20 @@ export function shapeOf(kind: PieceKind, rotation: RotationLabel): readonly Shap
   return shape;
 }
 
+/**
+ * Whether `kind` at `rotation` stays within the board's columns when placed
+ * with its bounding box starting at `col` -- used by the terminal/web UIs
+ * to decide whether it's safe to preview a piece in a DIFFERENT rotation
+ * than the one it will actually land in (e.g. showing the default "0"
+ * orientation briefly before snapping to the model's chosen rotation).
+ * `legalPlacements` never needs this itself: it only ever evaluates a
+ * rotation at columns already known to fit it.
+ */
+export function fitsAtColumn(kind: PieceKind, rotation: RotationLabel, col: number): boolean {
+  const cols = shapeOf(kind, rotation).map(([, c]) => c);
+  return col + Math.min(...cols) >= 0 && col + Math.max(...cols) < BOARD_WIDTH;
+}
+
 export function emptyBoard(): Board {
   return Array.from({ length: BOARD_HEIGHT }, () => Array<Cell>(BOARD_WIDTH).fill(null));
 }
