@@ -14,7 +14,7 @@ adapter has `shader-f16`).
   `https://huggingface.co/<repo>/resolve/<commit>/…` through
   `@johnhenry/hf-cache`'s browser store (Cache API, cache name `hf-cache`).
   A reload loads from the cache (about 1 s instead of about 35 s), and the
-  card shows "cached in this browser". "Clear cached weights" deletes them.
+  card shows "cached in this browser". "Clear cached weights" deletes them (click twice to confirm).
 - **WebGPU detection**: explains a missing `navigator.gpu`, a missing adapter,
   or a non-secure context. Without `shader-f16`, the pill says "f32 only" and
   the f32 checkbox is ticked.
