@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Laya Flappy Bird</title>
+    <meta name="description" content="Flappy Bird driven by real Laya predictions on WebGPU, in the browser." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23081018'/%3E%3Crect x='20' y='4' width='5' height='24' fill='%2334d399'/%3E%3Ccircle cx='12' cy='16' r='5' fill='%23fbbf6d'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <header class="top">
+        <span class="muted">LAYA / LOCAL INTELLIGENCE</span>
+        <span id="state" class="state" role="status">NOT LOADED</span>
+      </header>
+
+      <div id="unsupported" class="banner" role="alert" hidden></div>
+
+      <main class="grid">
+        <section class="left" aria-label="Game">
+          <div class="title-row">
+            <h1>F L A P P Y   B I R D</h1>
+            <span id="round" class="muted mono">ROUND 01</span>
+          </div>
+          <div class="board-wrap">
+            <canvas id="board" width="640" height="320" role="img" aria-label="Flappy Bird board"></canvas>
+            <div id="overlay" class="overlay">
+              <div class="overlay-card">
+                <p class="overlay-title">Laya plays Flappy Bird on your GPU</p>
+                <p class="muted small">Every tick, a lookahead planner classifies flap/no-flap as safe or not; the Laya checkpoint picks the action. Weights (≈644 MB) download once from huggingface.co and stay cached in this browser.</p>
+                <label class="small muted" for="model">Checkpoint</label>
+                <select id="model"></select>
+                <button id="load" class="btn primary" type="button">Load &amp; play</button>
+                <progress id="progress" max="1" value="0" hidden></progress>
+                <p id="progress-text" class="small muted mono" aria-live="polite"></p>
+              </div>
+            </div>
+          </div>
+          <div class="scores">
+            <div><span class="label">SCORE</span><span id="score" class="big sky">000</span></div>
+            <div><span class="label">BEST</span><span id="best" class="big muted">000</span></div>
+          </div>
+        </section>
+
+        <section class="right" aria-label="Model">
+          <div>
+            <p class="sky strong">Laya · <span id="engine">WebGPU</span></p>
+            <p id="hardware" class="muted small">Browser · Local</p>
+          </div>
+          <div>
+            <p class="row-head"><span>NEXT ACTION</span><span class="muted">MODEL PROBABILITIES</span></p>
+            <ul id="probs" class="probs"></ul>
+          </div>
+          <p class="exec"><span class="muted">EXECUTING</span> <b id="executed" class="sky">—</b> <span id="shield" class="shield" hidden>SHIELD</span></p>
+          <div class="meter">
+            <p class="muted">COLLISION RISK</p>
+            <div class="meter-row"><div class="track"><div id="risk" class="fill amber"></div></div><span id="risk-v" class="mono">0.00</span></div>
+          </div>
+          <div class="meter">
+            <p class="muted">GAP ALIGNED</p>
+            <div class="meter-row"><div class="track"><div id="aligned" class="fill green"></div></div><span id="aligned-v" class="mono green">0.00</span></div>
+          </div>
+          <dl class="stats mono">
+            <dt>INFERENCE</dt><dd id="inference">—</dd>
+            <dt>DECISIONS</dt><dd id="rate">—</dd>
+            <dt>INPUT TOKENS</dt><dd id="tokens">—</dd>
+            <dt>NETWORK</dt><dd id="network" class="green">LOCAL</dd>
+          </dl>
+          <p id="guard-label" class="muted">Laya + lookahead shield</p>
+          <p class="amber mono">Shield interventions <span id="interventions">0000</span></p>
+          <p class="muted small mono">Deaths <span id="deaths">0</span> · Steps <span id="steps">0</span></p>
+        </section>
+      </main>
+
+      <footer class="controls" aria-label="Controls">
+        <button id="play" class="btn" type="button" disabled aria-keyshortcuts="Space">Pause <kbd>Space</kbd></button>
+        <button id="reset" class="btn" type="button" disabled aria-keyshortcuts="R">Reset <kbd>R</kbd></button>
+        <label class="ctl"><input id="max" type="checkbox" /> Max speed</label>
+        <label class="ctl" for="fps">Pace <input id="fps" type="range" min="1" max="60" step="1" value="20" aria-keyshortcuts="ArrowUp ArrowDown" /> <span id="fps-v" class="mono">20/s</span></label>
+        <label class="ctl"><input id="unassisted" type="checkbox" /> Shield off</label>
+        <span class="muted small hint">SPACE pause · ↑/↓ speed · R reset</span>
+      </footer>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

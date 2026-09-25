@@ -1,0 +1,26 @@
+{
+  "name": "@johnhenry/example-flappy-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Laya Flappy Bird demo in the browser on WebGPU: canvas board, live action probabilities, ticks/s and shield interventions",
+  "type": "module",
+  "scripts": {
+    "build": "bun ../web-playground/scripts/build.ts --root .",
+    "dev": "bun ../web-playground/scripts/build.ts --root . && node ../web-playground/scripts/serve.ts dist --port 5175",
+    "start": "node ../web-playground/scripts/serve.ts dist --port 5175",
+    "watch": "bun ../web-playground/scripts/build.ts --root . --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@johnhenry/laya": "^0.3.1",
+    "@johnhenry/laya-core": "^0.1.1"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  }
+}
