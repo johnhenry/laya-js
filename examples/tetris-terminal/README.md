@@ -102,16 +102,26 @@ there's no fixture-parity tier.
 ## Verified so far
 
 - `npm run typecheck` clean; `node --test test/*.test.ts` 19/19 pass.
-- A real headless run against `aac6fef/laya-multilingual-mlx` on the
-  **CPU** reference backend (`--backend cpu --headless --episodes 1
-  --steps 3`) completed end to end: agent loaded, `predict()` accepted the
-  compact prompt's `choice`+`noul` questions over the enumerated placement
-  set, and the shield ran against real output.
+- A real headless run against `aac6fef/laya-multilingual-mlx` on **WebGPU**
+  (`--backend webgpu --headless --episodes 1 --steps 3`) completed end to
+  end: agent loaded in 1.5 s, `predict()` accepted the compact prompt's
+  `choice`+`noul` questions over the enumerated placement set, and the
+  shield ran against real output — 3 pieces, 0 interventions, inference
+  p50 591 ms. The CPU reference backend was tried first but abandoned for
+  this smoke test: Tetris's prompt is far larger than Snake's/Flappy
+  Bird's/Checkers' (up to ~34 `choice` criteria vs. single digits), and a
+  `--steps 3` CPU run was still running after several minutes with no
+  sign of finishing, so it was killed rather than left blocking — a real,
+  worth-noting cost of this game's larger placement-enumeration prompt
+  that the other three don't have. CPU is presumably still correct, just
+  meaningfully slower here than for the other games; someone with more
+  patience (or a machine without a WebGPU-limited CPU-reference-only path)
+  should confirm it directly and update this note.
 - **Not yet done**: an interactive terminal session (this was built and
-  checked in a sandbox without an attached TTY), and a real MLX/WebGPU
-  timing run (only the CPU backend was exercised here). If you're the
-  first to run it interactively or on MLX/WebGPU, treat that as the real
-  verification and update this section with real numbers, mirroring
+  checked in a sandbox without an attached TTY), and a real MLX timing
+  run. If you're the first to run it interactively or on MLX, treat that
+  as the real verification and update this section with real numbers,
+  mirroring
   `snake-terminal/README.md`'s "Measured" table.
 
 ## Limits
