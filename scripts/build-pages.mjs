@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
  * Assemble the GitHub Pages site (https://johnhenry.github.io/laya-js/) from
- * the two browser examples:
+ * the browser examples:
  *
  *   <out>/index.html      landing page (scripts/pages/index.html)
  *   <out>/playground/     examples/web-playground/dist
  *   <out>/snake/          examples/snake-web/dist
+ *   <out>/flappy/         examples/flappy-web/dist
  *
  *   node scripts/build-pages.mjs [--out _site] [--no-build]
  *
@@ -26,6 +27,7 @@ const out = join(ROOT, args.includes("--out") ? args[args.indexOf("--out") + 1] 
 const APPS = [
   { workspace: "@johnhenry/example-web-playground", dir: "examples/web-playground", path: "playground" },
   { workspace: "@johnhenry/example-snake-web", dir: "examples/snake-web", path: "snake" },
+  { workspace: "@johnhenry/example-flappy-web", dir: "examples/flappy-web", path: "flappy" },
 ];
 
 rmSync(out, { recursive: true, force: true });
