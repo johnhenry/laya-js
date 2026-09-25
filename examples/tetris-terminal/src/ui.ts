@@ -7,7 +7,8 @@
  * carry the color identity, not a single "player" or "bird".
  */
 import type { GameSnapshot } from "./core/game.ts";
-import type { PieceKind } from "./core/pieces.ts";
+import type { PieceKind, RotationLabel } from "./core/pieces.ts";
+import { shapeOf } from "./core/pieces.ts";
 import type { Decision } from "./core/policy.ts";
 import type { SessionStats } from "./core/session.ts";
 
@@ -117,7 +118,15 @@ export function layoutSize(): [number, number] {
 
 export type UiStats = Partial<SessionStats> & { replay?: boolean };
 
-export function compose(game: GameSnapshot, decision: Partial<Decision>, stats: UiStats): Canvas {
+/** A piece mid-descent: rendered as an overlay on top of the locked board, not yet part of `game.board`. */
+export interface FallingPiece {
+  kind: PieceKind;
+  rotation: RotationLabel;
+  col: number;
+  row: number;
+}
+
+export function compose(game: GameSnapshot, decision: Partial<Decision>, stats: UiStats, falling?: FallingPiece): Canvas {
   const [width, height] = layoutSize();
   const c = new Canvas(width, height);
   const left = 3;
@@ -142,6 +151,11 @@ export function compose(game: GameSnapshot, decision: Partial<Decision>, stats: 
       const cell = game.board[r]![col];
       if (cell) c.put(top + 1 + r, left + 1 + 2 * col, "██", PIECE_COLORS[cell]);
       else c.put(top + 1 + r, left + 1 + 2 * col, "· ", "#1f2740");
+    }
+  }
+  if (falling) {
+    for (const [dr, dc] of shapeOf(falling.kind, falling.rotation)) {
+      c.put(top + 1 + falling.row + dr, left + 1 + 2 * (falling.col + dc), "██", PIECE_COLORS[falling.kind]);
     }
   }
 

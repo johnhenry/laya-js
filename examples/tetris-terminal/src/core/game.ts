@@ -32,6 +32,8 @@ import { TetrisRng } from "./rng.ts";
 
 /** Spawn-buffer convention: a placement is "safe" only if the stack (after clearing) stays this far from the ceiling. */
 export const TOP_MARGIN = 4;
+/** Every drop-simulation (and any UI animating a piece's descent) starts here. */
+export const SPAWN_ROW = 0;
 const LINE_SCORES = [0, 100, 300, 500, 800];
 const QUEUE_LOOKAHEAD = 5;
 
@@ -86,8 +88,8 @@ export function legalPlacements(board: Board, kind: PieceKind): Placement[] {
     const minCol = -Math.min(...cols) || 0; // avoid -0 (every shape's own min column offset is 0)
     const maxCol = BOARD_WIDTH - 1 - Math.max(...cols);
     for (let col = minCol; col <= maxCol; col++) {
-      if (collides(board, shape, 0, col)) continue; // can't even occupy the spawn row here
-      let row = 0;
+      if (collides(board, shape, SPAWN_ROW, col)) continue; // can't even occupy the spawn row here
+      let row = SPAWN_ROW;
       while (!collides(board, shape, row + 1, col)) row++;
       results.push({ kind, rotation, col, restRow: row });
     }

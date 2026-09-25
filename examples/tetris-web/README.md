@@ -13,14 +13,21 @@ follows the terminal layout.
 - **Decisions are per piece, not per tick** — see
   `../tetris-terminal/README.md`'s explanation of why; there's nothing
   browser-specific about this, it's the shared core's design.
+- **The fall is animated, the decision isn't** — once the model picks a
+  placement, the piece visibly descends from the spawn row to its resting
+  row (as an overlay drawn on top of the locked board, not yet part of the
+  real game state) instead of snapping there instantly. Hold **↓** to
+  speed the fall up (a soft drop, `~12 ms`/row instead of `~45 ms`) — there
+  is no hard-drop key, so it's never literally instant.
 - **Side panel**: active piece and next-5 preview, the executed placement
   (with a `SHIELD` tag when the shield overrode the model), topping-out
   risk, line-clear likelihood, inference ms, a live decisions/s counter,
   input tokens, shield interventions, deaths and pieces placed.
 - **Controls**: Space pauses and resumes; R resets to the next seed. "Max
-  speed" moves as soon as each inference completes. "Shield off" executes
-  raw top-1 and stops at the first block-out until you press R or Space,
-  same as the terminal demo's `--unassisted`.
+  speed" moves as soon as each inference completes (and skips the fall
+  animation entirely). "Shield off" executes raw top-1 and stops at the
+  first block-out until you press R or Space, same as the terminal demo's
+  `--unassisted`.
 - A warmup of 6 decisions on a fixed seed compiles the GPU pipelines, as
   the terminal demo does.
 

@@ -12,8 +12,8 @@ import { execFileSync } from "node:child_process";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { TetrisGame } from "./core/game.ts";
-import { DEFAULT_MODEL, LayaPolicy, type PromptStyle } from "./core/policy.ts";
+import { SPAWN_ROW, TetrisGame } from "./core/game.ts";
+import { DEFAULT_MODEL, LayaPolicy, type Decision, type PromptStyle } from "./core/policy.ts";
 import { TetrisSession } from "./core/session.ts";
 import { Keyboard } from "./keyboard.ts";
 import { loadTetrisAgent, type BackendName } from "./load-agent.ts";
@@ -40,7 +40,7 @@ Usage: laya-tetris [options]
   --no-alt-screen        Keep the final frame in scrollback
   --online               Allow downloading a missing checkpoint
 
-Keys: SPACE pause · R reset · Q quit`;
+Keys: SPACE pause · ↓ hold to speed up the current piece's fall · R reset · Q quit`;
 
 function hardwareName(): string {
   if (process.platform === "darwin") {
@@ -167,6 +167,27 @@ async function main(argv: string[]): Promise<number> {
     let quit = false;
     const onSigint = () => (quit = true);
     process.on("SIGINT", onSigint);
+
+    // Animate the piece's descent instead of snapping straight to its resting row: the model
+    // decides the FINAL placement in one call (no per-tick predictions -- see core/game.ts), but
+    // that's a decision-efficiency choice, not a reason the viewer has to see it teleport. Holding
+    // Down speeds the fall up (a soft drop), but never skips straight to instant.
+    const NORMAL_ROW_MS = 45;
+    const FAST_ROW_MS = 12;
+    async function animateDrop(board: ReturnType<TetrisGame["snapshot"]>, decision: Decision): Promise<void> {
+      const target = decision.executed;
+      for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) {
+        const pressed = keys?.read().toLowerCase() ?? "";
+        if (pressed.includes("q") || pressed.includes("\x03")) {
+          quit = true;
+          return;
+        }
+        const fast = pressed.includes("\x1b[b") || pressed.includes("s");
+        draw(compose(board, decision, stats, { kind: target.kind, rotation: target.rotation, col: target.col, row }).ansi(!noColor));
+        await sleep(fast ? FAST_ROW_MS : NORMAL_ROW_MS);
+      }
+    }
+
     session.restartClock();
     try {
       while (!quit) {
@@ -175,8 +196,8 @@ async function main(argv: string[]): Promise<number> {
         const pressed = keys?.read().toLowerCase() ?? "";
         if (pressed.includes("q") || pressed.includes("\x03")) break;
         if (pressed.includes(" ")) stats.paused = !stats.paused;
-        if (pressed.includes("\x1b[a") || pressed.includes("+")) pace = Math.min(60, pace + 1);
-        if (pressed.includes("\x1b[b") || pressed.includes("-")) pace = Math.max(1, pace - 1);
+        if (pressed.includes("+")) pace = Math.min(60, pace + 1);
+        if (pressed.includes("-")) pace = Math.max(1, pace - 1);
         if (pressed.includes("r")) {
           session.reset();
           displayed = { board: session.game.snapshot(), decision: {} };
@@ -199,8 +220,12 @@ async function main(argv: string[]): Promise<number> {
         calls++;
         inference.push(decision.inference_ms);
         displayed = { board: shown, decision };
-        if (interactive) draw(compose(shown, decision, stats).ansi(!noColor));
         record?.write(JSON.stringify({ type: "piece", at: session.elapsedMs / 1000, game: shown, decision, stats: { ...stats } }) + "\n");
+        if (interactive && !a["max-speed"]) {
+          await animateDrop(shown, decision);
+        } else if (interactive) {
+          draw(compose(shown, decision, stats).ansi(!noColor));
+        }
         if (!a["max-speed"]) {
           const remaining = 1000 / pace - (performance.now() - now);
           if (remaining > 0) await sleep(remaining);

@@ -28,6 +28,16 @@ per-tick, applied one level further: Tetris's placement space (9-34
 reachable placements depending on piece and board state) is naturally
 enumerable as `choice` criteria, just like Checkers' legal-hop set.
 
+**The decision is instant; the fall doesn't have to look it.** Once the
+model picks a placement, `cli.ts` animates the piece's descent from the
+spawn row down to its resting row (`~45 ms`/row) before actually locking it
+into the board — a presentation-layer detail with no effect on the
+one-`predict()`-per-piece decision above, and no new game logic (the
+straight-down path is already guaranteed clear by the drop-simulation that
+found the placement, so the animation never needs to re-check collisions).
+Holding **↓** shortens the per-row delay to `~12 ms` — a soft drop — but
+there's no hard-drop key: the fall is never literally instant.
+
 ## The engine
 
 7 standard tetrominoes (I/O/T/S/Z/J/L), with only geometrically **distinct**
@@ -76,7 +86,8 @@ npm run bench -w @johnhenry/example-tetris-terminal              # 4 headless ep
 node --conditions=source src/cli.ts --backend cpu --headless --episodes 1 --steps 3
 ```
 
-Keys: **Space** pause, **R** next seed, **Q** or Ctrl-C quit.
+Keys: **Space** pause, **↓** hold to speed up the current piece's fall
+(a soft drop, never instant), **R** next seed, **Q** or Ctrl-C quit.
 
 Options: `--model <id|dir>`, `--backend auto|mlx|webgpu|cpu`,
 `--dtype f16|f32`, `--prompt compact|detailed`, `--optimize`, `--seed`,

@@ -4,7 +4,7 @@
  * WebGPU. Decisions are made once per piece, not once per tick -- see
  * tetris-terminal/src/core/game.ts for why.
  */
-import { TetrisGame, LayaPolicy, TetrisSession, type Decision, type GameSnapshot, type PieceKind } from "../../tetris-terminal/src/core/index.ts";
+import { SPAWN_ROW, TetrisGame, LayaPolicy, TetrisSession, shapeOf, type Decision, type GameSnapshot, type PieceKind, type Placement } from "../../tetris-terminal/src/core/index.ts";
 import { detectWebGpu } from "../../web-playground/src/lib/gpu.ts";
 import { loadBrowserAgent, type BrowserAgent } from "../../web-playground/src/lib/loader.ts";
 import { CHECKPOINTS, formatBytes } from "../../web-playground/src/lib/models.ts";
@@ -31,6 +31,12 @@ let maxSpeed = false;
 let shown: { board: GameSnapshot; decision?: Decision; over?: boolean } = { board: new TetrisGame(7).snapshot() };
 let dirty = true;
 let resetRequested = false;
+/** The piece mid-descent, rendered as an overlay -- not yet part of `shown.board`. */
+let fallingPiece: { kind: PieceKind; row: number; col: number; rotation: Placement["rotation"] } | null = null;
+/** Holding Down speeds the current piece's fall up (a soft drop); it's never instant. */
+let downHeld = false;
+const NORMAL_ROW_MS = 45;
+const FAST_ROW_MS = 12;
 
 // ------------------------------------------------------------------ rendering
 const canvas = $<HTMLCanvasElement>("board");
@@ -66,6 +72,16 @@ function drawBoard(g: GameSnapshot): void {
       const kind = g.board[r]![c];
       if (!kind) continue;
       ctx.fillStyle = PIECE_COLORS[kind];
+      ctx.beginPath();
+      ctx.roundRect(ox + c * cell + pad, oy + r * cell + pad, cell - 2 * pad, cell - 2 * pad, cell * 0.12);
+      ctx.fill();
+    }
+  }
+  if (fallingPiece) {
+    ctx.fillStyle = PIECE_COLORS[fallingPiece.kind];
+    for (const [dr, dc] of shapeOf(fallingPiece.kind, fallingPiece.rotation)) {
+      const r = fallingPiece.row + dr;
+      const c = fallingPiece.col + dc;
       ctx.beginPath();
       ctx.roundRect(ox + c * cell + pad, oy + r * cell + pad, cell - 2 * pad, cell - 2 * pad, cell * 0.12);
       ctx.fill();
@@ -142,6 +158,7 @@ async function loop(): Promise<void> {
     }
     shown = { board: result.board, decision: result.decision };
     dirty = true;
+    if (!maxSpeed) await animateDrop(result.decision.executed);
     if (!maxSpeed) {
       const remaining = 1000 / pace - (performance.now() - t0);
       if (remaining > 0) await sleep(remaining);
@@ -159,6 +176,23 @@ async function loop(): Promise<void> {
       dirty = true;
     }
   }
+}
+
+/**
+ * Animate the piece's descent instead of snapping straight to its resting
+ * row: the model decides the FINAL placement in one call (no per-tick
+ * predictions -- see tetris-terminal/src/core/game.ts), but that's a
+ * decision-efficiency choice, not a reason the viewer has to see it
+ * teleport. Holding Down speeds the fall up (a soft drop), but never skips
+ * straight to instant.
+ */
+async function animateDrop(target: Placement): Promise<void> {
+  for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) {
+    fallingPiece = { kind: target.kind, rotation: target.rotation, col: target.col, row };
+    dirty = true;
+    await sleep(downHeld ? FAST_ROW_MS : NORMAL_ROW_MS);
+  }
+  fallingPiece = null;
 }
 
 function newSession(): void {
@@ -247,7 +281,15 @@ async function main(): Promise<void> {
       e.preventDefault();
       togglePause();
     } else if (e.key === "r" || e.key === "R") reset();
+    else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      downHeld = true;
+    }
   });
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "ArrowDown") downHeld = false;
+  });
+  window.addEventListener("blur", () => (downHeld = false));
   new ResizeObserver(() => (dirty = true)).observe(canvas);
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => (dirty = true));
   requestAnimationFrame(frame);

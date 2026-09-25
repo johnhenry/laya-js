@@ -93,4 +93,6 @@ kbd { font: inherit; font-size: 0.75rem; color: var(--muted); }
 .ctl { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
 .ctl input[type="range"] { width: 120px; accent-color: var(--cyan); }
 .ctl input[type="checkbox"] { accent-color: var(--cyan); }
+.hint { margin-left: auto; }
+@media (max-width: 700px) { .hint { display: none; } }
 @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
