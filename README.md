@@ -300,5 +300,5 @@ own tensor library.
 Licensed per package, by where the code came from:
 
 - **MIT** ([LICENSE](LICENSE)) — original code: `tensor-backend`, `backend-cpu`, `backend-mlx`, `backend-webgpu`, `pyjson`, `hf-cache` (and `backend-mlx-darwin-arm64`, which bundles Apple's MIT-licensed MLX).
-- **Apache-2.0** ([LICENSE-APACHE-2.0](LICENSE-APACHE-2.0), [NOTICE](NOTICE)) — packages that port code from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0): `laya-core`, `laya`, `laya-router`, `laya-presets`, `langdetect-lite`, `laya-cli`, `modernbert`.
+- **Apache-2.0** ([LICENSE-APACHE-2.0](LICENSE-APACHE-2.0), [NOTICE](NOTICE)) — packages that port code from [laya-mlx](https://github.com/mizorewww/laya-mlx) and [Laya](https://github.com/NandhaKishorM/laya) (both Apache-2.0): `laya-core`, `laya`, `laya-router`, `laya-presets`, `langdetect-lite`, `laya-cli`, `modernbert`, `laya-fixtures`.
 `@johnhenry/backend-mlx-darwin-arm64` is MIT: it contains Apple's MLX binaries.

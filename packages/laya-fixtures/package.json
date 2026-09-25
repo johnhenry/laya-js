@@ -28,7 +28,8 @@
   },
   "files": [
     "dist",
-    "data"
+    "data",
+    "NOTICE"
   ],
   "sideEffects": false,
   "scripts": {

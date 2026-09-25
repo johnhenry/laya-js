@@ -4,12 +4,13 @@ name: Release
 # deliberate deviations:
 #
 #   1. Trigger: workflow_dispatch ONLY (no push-to-main, no release event).
-#      Nothing has been published yet; the first publish is a human decision
-#      made in the Actions UI after the manual steps in AGENTS.md "Releases"
-#      (npm scope token, JSR trusted publishing, math-plus published first).
-#      When the first release is done, switch to the family standard
+#      The first publish (2026-09-25, all 14 public packages) was run this
+#      way, as a human decision made in the Actions UI per AGENTS.md
+#      "Releases". Still TODO: switch to the family standard
 #      (`on: release: types: [published]` + `push: tags: ["v*"]` +
-#      workflow_dispatch) or math-plus's push-to-main Changesets flow.
+#      workflow_dispatch) or math-plus's push-to-main Changesets flow --
+#      left as workflow_dispatch-only for now so each subsequent release
+#      stays a deliberate action while the flow is still new.
 #   2. A macOS job publishes the native platform package
 #      @johnhenry/backend-mlx-darwin-arm64 BEFORE the Changesets publish.
 #      It is outside npm workspaces (EBADPLATFORM), so `changeset publish`
