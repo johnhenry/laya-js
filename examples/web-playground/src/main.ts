@@ -373,6 +373,32 @@ function renderStateFields(): void {
       return h("div", { class: "sf", role: "group", "aria-label": `State field ${f.key}` }, keyInput, typeSel, valueInput, remove);
     }),
   );
+  updateBatchUI();
+}
+
+/** Batch only makes sense with exactly one text field: "one value per line" is
+ * ambiguous once there's more than one field to fill in per line (mirrors
+ * gui-demo's exact constraint). */
+function batchEligible(): boolean {
+  return stateFields.length === 1 && stateFields[0]!.type === "text";
+}
+function batchMode(): boolean {
+  return $<HTMLInputElement>("batch").checked && batchEligible();
+}
+function updateBatchUI(): void {
+  const cb = $<HTMLInputElement>("batch");
+  const hint = $("batch-hint");
+  const eligible = batchEligible();
+  cb.disabled = !eligible;
+  if (!eligible && cb.checked) cb.checked = false;
+  hint.textContent = eligible ? "" : "Batch needs exactly one text field.";
+  $("batch-wrap").hidden = !cb.checked;
+  $("state-fields").hidden = cb.checked || stateJsonMode;
+  updateRunLabel();
+}
+function updateRunLabel(): void {
+  const btn = $<HTMLButtonElement>("run");
+  if (!running) btn.firstChild!.textContent = batchMode() ? "Run batch " : "Run ";
 }
 
 function setStateJsonMode(on: boolean): void {
@@ -774,11 +800,41 @@ async function runOn(a: BrowserAgent, label: string, state: Json, questions: Rec
   }
 }
 
+/** Runs one state through the loaded backend(s), renders it into the results columns, and queues it. */
+async function runOnceAndDisplay(state: Json, questions: Record<string, unknown>): Promise<RunOutcome[]> {
+  const compare = compareEnabled() && !!cpuAgent;
+  // Sequential, not Promise.all: running two backends concurrently on the
+  // same tab would contend for CPU/GPU resources and make the latency
+  // comparison meaningless (the whole point of this mode).
+  const webgpuOutcome = await runOn(agent!, engineLabel, state, questions);
+  (window as unknown as { __lastResult: unknown }).__lastResult = webgpuOutcome.result;
+  const outcomes = [webgpuOutcome];
+  if (compare) outcomes.push(await runOn(cpuAgent!, "CPU reference", state, questions));
+
+  const columns = $("results-columns");
+  columns.className = `results-columns${outcomes.length > 1 ? " compare" : ""}`;
+  const fastestMs = Math.min(...outcomes.filter((o) => o.ms !== undefined).map((o) => o.ms!));
+  columns.replaceChildren(...outcomes.map((o) => renderResultColumn(o, questions, outcomes.length > 1 && o.ms === fastestMs)));
+
+  renderPriorityOptions(questions);
+  addToQueue(state, questions, outcomes);
+  return outcomes;
+}
+
 let running = false;
 async function run(): Promise<void> {
   if (!agent || running) return;
-  let state: Json;
   let questions: Record<string, unknown>;
+  try {
+    questions = readQuestions();
+  } catch (e) {
+    showError((e as Error).message);
+    return;
+  }
+
+  if (batchMode()) return runBatch(questions);
+
+  let state: Json;
   const stateErr = $("state-error");
   try {
     state = readState();
@@ -788,12 +844,6 @@ async function run(): Promise<void> {
     stateErr.textContent = (e as Error).message;
     return;
   }
-  try {
-    questions = readQuestions();
-  } catch (e) {
-    showError((e as Error).message);
-    return;
-  }
   running = true;
   const btn = $<HTMLButtonElement>("run");
   btn.disabled = true;
@@ -801,26 +851,40 @@ async function run(): Promise<void> {
   $("raw-request").textContent = JSON.stringify({ state, questions }, null, 2);
   $("raw-request-wrap").hidden = false;
   try {
-    const compare = compareEnabled() && !!cpuAgent;
-    // Sequential, not Promise.all: running two backends concurrently on the
-    // same tab would contend for CPU/GPU resources and make the latency
-    // comparison meaningless (the whole point of this mode).
-    const webgpuOutcome = await runOn(agent, engineLabel, state, questions);
-    (window as unknown as { __lastResult: unknown }).__lastResult = webgpuOutcome.result;
-    const outcomes = [webgpuOutcome];
-    if (compare) outcomes.push(await runOn(cpuAgent!, "CPU reference", state, questions));
-
-    const columns = $("results-columns");
-    columns.className = `results-columns${outcomes.length > 1 ? " compare" : ""}`;
-    const fastestMs = Math.min(...outcomes.filter((o) => o.ms !== undefined).map((o) => o.ms!));
-    columns.replaceChildren(...outcomes.map((o) => renderResultColumn(o, questions, outcomes.length > 1 && o.ms === fastestMs)));
-
-    renderPriorityOptions(questions);
-    addToQueue(state, questions, outcomes);
+    await runOnceAndDisplay(state, questions);
   } finally {
     running = false;
     btn.disabled = false;
-    btn.firstChild!.textContent = "Run ";
+    updateRunLabel();
+  }
+}
+
+/** One predict() call per non-blank line, sequentially -- a single loaded backend session
+ * is not necessarily safe for overlapping concurrent calls (matches gui-demo's own
+ * reasoning for its batch mode). Each line's result is queued like a single run would be;
+ * the results columns show the last line run, progress is reported via the run button. */
+async function runBatch(questions: Record<string, unknown>): Promise<void> {
+  const key = stateFields[0]!.key;
+  const lines = $<HTMLTextAreaElement>("batch-lines")
+    .value.split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return showError("Add at least one line to run as a batch.");
+  running = true;
+  const btn = $<HTMLButtonElement>("run");
+  btn.disabled = true;
+  try {
+    for (let i = 0; i < lines.length; i++) {
+      btn.firstChild!.textContent = `Running ${i + 1} of ${lines.length}… `;
+      const state: Json = { [key]: lines[i]! };
+      $("raw-request").textContent = JSON.stringify({ state, questions }, null, 2);
+      $("raw-request-wrap").hidden = false;
+      await runOnceAndDisplay(state, questions);
+    }
+  } finally {
+    running = false;
+    btn.disabled = false;
+    updateRunLabel();
   }
 }
 
@@ -1075,6 +1139,11 @@ async function main(): Promise<void> {
     } else {
       disposeCpuAgent();
     }
+  });
+  $<HTMLInputElement>("batch").addEventListener("change", () => {
+    $("batch-wrap").hidden = !batchMode();
+    $("state-fields").hidden = batchMode() || stateJsonMode;
+    updateRunLabel();
   });
   // Two-click confirm in the page, not window.confirm(): embedded webviews,
   // sandboxed iframes and "prevent additional dialogs" make confirm() return

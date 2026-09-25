@@ -74,6 +74,14 @@
             <button class="btn ghost small" type="button" data-add-field="number">+ Number</button>
             <button class="btn ghost small" type="button" data-add-field="boolean">+ Boolean</button>
           </div>
+          <div class="row">
+            <label class="check small" id="batch-label"><input id="batch" type="checkbox" /> Batch (one line per run)</label>
+            <span id="batch-hint" class="small muted"></span>
+          </div>
+          <div id="batch-wrap" hidden>
+            <label for="batch-lines" class="sr-only">Batch lines</label>
+            <textarea id="batch-lines" rows="5" spellcheck="false" placeholder="One value per line — each line becomes its own run."></textarea>
+          </div>
         </section>
 
         <section class="panel" aria-labelledby="q-h">
