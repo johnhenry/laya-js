@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Laya Tetris</title>
+    <meta name="description" content="Tetris driven by real Laya predictions on WebGPU, in the browser." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0e16'/%3E%3Crect x='6' y='6' width='8' height='8' fill='%235ee7ff'/%3E%3Crect x='16' y='16' width='8' height='8' fill='%23ffe066'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <header class="top">
+        <span class="muted">LAYA / LOCAL INTELLIGENCE</span>
+        <span id="state" class="state" role="status">NOT LOADED</span>
+      </header>
+
+      <div id="unsupported" class="banner" role="alert" hidden></div>
+
+      <main class="grid">
+        <section class="left" aria-label="Game">
+          <div class="title-row">
+            <h1>T E T R I S</h1>
+            <span id="round" class="muted mono">ROUND 01</span>
+          </div>
+          <div class="board-wrap">
+            <canvas id="board" width="300" height="600" role="img" aria-label="Tetris board"></canvas>
+            <div id="overlay" class="overlay">
+              <div class="overlay-card">
+                <p class="overlay-title">Laya plays Tetris on your GPU</p>
+                <p class="muted small">Every piece, every reachable placement is enumerated; the Laya checkpoint picks one, guarded by a stack-height safety margin. Weights (≈644 MB) download once from huggingface.co and stay cached in this browser.</p>
+                <label class="small muted" for="model">Checkpoint</label>
+                <select id="model"></select>
+                <button id="load" class="btn primary" type="button">Load &amp; play</button>
+                <progress id="progress" max="1" value="0" hidden></progress>
+                <p id="progress-text" class="small muted mono" aria-live="polite"></p>
+              </div>
+            </div>
+          </div>
+          <div class="scores">
+            <div><span class="label">SCORE</span><span id="score" class="big cyan">0000</span></div>
+            <div><span class="label">LINES</span><span id="lines" class="big">0000</span></div>
+            <div><span class="label">LEVEL</span><span id="level" class="big muted">0001</span></div>
+          </div>
+        </section>
+
+        <section class="right" aria-label="Model">
+          <div>
+            <p class="cyan strong">Laya · <span id="engine">WebGPU</span></p>
+            <p id="hardware" class="muted small">Browser · Local</p>
+          </div>
+          <div class="exec">
+            <span class="muted">ACTIVE</span> <b id="active" class="mono">—</b>
+            <span class="muted">NEXT</span> <span id="next" class="mono muted"></span>
+          </div>
+          <p class="exec"><span class="muted">EXECUTING</span> <b id="executed" class="cyan mono">—</b> <span id="shield" class="shield" hidden>SHIELD</span></p>
+          <div class="meter">
+            <p class="muted">TOPPING-OUT RISK</p>
+            <div class="meter-row"><div class="track"><div id="risk" class="fill amber"></div></div><span id="risk-v" class="mono">0.00</span></div>
+          </div>
+          <div class="meter">
+            <p class="muted">CLEARS A LINE</p>
+            <div class="meter-row"><div class="track"><div id="clears" class="fill green"></div></div><span id="clears-v" class="mono green">0.00</span></div>
+          </div>
+          <dl class="stats mono">
+            <dt>INFERENCE</dt><dd id="inference">—</dd>
+            <dt>DECISIONS</dt><dd id="rate">—</dd>
+            <dt>INPUT TOKENS</dt><dd id="tokens">—</dd>
+            <dt>NETWORK</dt><dd id="network" class="green">LOCAL</dd>
+          </dl>
+          <p id="guard-label" class="muted">Laya + safety-margin shield</p>
+          <p class="amber mono">Shield interventions <span id="interventions">0000</span></p>
+          <p class="muted small mono">Deaths <span id="deaths">0</span> · Pieces <span id="pieces">0</span></p>
+        </section>
+      </main>
+
+      <footer class="controls" aria-label="Controls">
+        <button id="play" class="btn" type="button" disabled aria-keyshortcuts="Space">Pause <kbd>Space</kbd></button>
+        <button id="reset" class="btn" type="button" disabled aria-keyshortcuts="R">Reset <kbd>R</kbd></button>
+        <label class="ctl"><input id="max" type="checkbox" /> Max speed</label>
+        <label class="ctl" for="pace">Pace <input id="pace" type="range" min="1" max="10" step="1" value="3" /> <span id="pace-v" class="mono">3/s</span></label>
+        <label class="ctl"><input id="unassisted" type="checkbox" /> Shield off</label>
+      </footer>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

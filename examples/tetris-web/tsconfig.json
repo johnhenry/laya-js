@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": [
+      "@webgpu/types"
+    ],
+    "customConditions": [
+      "browser",
+      "source"
+    ]
+  },
+  "include": [
+    "src"
+  ]
+}
