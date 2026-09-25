@@ -33,7 +33,7 @@
     },
     "demo:build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**"],
+      "outputs": ["dist/**", "demo/dist/**"],
       "cache": true
     },
     "build:native": {
