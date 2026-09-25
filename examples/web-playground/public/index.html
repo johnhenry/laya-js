@@ -43,10 +43,15 @@
           <div class="row">
             <button id="load" class="btn primary" type="button">Load model</button>
             <label class="check small"><input id="f32" type="checkbox" /> f32 (slower, exact)</label>
+            <label class="check small"><input id="compare" type="checkbox" /> Compare webgpu vs cpu</label>
           </div>
           <div id="progress-wrap" class="progress-wrap" hidden>
             <progress id="progress" max="1" value="0" aria-describedby="progress-text"></progress>
             <p id="progress-text" class="small muted mono" aria-live="polite"></p>
+          </div>
+          <div id="cpu-progress-wrap" class="progress-wrap" hidden>
+            <progress id="cpu-progress" max="1" value="0" aria-describedby="cpu-progress-text"></progress>
+            <p id="cpu-progress-text" class="small muted mono" aria-live="polite"></p>
           </div>
         </section>
 
@@ -55,14 +60,20 @@
             <h2 id="state-h"><span class="step">2</span> State</h2>
             <label class="small muted" for="preset">Preset</label>
             <select id="preset"></select>
+            <button id="state-json-toggle" class="btn ghost small" type="button" aria-pressed="false">Edit as JSON</button>
           </div>
-          <div class="seg" role="radiogroup" aria-label="State format">
-            <label><input type="radio" name="state-mode" value="text" checked /> <span>Text</span></label>
-            <label><input type="radio" name="state-mode" value="json" /> <span>JSON</span></label>
+          <div id="state-fields" class="state-fields"></div>
+          <div id="state-json-wrap" hidden>
+            <label for="state-json" class="sr-only">State JSON</label>
+            <textarea id="state-json" rows="6" spellcheck="false" class="mono"></textarea>
           </div>
-          <label for="state" class="sr-only">State</label>
-          <textarea id="state" rows="5" spellcheck="false" placeholder="The situation to decide about: a message, an email, a JSON record…"></textarea>
           <p id="state-error" class="error small" role="alert" hidden></p>
+          <div class="add-row" id="state-add-row">
+            <span class="small muted">Add field</span>
+            <button class="btn ghost small" type="button" data-add-field="text">+ Text</button>
+            <button class="btn ghost small" type="button" data-add-field="number">+ Number</button>
+            <button class="btn ghost small" type="button" data-add-field="boolean">+ Boolean</button>
+          </div>
         </section>
 
         <section class="panel" aria-labelledby="q-h">
@@ -93,19 +104,13 @@
               Run <kbd>⌘↵</kbd>
             </button>
           </div>
-          <dl id="metrics" class="metrics">
-            <div><dt>Latency</dt><dd id="m-latency">—</dd></div>
-            <div><dt>Input tokens</dt><dd id="m-tokens">—</dd></div>
-            <div><dt>Questions</dt><dd id="m-questions">—</dd></div>
-            <div><dt>Engine</dt><dd id="m-engine">—</dd></div>
-          </dl>
-          <div id="answers" class="answers" aria-live="polite">
+          <details id="raw-request-wrap" class="raw" hidden>
+            <summary>Raw request</summary>
+            <pre id="raw-request" class="mono"></pre>
+          </details>
+          <div id="results-columns" class="results-columns" aria-live="polite">
             <p class="empty">Load a model, then run the questions against the state.</p>
           </div>
-          <details id="raw-wrap" class="raw" hidden>
-            <summary>Raw result JSON</summary>
-            <pre id="raw" class="mono"></pre>
-          </details>
         </section>
       </div>
     </main>

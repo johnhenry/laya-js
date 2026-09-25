@@ -1,7 +1,8 @@
 /**
- * Load a `@johnhenry/laya` agent in the browser on WebGPU, with aggregated
- * download progress. Weights come from https://huggingface.co/<repo>/resolve/…
- * through hf-cache's browser store (Cache API), so a reload is served locally.
+ * Load a `@johnhenry/laya` agent in the browser (WebGPU by default, or the
+ * pure-TS CPU reference backend for compare mode), with aggregated download
+ * progress. Weights come from https://huggingface.co/<repo>/resolve/… through
+ * hf-cache's browser store (Cache API), so a reload is served locally.
  */
 import { load, type LayaAgent } from "@johnhenry/laya";
 
@@ -17,7 +18,7 @@ export type BrowserAgent = LayaAgent;
 
 export async function loadBrowserAgent(
   repo: string,
-  { onProgress, dtype = "f16" }: { onProgress?: (p: LoadProgress) => void; dtype?: "f16" | "f32" } = {},
+  { onProgress, dtype = "f16", backend = "webgpu" }: { onProgress?: (p: LoadProgress) => void; dtype?: "f16" | "f32"; backend?: "webgpu" | "cpu" } = {},
 ): Promise<{ agent: BrowserAgent; seconds: number; downloaded: number }> {
   const perFile = new Map<string, { loaded: number; total: number }>();
   let downloaded = 0;
@@ -32,7 +33,7 @@ export async function loadBrowserAgent(
   };
   const started = performance.now();
   const agent = await load(repo, {
-    backend: "webgpu",
+    backend,
     dtype,
     onProgress: (e) => {
       const key = e.file ?? "model";

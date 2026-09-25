@@ -216,11 +216,27 @@ textarea:focus, input[type="text"]:focus, select:focus { outline: none; border-c
 .x:hover { color: var(--red); background: var(--panel); }
 .add-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
+.state-fields { display: flex; flex-direction: column; gap: 8px; }
+.sf { display: grid; grid-template-columns: minmax(0, 8rem) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+@media (max-width: 560px) { .sf { grid-template-columns: minmax(0, 1fr) auto; } .sf .val, .sf input[type="checkbox"] { grid-column: 1 / -1; } }
+.sf input[type="text"], .sf input[type="number"], .sf select { background: var(--panel); }
+.sf .id { font-family: var(--mono); font-size: 0.85rem; }
+
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
 @media (max-width: 460px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .metrics div { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
 .metrics dt { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .metrics dd { margin: 0; font: 600 1.05rem var(--mono); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* One column per backend: one column in the normal (single-backend) case,
+   two side by side in compare mode. */
+.results-columns { display: flex; flex-direction: column; gap: 18px; }
+.results-columns.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+@media (max-width: 700px) { .results-columns.compare { grid-template-columns: minmax(0, 1fr); } }
+.result-column { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.result-column .col-head { font: 600 0.85rem var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.result-column.fastest .col-head { color: var(--accent); }
+.result-column.fastest .col-head::after { content: " · fastest"; }
 
 .answers { display: flex; flex-direction: column; gap: 10px; }
 .empty { color: var(--muted); padding: 24px 0; text-align: center; }

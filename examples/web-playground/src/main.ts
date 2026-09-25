@@ -275,24 +275,156 @@ function renderQuestions(): void {
 }
 
 // ---------------------------------------------------------------- state editor
-function stateMode(): "text" | "json" {
-  return (document.querySelector<HTMLInputElement>('input[name="state-mode"]:checked')?.value as "text" | "json") ?? "text";
+// A dynamic form (add/remove/rename typed fields), mirroring the Questions
+// builder below -- not just a single free-text/JSON blob. A single default
+// text field ("text") collapses to a plain string on read, matching the
+// zero-config free-text behavior every preset and the README example expect.
+type SFType = "text" | "number" | "boolean";
+interface SFDraft {
+  key: string;
+  label: string;
+  type: SFType;
+  /** Raw draft value: the field's own text/number as typed, or "true"/"false" for boolean. */
+  value: string;
 }
-function setStateMode(mode: "text" | "json"): void {
-  document.querySelector<HTMLInputElement>(`input[name="state-mode"][value="${mode}"]`)!.checked = true;
+
+let stateFields: SFDraft[] = [{ key: "text", label: "Text", type: "text", value: "" }];
+let stateJsonMode = false;
+
+function newStateField(type: SFType): SFDraft {
+  let n = stateFields.length;
+  while (stateFields.some((f) => f.key === `field${n}`)) n++;
+  return { key: `field${n}`, label: `Field ${n + 1}`, type, value: type === "boolean" ? "false" : "" };
 }
+
+/** Fields -> the actual state value sent to predict() (validation mirrors gui-demo's resolveStateValues). */
+function stateFieldsToJson(fields: SFDraft[]): Json {
+  const out: Record<string, Json> = {};
+  const seen = new Set<string>();
+  for (const f of fields) {
+    const key = f.key.trim();
+    if (!key) throw new Error("Every state field needs a key.");
+    if (seen.has(key)) throw new Error(`Duplicate state field key "${key}".`);
+    seen.add(key);
+    if (f.type === "text") {
+      if (!f.value.trim()) throw new Error(`Field "${key}" needs a value.`);
+      out[key] = f.value;
+    } else if (f.type === "number") {
+      const n = Number(f.value);
+      if (!Number.isFinite(n)) throw new Error(`Field "${key}" needs a valid number.`);
+      out[key] = n;
+    } else {
+      out[key] = f.value === "true";
+    }
+  }
+  if (!Object.keys(out).length) throw new Error("Add at least one state field.");
+  if (fields.length === 1 && fields[0]!.key === "text" && fields[0]!.type === "text") return out.text!;
+  return out;
+}
+
+/** The inverse: an incoming state (from a preset, or "Use builder" from JSON mode) -> fields. */
+function jsonToStateFields(state: Json): SFDraft[] {
+  if (typeof state === "string") return [{ key: "text", label: "Text", type: "text", value: state }];
+  if (state && typeof state === "object" && !Array.isArray(state)) {
+    const entries = Object.entries(state as Record<string, Json>);
+    if (entries.length) {
+      return entries.map(([key, v]) => {
+        const type: SFType = typeof v === "number" ? "number" : typeof v === "boolean" ? "boolean" : "text";
+        const value = type === "boolean" || type === "number" ? String(v) : typeof v === "string" ? v : JSON.stringify(v);
+        return { key, label: key, type, value };
+      });
+    }
+  }
+  // Arrays, null, top-level numbers/booleans, or an empty object: not representable
+  // as typed fields -- stash as JSON text; "Edit as JSON" is the real escape hatch.
+  return [{ key: "text", label: "Text", type: "text", value: typeof state === "string" ? state : JSON.stringify(state) }];
+}
+
+function renderStateFields(): void {
+  const root = $("state-fields");
+  root.replaceChildren(
+    ...stateFields.map((f, fi) => {
+      const changed = () => persist();
+      const keyInput = h("input", { type: "text", class: "id", value: f.key, "aria-label": `State field ${fi + 1} key`, oninput: (e: Event) => ((f.key = (e.target as HTMLInputElement).value), changed()) });
+      const typeSel = h(
+        "select",
+        {
+          "aria-label": `State field ${fi + 1} type`,
+          onchange: (e: Event) => {
+            const t = (e.target as HTMLSelectElement).value as SFType;
+            f.type = t;
+            f.value = t === "boolean" ? "false" : "";
+            renderStateFields();
+            persist();
+          },
+        },
+        ...(["text", "number", "boolean"] as const).map((t) => {
+          const o = h("option", { value: t }, t);
+          o.selected = t === f.type;
+          return o;
+        }),
+      );
+      const valueInput =
+        f.type === "boolean"
+          ? h("input", { type: "checkbox", "aria-label": `${f.key || `field ${fi + 1}`} value`, onchange: (e: Event) => ((f.value = String((e.target as HTMLInputElement).checked)), changed()) })
+          : h("input", { type: f.type === "number" ? "number" : "text", class: "val", value: f.value, placeholder: "value", "aria-label": `${f.key || `field ${fi + 1}`} value`, oninput: (e: Event) => ((f.value = (e.target as HTMLInputElement).value), changed()) });
+      if (f.type === "boolean") (valueInput as HTMLInputElement).checked = f.value === "true";
+      const remove = h("button", { type: "button", class: "x", "aria-label": `Remove field ${f.key || fi + 1}`, title: "Remove field", onclick: () => (stateFields.splice(fi, 1), renderStateFields(), persist()) }, "×");
+      return h("div", { class: "sf", role: "group", "aria-label": `State field ${f.key}` }, keyInput, typeSel, valueInput, remove);
+    }),
+  );
+}
+
+function setStateJsonMode(on: boolean): void {
+  const err = $("state-error");
+  if (on) {
+    let json: Json | undefined;
+    try {
+      json = stateFieldsToJson(stateFields);
+    } catch {
+      json = Object.fromEntries(stateFields.map((f) => [f.key, f.value]));
+    }
+    $<HTMLTextAreaElement>("state-json").value = typeof json === "string" ? json : JSON.stringify(json, null, 2);
+  } else {
+    try {
+      const text = $<HTMLTextAreaElement>("state-json").value;
+      let parsed: Json;
+      try {
+        parsed = JSON.parse(text) as Json;
+      } catch {
+        parsed = text; // plain (non-JSON) text is a valid state too
+      }
+      stateFields = jsonToStateFields(parsed);
+      renderStateFields();
+    } catch (e) {
+      err.hidden = false;
+      err.textContent = `Fix the state before switching back: ${(e as Error).message}`;
+      return;
+    }
+  }
+  err.hidden = true;
+  stateJsonMode = on;
+  $("state-json-toggle").setAttribute("aria-pressed", String(on));
+  $("state-json-toggle").textContent = on ? "Use builder" : "Edit as JSON";
+  $("state-fields").hidden = on;
+  $("state-add-row").hidden = on;
+  $("state-json-wrap").hidden = !on;
+  persist();
+}
+
 function readState(): Json {
-  const text = $<HTMLTextAreaElement>("state").value;
-  if (stateMode() === "text") return text;
+  if (!stateJsonMode) return stateFieldsToJson(stateFields);
+  const text = $<HTMLTextAreaElement>("state-json").value;
   try {
     return JSON.parse(text) as Json;
-  } catch (e) {
-    throw new Error(`State is not valid JSON: ${(e as Error).message}`);
+  } catch {
+    return text; // plain text is accepted here too, matching setStateJsonMode's round-trip
   }
 }
 function writeState(state: Json): void {
-  setStateMode(typeof state === "string" ? "text" : "json");
-  $<HTMLTextAreaElement>("state").value = typeof state === "string" ? state : JSON.stringify(state, null, 2);
+  stateFields = jsonToStateFields(state);
+  renderStateFields();
+  if (stateJsonMode) $<HTMLTextAreaElement>("state-json").value = typeof state === "string" ? state : JSON.stringify(state, null, 2);
 }
 
 // ---------------------------------------------------------------- JSON mode
@@ -343,8 +475,9 @@ let persistTimer = 0;
 function persist(): void {
   clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
-    store.set("state", $<HTMLTextAreaElement>("state").value);
-    store.set("stateMode", stateMode());
+    store.set("stateFields", JSON.stringify(stateFields));
+    store.set("stateJsonMode", String(stateJsonMode));
+    store.set("stateJson", $<HTMLTextAreaElement>("state-json").value);
     store.set("drafts", JSON.stringify(drafts));
   }, 200);
 }
@@ -354,6 +487,17 @@ let agent: BrowserAgent | undefined;
 let loadedRepo: string | undefined;
 let engineLabel = "—";
 let gpu: GpuCapability = { ok: false, f16: false };
+// Compare mode: a second agent on the CPU reference backend, same
+// checkpoint/dtype as the primary WebGPU one. Loaded lazily (only while
+// the "Compare" checkbox is checked) since a second ~843 MB checkpoint in
+// one tab is real memory pressure, not something to pay for by default.
+let cpuAgent: BrowserAgent | undefined;
+let cpuLoadedRepo: string | undefined;
+let cpuLoading = false;
+
+function compareEnabled(): boolean {
+  return $<HTMLInputElement>("compare").checked;
+}
 
 function selectedRepo(): string {
   return document.querySelector<HTMLInputElement>('input[name="checkpoint"]:checked')!.value;
@@ -454,9 +598,9 @@ async function loadModel(): Promise<void> {
     const fromCache = res.downloaded < 1_000_000;
     text.textContent = `${label} ready in ${res.seconds.toFixed(1)} s ${fromCache ? "(weights from the browser cache)" : `(downloaded ${formatBytes(res.downloaded)})`}`;
     $("model-state").textContent = `${label} · ${engineLabel}`;
-    $("m-engine").textContent = engineLabel;
     $<HTMLButtonElement>("run").disabled = false;
     void renderCheckpoints();
+    if (compareEnabled()) void loadCpuAgent();
   } catch (e) {
     console.error(e);
     bar.value = 0;
@@ -469,9 +613,66 @@ async function loadModel(): Promise<void> {
   }
 }
 
+/** Loads (or disposes) the second, CPU-reference-backend agent for compare mode. Same checkpoint/dtype as the primary WebGPU agent. */
+async function loadCpuAgent(): Promise<void> {
+  if (!loadedRepo || cpuLoading || cpuLoadedRepo === loadedRepo) return;
+  const repo = loadedRepo;
+  const dtype = $<HTMLInputElement>("f32").checked ? "f32" : "f16";
+  cpuLoading = true;
+  const wrap = $("cpu-progress-wrap");
+  const bar = $<HTMLProgressElement>("cpu-progress");
+  const text = $("cpu-progress-text");
+  wrap.hidden = false;
+  bar.removeAttribute("value");
+  text.textContent = "Loading CPU reference agent for comparison…";
+  try {
+    await cpuAgent?.dispose?.();
+    cpuAgent = undefined;
+    cpuLoadedRepo = undefined;
+    const approx = CHECKPOINTS.find((c) => c.repo === repo)?.approxBytes ?? 0;
+    let lastPaint = 0;
+    const res = await loadBrowserAgent(repo, {
+      dtype,
+      backend: "cpu",
+      onProgress: (p) => {
+        const now = performance.now();
+        if (now - lastPaint < 60 && p.loaded < p.total) return;
+        lastPaint = now;
+        const total = Math.max(p.total, approx);
+        bar.max = total;
+        bar.value = Math.min(p.loaded, total);
+        text.textContent = `CPU agent: ${formatBytes(p.loaded)} of ${formatBytes(total)} · ${Math.floor((100 * p.loaded) / total)}%`;
+      },
+    });
+    if (loadedRepo !== repo || !compareEnabled()) {
+      // The primary model or the compare toggle changed while this was loading; discard.
+      await res.agent.dispose?.();
+      return;
+    }
+    cpuAgent = res.agent;
+    cpuLoadedRepo = repo;
+    bar.max = 1;
+    bar.value = 1;
+    text.textContent = `CPU agent ready in ${res.seconds.toFixed(1)} s (${res.downloaded < 1_000_000 ? "weights from the browser cache" : `downloaded ${formatBytes(res.downloaded)}`})`;
+  } catch (e) {
+    console.error(e);
+    text.textContent = `Could not load the CPU comparison agent: ${(e as Error).message}`;
+  } finally {
+    cpuLoading = false;
+  }
+}
+
+function disposeCpuAgent(): void {
+  void cpuAgent?.dispose?.();
+  cpuAgent = undefined;
+  cpuLoadedRepo = undefined;
+  $("cpu-progress-wrap").hidden = true;
+}
+
 // ---------------------------------------------------------------- run + results
 function showError(message: string): void {
-  $("answers").replaceChildren(h("p", { class: "error", role: "alert" }, message));
+  $("results-columns").className = "results-columns";
+  $("results-columns").replaceChildren(h("p", { class: "error", role: "alert" }, message));
 }
 
 const pct = (v: number) => `${(100 * v).toFixed(1)}%`;
@@ -532,6 +733,47 @@ function renderAnswer(id: string, a: AnswerLike, q: { instructions?: unknown }):
   return h("article", { class: `answer ${a.type}`, "aria-label": `Answer ${id}` }, head, ...body, meta);
 }
 
+interface RunOutcome {
+  label: string;
+  ms?: number;
+  result?: { answers: Record<string, AnswerLike>; usage?: { input_tokens?: number } };
+  error?: string;
+}
+
+/** One backend's full result view: metrics + answers + raw response, or an error. */
+function renderResultColumn(outcome: RunOutcome, questions: Record<string, unknown>, fastest: boolean): HTMLElement {
+  const inner: Node[] = [];
+  if (outcome.error) {
+    inner.push(h("p", { class: "error", role: "alert" }, outcome.error));
+  } else if (outcome.result) {
+    const { result, ms } = outcome;
+    inner.push(
+      h(
+        "dl",
+        { class: "metrics" },
+        h("div", {}, h("dt", {}, "Latency"), h("dd", {}, `${ms!.toFixed(ms! < 100 ? 1 : 0)} ms`)),
+        h("div", {}, h("dt", {}, "Input tokens"), h("dd", {}, String(result.usage?.input_tokens ?? "—"))),
+        h("div", {}, h("dt", {}, "Questions"), h("dd", {}, String(Object.keys(result.answers).length))),
+        h("div", {}, h("dt", {}, "Engine"), h("dd", {}, outcome.label)),
+      ),
+      h("div", { class: "answers" }, ...Object.entries(result.answers).map(([id, a]) => renderAnswer(id, a, questions[id] as { instructions?: unknown }))),
+      h("details", { class: "raw" }, h("summary", {}, "Raw response"), h("pre", { class: "mono" }, JSON.stringify(result, null, 2))),
+    );
+  }
+  return h("div", { class: `result-column${fastest ? " fastest" : ""}` }, h("p", { class: "col-head" }, outcome.label), ...inner);
+}
+
+async function runOn(a: BrowserAgent, label: string, state: Json, questions: Record<string, unknown>): Promise<RunOutcome> {
+  try {
+    const t0 = performance.now();
+    const result = await a.predict(state, questions as Questions); // validated by the agent (Python messages)
+    return { label, ms: performance.now() - t0, result };
+  } catch (e) {
+    console.error(e);
+    return { label, error: (e as Error).message };
+  }
+}
+
 let running = false;
 async function run(): Promise<void> {
   if (!agent || running) return;
@@ -556,21 +798,22 @@ async function run(): Promise<void> {
   const btn = $<HTMLButtonElement>("run");
   btn.disabled = true;
   btn.firstChild!.textContent = "Running… ";
+  $("raw-request").textContent = JSON.stringify({ state, questions }, null, 2);
+  $("raw-request-wrap").hidden = false;
   try {
-    const t0 = performance.now();
-    const result = await agent.predict(state, questions as Questions); // validated by the agent (Python messages)
-    const ms = performance.now() - t0;
-    (window as unknown as { __lastResult: unknown }).__lastResult = result;
-    $("m-latency").textContent = `${ms.toFixed(ms < 100 ? 1 : 0)} ms`;
-    $("m-tokens").textContent = String(result.usage?.input_tokens ?? "—");
-    $("m-questions").textContent = String(Object.keys(result.answers).length);
-    $("m-engine").textContent = engineLabel;
-    $("answers").replaceChildren(...Object.entries(result.answers as Record<string, AnswerLike>).map(([id, a]) => renderAnswer(id, a, questions[id] as { instructions?: unknown })));
-    $("raw").textContent = JSON.stringify(result, null, 2);
-    $("raw-wrap").hidden = false;
-  } catch (e) {
-    console.error(e);
-    showError((e as Error).message);
+    const compare = compareEnabled() && !!cpuAgent;
+    // Sequential, not Promise.all: running two backends concurrently on the
+    // same tab would contend for CPU/GPU resources and make the latency
+    // comparison meaningless (the whole point of this mode).
+    const webgpuOutcome = await runOn(agent, engineLabel, state, questions);
+    (window as unknown as { __lastResult: unknown }).__lastResult = webgpuOutcome.result;
+    const outcomes = [webgpuOutcome];
+    if (compare) outcomes.push(await runOn(cpuAgent!, "CPU reference", state, questions));
+
+    const columns = $("results-columns");
+    columns.className = `results-columns${outcomes.length > 1 ? " compare" : ""}`;
+    const fastestMs = Math.min(...outcomes.filter((o) => o.ms !== undefined).map((o) => o.ms!));
+    columns.replaceChildren(...outcomes.map((o) => renderResultColumn(o, questions, outcomes.length > 1 && o.ms === fastestMs)));
   } finally {
     running = false;
     btn.disabled = false;
@@ -615,16 +858,35 @@ async function main(): Promise<void> {
   try {
     if (savedDrafts) {
       drafts = JSON.parse(savedDrafts);
-      $<HTMLTextAreaElement>("state").value = store.get("state") ?? "";
-      setStateMode((store.get("stateMode") as "text" | "json") ?? "text");
+      const savedFields = store.get("stateFields");
+      if (savedFields) stateFields = JSON.parse(savedFields);
+      stateJsonMode = store.get("stateJsonMode") === "true";
+      $<HTMLTextAreaElement>("state-json").value = store.get("stateJson") ?? "";
       renderQuestions();
+      renderStateFields();
+      // Reflect the restored JSON-mode UI state without re-running
+      // setStateJsonMode's own read/convert side effects on boot.
+      $("state-json-toggle").setAttribute("aria-pressed", String(stateJsonMode));
+      $("state-json-toggle").textContent = stateJsonMode ? "Use builder" : "Edit as JSON";
+      $("state-fields").hidden = stateJsonMode;
+      $("state-add-row").hidden = stateJsonMode;
+      $("state-json-wrap").hidden = !stateJsonMode;
     } else throw new Error("no saved state");
   } catch {
     applyPreset(README_EXAMPLE);
     sel.value = "0";
   }
-  $("state").addEventListener("input", persist);
-  document.querySelectorAll('input[name="state-mode"]').forEach((el) => el.addEventListener("change", persist));
+  $("state-json").addEventListener("input", persist);
+  $("state-json-toggle").addEventListener("click", () => setStateJsonMode(!stateJsonMode));
+  document.querySelectorAll<HTMLButtonElement>("[data-add-field]").forEach((b) =>
+    b.addEventListener("click", () => {
+      stateFields.push(newStateField(b.dataset.addField as SFType));
+      renderStateFields();
+      persist();
+      const inputs = $("state-fields").querySelectorAll<HTMLInputElement>(".sf:last-child .id");
+      inputs[0]?.focus();
+    }),
+  );
   $("json-toggle").addEventListener("click", () => setJsonMode(!jsonMode));
   document.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -643,6 +905,13 @@ async function main(): Promise<void> {
     }
   });
   $("load").addEventListener("click", loadModel);
+  $<HTMLInputElement>("compare").addEventListener("change", () => {
+    if (compareEnabled()) {
+      if (loadedRepo) void loadCpuAgent();
+    } else {
+      disposeCpuAgent();
+    }
+  });
   // Two-click confirm in the page, not window.confirm(): embedded webviews,
   // sandboxed iframes and "prevent additional dialogs" make confirm() return
   // false without showing anything, which made this button a silent no-op.
