@@ -23,7 +23,7 @@
 import type { Backend, DType, HostQuantized, HostTensor, QuantizedTensor, Tensor } from "./index.ts";
 import * as C from "./compose.ts";
 import { NUMERICS_OPS, hasNative, type NumericsOp } from "./compose.ts";
-import { packQuantized, toF32 } from "./host.ts";
+import { packQuantized, toF32, toF64 } from "./host.ts";
 
 export interface EncodedTensor {
   dtype: DType;
@@ -63,6 +63,22 @@ export function decodeTensor(e: EncodedTensor): HostTensor {
       return { dtype: "i32", shape: e.shape, data: new Int32Array(buf) };
     case "bool":
       return { dtype: "bool", shape: e.shape, data: new Uint8Array(buf) };
+    case "u8":
+      return { dtype: "u8", shape: e.shape, data: new Uint8Array(buf) };
+    case "i8":
+      return { dtype: "i8", shape: e.shape, data: new Int8Array(buf) };
+    case "u16":
+      return { dtype: "u16", shape: e.shape, data: new Uint16Array(buf) };
+    case "i16":
+      return { dtype: "i16", shape: e.shape, data: new Int16Array(buf) };
+    case "u32":
+      return { dtype: "u32", shape: e.shape, data: new Uint32Array(buf) };
+    case "u64":
+      return { dtype: "u64", shape: e.shape, data: new BigUint64Array(buf) };
+    case "i64":
+      return { dtype: "i64", shape: e.shape, data: new BigInt64Array(buf) };
+    case "f64":
+      return { dtype: "f64", shape: e.shape, data: new Float64Array(buf) };
     default:
       // float fixtures are always stored as f32
       return { dtype: "f32", shape: e.shape, data: new Float32Array(buf) };
@@ -139,7 +155,8 @@ export function caseQuantized(c: OpCase, first: number): HostQuantized {
   const scales = decodeTensor(c.inputs[first + 1]!);
   const b = c.inputs[first + 2];
   const [N, K] = q.shape as [number, number];
-  return { shape: [N, K], bits: a.bits, groupSize: a.groupSize, mode: a.mode, data: packQuantized(q.data, a.bits), scales, biases: b ? decodeTensor(b) : null };
+  // q's data is always i32 (the case's packed q values), never a bigint dtype -- see the doc comment above.
+  return { shape: [N, K], bits: a.bits, groupSize: a.groupSize, mode: a.mode, data: packQuantized(q.data as ArrayLike<number>, a.bits), scales, biases: b ? decodeTensor(b) : null };
 }
 
 /** Runs one quantized case: uploads (x and bias in `dtype`, the weight through `uploadQuantized`) and calls the op. */
@@ -203,7 +220,7 @@ export function callOp<T extends Tensor>(b: Backend<T>, c: OpCase, xs: (T | null
   }
 }
 
-export function assertClose(actual: Float32Array, expected: Float32Array, atol: number, rtol: number, label: string): void {
+export function assertClose(actual: Float32Array | Float64Array, expected: Float32Array | Float64Array, atol: number, rtol: number, label: string): void {
   if (actual.length !== expected.length) throw new Error(`${label}: length ${actual.length} != ${expected.length}`);
   let worst = 0, worstI = -1;
   for (let i = 0; i < actual.length; i++) {
@@ -236,11 +253,20 @@ export function runConformance<T extends Tensor>(make: () => Backend<T> | Promis
           const want = decodeTensor(c.outputs[i]!);
           const got = await b.read(outs[i]!);
           if (JSON.stringify(got.shape) !== JSON.stringify(want.shape)) throw new Error(`${c.name}: shape [${got.shape}] want [${want.shape}]`);
-          // General-numerics cases also pin index/bool result dtypes (float dtypes follow the run).
-          if (NUMERIC_SET.has(c.op) && (got.dtype === "bool" || got.dtype === "i32" || want.dtype === "bool" || want.dtype === "i32")) {
+          // General-numerics cases pin most result dtypes to the op's own
+          // semantics (bool for comparisons, i32 for index/bool-input ops,
+          // the input's own dtype for neg/abs/cumsum/etc on a fixed dtype)
+          // -- only plain float dtypes (f32/f16/bf16) "follow the run".
+          if (NUMERIC_SET.has(c.op) && want.dtype !== "f32" && want.dtype !== "f16" && want.dtype !== "bf16") {
             if (got.dtype !== want.dtype) throw new Error(`${c.name}[${i}] ${dtype}: dtype ${got.dtype} want ${want.dtype}`);
           }
-          assertClose(toF32(got), toF32(want), Math.max(c.atol, tol), Math.max(c.rtol, tol), `${c.name}[${i}] ${dtype}`);
+          // f64 compares at full f64 precision (toF32 would round both
+          // sides down first, making a tight f64 tolerance meaningless).
+          if (want.dtype === "f64" || got.dtype === "f64") {
+            assertClose(toF64(got), toF64(want), Math.max(c.atol, tol), Math.max(c.rtol, tol), `${c.name}[${i}] ${dtype}`);
+          } else {
+            assertClose(toF32(got), toF32(want), Math.max(c.atol, tol), Math.max(c.rtol, tol), `${c.name}[${i}] ${dtype}`);
+          }
         }
       } finally {
         for (const x of [...xs, ...outs]) if (x) b.dispose(x);

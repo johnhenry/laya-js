@@ -51,7 +51,10 @@ export function hasNative(b: Backend<any>, op: NumericsOp | QuantizedOp | "geglu
   return typeof (b as unknown as Record<string, unknown>)[op] === "function";
 }
 
-const isFloat = (d: DType) => d === "f32" || d === "f16" || d === "bf16";
+// f64 counts as float too: without it, asFloat()/floatOf() would silently
+// downcast f64 inputs to f32 before sqrt/rsqrt/pow/etc, losing precision on
+// backends that actually support f64 (see tensor-backend/src/index.ts DType docs).
+const isFloat = (d: DType) => d === "f32" || d === "f16" || d === "bf16" || d === "f64";
 const floatOf = (d: DType): DType => (isFloat(d) ? d : "f32");
 
 function asFloat<T extends Tensor>(b: Backend<T>, x: T): T {
@@ -123,10 +126,17 @@ export function logicalOr<T extends Tensor>(b: Backend<T>, x: T, y: T): T {
 
 // ---------------------------------------------------------------- comparisons
 
-/** bool operands subtract as i32 (MLX rejects bool arithmetic). */
+/**
+ * bool operands subtract as i32 (MLX rejects bool arithmetic). Every other
+ * non-float dtype subtracts as f32: comparisons only need the difference's
+ * sign, and subtracting directly in an unsigned dtype (u8/u16/u32/u64) would
+ * wrap on underflow (e.g. u8 3-5 wraps to 254, not -2), silently flipping
+ * the comparison result -- confirmed by a real conformance failure this was
+ * added to fix (`less/u8` and friends, composed-fallback run, 2026-09-25).
+ */
 function diff<T extends Tensor>(b: Backend<T>, x: T, y: T): T {
-  const i = (t: T) => (t.dtype === "bool" ? b.cast(t, "i32") : t);
-  return b.sub(i(x), i(y));
+  const wide = (t: T) => (t.dtype === "bool" ? b.cast(t, "i32") : t.dtype === "i32" || isFloat(t.dtype) ? t : b.cast(t, "f32"));
+  return b.sub(wide(x), wide(y));
 }
 
 export function greater<T extends Tensor>(b: Backend<T>, x: T, y: T): T {
@@ -164,7 +174,12 @@ export function greaterEqual<T extends Tensor>(b: Backend<T>, x: T, y: T): T {
 export function neg<T extends Tensor>(b: Backend<T>, x: T): T {
   if (b.neg) return b.neg(x);
   if (isFloat(x.dtype)) return b.scale(x, -1);
-  return b.scope(() => b.sub(zerosLike(b, x, "i32"), b.cast(x, "i32")));
+  // bool -> i32 (unchanged; MLX rejects bool arithmetic). Every other
+  // integer dtype negates in its own dtype -- was previously force-cast to
+  // i32 unconditionally, silently discarding narrower dtypes (a real
+  // conformance failure this was added to fix: `neg/i8` returning i32).
+  if (x.dtype === "bool") return b.scope(() => b.sub(zerosLike(b, x, "i32"), b.cast(x, "i32")));
+  return b.scope(() => b.sub(zerosLike(b, x, x.dtype), x));
 }
 
 export function abs<T extends Tensor>(b: Backend<T>, x: T): T {

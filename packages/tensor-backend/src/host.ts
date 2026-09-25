@@ -6,6 +6,11 @@ export function sizeOf(shape: Shape): number {
   return n;
 }
 
+/** dtypes whose HostData elements are JS `bigint`, not `number` (matches @johnhenry/math-plus-tensor-core's `isBigIntDType`). */
+export function isBigIntDType(dtype: DType): boolean {
+  return dtype === "u64" || dtype === "i64";
+}
+
 export function allocHost(dtype: DType, length: number): HostData {
   switch (dtype) {
     case "f32":
@@ -18,17 +23,36 @@ export function allocHost(dtype: DType, length: number): HostData {
       return new Int32Array(length);
     case "bool":
       return new Uint8Array(length);
+    case "u8":
+      return new Uint8Array(length);
+    case "i8":
+      return new Int8Array(length);
+    case "u16":
+      return new Uint16Array(length);
+    case "i16":
+      return new Int16Array(length);
+    case "u32":
+      return new Uint32Array(length);
+    case "f64":
+      return new Float64Array(length);
+    case "u64":
+      return new BigUint64Array(length);
+    case "i64":
+      return new BigInt64Array(length);
   }
 }
 
-export function host(dtype: DType, shape: Shape, data?: ArrayLike<number>): HostTensor {
+export function host(dtype: DType, shape: Shape, data?: ArrayLike<number | bigint>): HostTensor {
   const out = allocHost(dtype, sizeOf(shape));
   if (data) {
     if (data.length !== out.length) throw new RangeError(`host(): ${data.length} values for shape [${shape}]`);
     if (dtype === "bf16") {
       const u = out as Uint16Array;
-      for (let i = 0; i < u.length; i++) u[i] = f32ToBf16Bits(data[i]!);
-    } else out.set(data as ArrayLike<number>);
+      for (let i = 0; i < u.length; i++) u[i] = f32ToBf16Bits(data[i] as number);
+    } else if (isBigIntDType(dtype)) {
+      const b = out as BigUint64Array | BigInt64Array;
+      for (let i = 0; i < b.length; i++) b[i] = BigInt(data[i]!);
+    } else (out as Exclude<HostData, BigUint64Array | BigInt64Array>).set(data as ArrayLike<number>);
   }
   return { dtype, shape: [...shape], data: out };
 }
@@ -58,7 +82,37 @@ export function toF32(t: HostTensor): Float32Array {
     for (let i = 0; i < u.length; i++) out[i] = bf16BitsToF32(u[i]!);
     return out;
   }
+  if (isBigIntDType(t.dtype)) {
+    const b = t.data as BigUint64Array | BigInt64Array;
+    const out = new Float32Array(b.length);
+    for (let i = 0; i < b.length; i++) out[i] = Number(b[i]!);
+    return out;
+  }
   return Float32Array.from(t.data as ArrayLike<number>);
+}
+
+/**
+ * Any HostTensor → Float64Array of its values, at full precision for f64
+ * (unlike `toF32`, which would round f64 values down -- this is what the
+ * conformance suite's `assertClose` uses for f64 cases so a tight tolerance
+ * actually verifies f64 precision instead of comparing two already-rounded
+ * f32 values).
+ */
+export function toF64(t: HostTensor): Float64Array {
+  if (t.dtype === "f64") return t.data as Float64Array;
+  if (t.dtype === "bf16") {
+    const u = t.data as Uint16Array;
+    const out = new Float64Array(u.length);
+    for (let i = 0; i < u.length; i++) out[i] = bf16BitsToF32(u[i]!);
+    return out;
+  }
+  if (isBigIntDType(t.dtype)) {
+    const b = t.data as BigUint64Array | BigInt64Array;
+    const out = new Float64Array(b.length);
+    for (let i = 0; i < b.length; i++) out[i] = Number(b[i]!);
+    return out;
+  }
+  return Float64Array.from(t.data as ArrayLike<number>);
 }
 
 /**

@@ -25,7 +25,18 @@
  *   so a HostTensor feeds `Tensor.fromTypedArray` without a copy.
  */
 
-export type DType = "f32" | "f16" | "bf16" | "i32" | "bool";
+/**
+ * Full parity with @johnhenry/math-plus-tensor-core's host dtype set (2026-09-25).
+ * Not every backend supports every dtype -- check `Backend.supports(dtype)`.
+ * Two gaps are hardware/spec-capped, not backend laziness:
+ * - f64: no Apple GPU has double-precision hardware (Metal has none at all);
+ *   MLX's own float64 works CPU-only and throws on GPU. WGSL has no f64 type.
+ * - i8/u8/i16/u16/i64/u64 on WebGPU: not in the WGSL spec (i64/u64 exist only
+ *   behind the non-standard, browser-unreliable SHADER_INT64 native feature;
+ *   i8/u8/i16/u16 aren't proposed as accepted spec at all). u32 is the one
+ *   exception -- it's a real core WGSL type.
+ */
+export type DType = "f32" | "f16" | "bf16" | "i32" | "bool" | "u8" | "i8" | "u16" | "i16" | "u32" | "u64" | "i64" | "f64";
 
 export type Shape = readonly number[];
 
@@ -33,8 +44,26 @@ export type Shape = readonly number[];
  * Host-side storage per dtype:
  * - f32 → Float32Array, f16 → Float16Array, bf16 → Uint16Array (raw bits),
  *   i32 → Int32Array, bool → Uint8Array (0/1).
+ * - u8 → Uint8Array (shares its TypedArray class with bool; the `dtype`
+ *   field disambiguates, same pattern bf16 already uses against u16).
+ * - i8 → Int8Array, u16 → Uint16Array, i16 → Int16Array, u32 → Uint32Array,
+ *   f64 → Float64Array.
+ * - u64/i64 → BigUint64Array/BigInt64Array: elements are JS `bigint`, not
+ *   `number` (matches @johnhenry/math-plus-tensor-core's own `isBigIntDType`
+ *   handling -- mirror it, don't invent a second convention).
  */
-export type HostData = Float32Array | Float16Array | Uint16Array | Int32Array | Uint8Array;
+export type HostData =
+  | Float32Array
+  | Float16Array
+  | Uint16Array
+  | Int32Array
+  | Uint8Array
+  | Int8Array
+  | Int16Array
+  | Uint32Array
+  | Float64Array
+  | BigUint64Array
+  | BigInt64Array;
 
 export interface HostTensor {
   readonly dtype: DType;
@@ -151,6 +180,11 @@ export interface Backend<T extends Tensor = Tensor> {
   add(a: T, b: T): T;
   sub(a: T, b: T): T;
   mul(a: T, b: T): T;
+  /**
+   * u64/i64 are not accepted: integer division semantics differ from
+   * NumPy's true division (i64/i64 → f64) -- cast to a float dtype first.
+   * Matches @johnhenry/math-plus-tensor-core's BIGINT_OPS exclusion.
+   */
   div(a: T, b: T): T;
   maximum(a: T, b: T): T;
   /** cond is bool; a and b broadcast against cond. */
@@ -272,7 +306,13 @@ export interface Backend<T extends Tensor = Tensor> {
   mean?(x: T, axis: number, keepDims?: boolean): T;
   /** Minimum along `axis`; keeps dtype. */
   min?(x: T, axis: number, keepDims?: boolean): T;
-  /** Inclusive prefix sum along `axis`; floats keep dtype, i32/bool → i32. */
+  /**
+   * Inclusive prefix sum along `axis`; floats and integer dtypes wider than
+   * bool keep their own dtype and WRAP on overflow within it (confirmed
+   * against real MLX: u8 cumsum wraps at 256, it is not auto-promoted) --
+   * bool is the one exception, promoted to i32. Cast to a wider dtype first
+   * if overflow within the input's own width is not what you want.
+   */
   cumsum?(x: T, axis: number): T;
 }
 

@@ -1723,5 +1723,1264 @@
   ],
   "atol": 0.0,
   "rtol": 0.0
+ },
+ {
+  "name": "equal/u8",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "GC/Q/eiv3HzFaPCGXoBbvFfVj+Y="
+   },
+   {
+    "dtype": "u8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "47vRL8SBtVt3YxohbajjKorkV0U="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/u8",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "GC/Q/eiv3HzFaPCGXoBbvFfVj+Y="
+   },
+   {
+    "dtype": "u8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "47vRL8SBtVt3YxohbajjKorkV0U="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AQEBAAAAAAAAAAAAAQEBAAEBAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/u8",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "0CrG1GzyaW4PWOUJEWdseHGJ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "BQAAAAQAAAAFAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/u8",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "0CrG1GzyaW4PWOUJEWdseHGJ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     6
+    ],
+    "b64": "AADcQgAAqkIAANZCAAAMQwAAFkNWVQFD"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/u8",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "0CrG1GzyaW4PWOUJEWdseHGJ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "u8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "0PrAlADyadfmPiMsEXjkXM1W"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/i8",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "g5lbEyiT7i2vpaq8cn6Eih/1A2U="
+   },
+   {
+    "dtype": "i8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "mGtVw1IizFOP7911vI2S3+KRRCQ="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/i8",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "g5lbEyiT7i2vpaq8cn6Eih/1A2U="
+   },
+   {
+    "dtype": "i8",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "mGtVw1IizFOP7911vI2S3+KRRCQ="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AQEAAAEBAAEAAQEBAAABAQAAAQA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/i8",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "sLBjjKyXcgxIDHyB0XUkoU7e"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AgAAAAQAAAABAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/i8",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "sLBjjKyXcgxIDHyB0XUkoU7e"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     6
+    ],
+    "b64": "q6qKwKuqgkEAAIpCq6qEwlZVHUJWVbHC"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/i8",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "sLBjjKyXcgxIDHyB0XUkoU7e"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "sGDDT/uScn7G0k7P0UZqC1k3"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/u16",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "LR1ztUYvwBxe5XsAqrnTiOGrIXTmABiRjT1xEe1DUG5aaCP3mvdiaQ=="
+   },
+   {
+    "dtype": "u16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "kuLdm8PzB9F1E9+hMQhbNVYSo5JlD2BsQWZ2Y/QQTC9XTCu2P6iLRA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/u16",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "LR1ztUYvwBxe5XsAqrnTiOGrIXTmABiRjT1xEe1DUG5aaCP3mvdiaQ=="
+   },
+   {
+    "dtype": "u16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "kuLdm8PzB9F1E9+hMQhbNVYSo5JlD2BsQWZ2Y/QQTC9XTCu2P6iLRA=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AQABAQABAAAAAQEAAQEAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/u16",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AFaE9AxpDsUTwyp91KrnVZzep2lxL6t0kNdw6y9whZsNJEyZ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AQAAAAIAAAABAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/u16",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AFaE9AxpDsUTwyp91KrnVZzep2lxL6t0kNdw6y9whZsNJEyZ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     6
+    ],
+    "b64": "q3YdR1aePEcAnRJHAL4YRwC2uUartQNH"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/u16",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AFaE9AxpDsUTwyp91KrnVZzep2lxL6t0kNdw6y9whZsNJEyZ"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "u16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "AFaESpCznnixO9u41Kq7AFff/khveBrtkNcAwy8ztM7B8g2M"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/i16",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "McI2oI4y96XcMga5+0cMVU8aVg0uEcq0f/hAzzPd/r2FPhAW1wBhNA=="
+   },
+   {
+    "dtype": "i16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "GwjXxqRf1AgejDpJny+C7C+5GO7GHGu20bdCsg5tOpQxcrJW8dBEkw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/i16",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "McI2oI4y96XcMga5+0cMVU8aVg0uEcq0f/hAzzPd/r2FPhAW1wBhNA=="
+   },
+   {
+    "dtype": "i16",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "GwjXxqRf1AgejDpJny+C7C+5GO7GHGu20bdCsg5tOpQxcrJW8dBEkw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AQEBAQABAAAAAAEBAAABAAEBAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/i16",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "bzixRqHX7BrLC5CgclrWgYq6L653b43qWLgJefQuAl+NbDms"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AQAAAAQAAAABAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/i16",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "bzixRqHX7BrLC5CgclrWgYq6L653b43qWLgJefQuAl+NbDms"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     6
+    ],
+    "b64": "AJjIRVbVrkVWrafFAPBVRQCKmkarxoXG"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/i16",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "bzixRqHX7BrLC5CgclrWgYq6L653b43qWLgJefQuAl+NbDms"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "bzggf8FWrXF4fQgeclpI3NKWAUV4tAWfWLhhMVVgV7/kKx3Y"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/u32",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "bH8KAJ6MDgBCSAkA3qQJAFVHAAC/HwkAge0NACfMBwC1Eg8AcjAOAJUUAgDeMgMAj/UAAE4MCwBXJw4AYZYOANWnCwAWPAsA3SoGADSnDgA="
+   },
+   {
+    "dtype": "u32",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "HBQEAJzMCgAKBgwARJMGALtrCQC1ywAA4EYHAA9CDACJDgAARdIBAF/vCgC/ng0AzBcNAFIfCQB6HQUAzKoLAFOjBgD9RQcALpEHAK8ADgA="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/u32",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "bH8KAJ6MDgBCSAkA3qQJAFVHAAC/HwkAge0NACfMBwC1Eg8AcjAOAJUUAgDeMgMAj/UAAE4MCwBXJw4AYZYOANWnCwAWPAsA3SoGADSnDgA="
+   },
+   {
+    "dtype": "u32",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "HBQEAJzMCgAKBgwARJMGALtrCQC1ywAA4EYHAA9CDACJDgAARdIBAF/vCgC/ng0AzBcNAFIfCQB6HQUAzKoLAFOjBgD9RQcALpEHAK8ADgA="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "AAABAAEAAAEAAAEBAQAAAAAAAQA="
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/u32",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "1NUMAMimCQDtPAMAR3ICAEnwBQAUyAAAlw4CAKHABQCMowcAhJ4EADizCwChpAMAQwUDABcuBABXVQAA82IBAFJuDgBPrQEA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "AAAAAAQAAAAEAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "mean/u32",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "1NUMAMimCQDtPAMAR3ICAEnwBQAUyAAAlw4CAKHABQCMowcAhJ4EADizCwChpAMAQwUDABcuBABXVQAA82IBAFJuDgBPrQEA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f32",
+    "shape": [
+     6
+    ],
+    "b64": "6xG/SFbl0EirJm9I1k80SLsJK0kAKwJI"
+   }
+  ],
+  "atol": 1e-06,
+  "rtol": 1e-05
+ },
+ {
+  "name": "cumsum/u32",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "1NUMAMimCQDtPAMAR3ICAEnwBQAUyAAAlw4CAKHABQCMowcAhJ4EADizCwChpAMAQwUDABcuBABXVQAA82IBAFJuDgBPrQEA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "u32",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "1NUMAJx8FgCJuRkA0CscABkcIgAt5CIAlw4CADjPBwDEcg8ASBEUAIDEHwAhaSMAQwUDAFozBwCxiAcApOsIAPZZFwBFBxkA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "neg/i8",
+  "op": "neg",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "+Ek6ToasVwEgZDSi"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "CLfGsnpUqf/gnMxe"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "abs/i8",
+  "op": "abs",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "+Ek6ToasVwEgZDSi"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i8",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "CEk6TnpUVwEgZDRe"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "neg/i16",
+  "op": "neg",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "fZWN2XzIEPJPffd6o233PsF0ZLCwYWaF"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "g2pzJoQ38A2xggmFXZIJwT+LnE9Qnpp6"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "abs/i16",
+  "op": "abs",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "fZWN2XzIEPJPffd6o233PsF0ZLCwYWaF"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i16",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "g2pzJoQ38A1Pffd6o233PsF0nE+wYZp6"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/u64",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "Xw8PAAAAAAD8fwAAAAAAAFuRDQAAAAAA2rkMAAAAAAAb9wgAAAAAAFqXDQAAAAAAIdgLAAAAAAAAPgsAAAAAAB7nAwAAAAAADLQNAAAAAACTOw0AAAAAAM0NCwAAAAAA"
+   },
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "SlAMAAAAAAAOeQgAAAAAAMdZAAAAAAAAopoDAAAAAABtLgEAAAAAAP5/BQAAAAAA7NoHAAAAAACy7goAAAAAAOUcBAAAAAAAAA0DAAAAAAAz3woAAAAAAGOxAQAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAAAAAAAAAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/u64",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "Xw8PAAAAAAD8fwAAAAAAAFuRDQAAAAAA2rkMAAAAAAAb9wgAAAAAAFqXDQAAAAAAIdgLAAAAAAAAPgsAAAAAAB7nAwAAAAAADLQNAAAAAACTOw0AAAAAAM0NCwAAAAAA"
+   },
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "SlAMAAAAAAAOeQgAAAAAAMdZAAAAAAAAopoDAAAAAABtLgEAAAAAAP5/BQAAAAAA7NoHAAAAAACy7goAAAAAAOUcBAAAAAAAAA0DAAAAAAAz3woAAAAAAGOxAQAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAEAAAAAAAABAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "argmax/u64",
+  "op": "argmax",
+  "args": {
+   "axis": 1,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "TckGAAAAAACo1gMAAAAAADUwCgAAAAAAuOcOAAAAAAA0OAIAAAAAAJo/DwAAAAAAgDgFAAAAAAD96gwAAAAAADB5BwAAAAAApg4KAAAAAADGhgIAAAAAAAa0AAAAAAAA3BgNAAAAAADrLQkAAAAAACrfBQAAAAAASEoLAAAAAABeHAIAAAAAAFCXDgAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i32",
+    "shape": [
+     3
+    ],
+    "b64": "BQAAAAEAAAAFAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "cumsum/u64",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "TckGAAAAAACo1gMAAAAAADUwCgAAAAAAuOcOAAAAAAA0OAIAAAAAAJo/DwAAAAAAgDgFAAAAAAD96gwAAAAAADB5BwAAAAAApg4KAAAAAADGhgIAAAAAAAa0AAAAAAAA3BgNAAAAAADrLQkAAAAAACrfBQAAAAAASEoLAAAAAABeHAIAAAAAAFCXDgAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "u64",
+    "shape": [
+     3,
+     6
+    ],
+    "b64": "TckGAAAAAAD1nwoAAAAAACrQFAAAAAAA4rcjAAAAAAAW8CUAAAAAALAvNQAAAAAAgDgFAAAAAAB9IxIAAAAAAK2cGQAAAAAAU6sjAAAAAAAZMiYAAAAAAB/mJgAAAAAA3BgNAAAAAADHRhYAAAAAAPElHAAAAAAAOXAnAAAAAACXjCkAAAAAAOcjOAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "equal/i64",
+  "op": "equal",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "lxby//////8wofL//////+zV/v//////FiX9///////uSPP//////5Zf+P//////Ma0JAAAAAAATgAoAAAAAAOmI8v//////hvz2//////9V0f////////fP////////"
+   },
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "GCYEAAAAAAAQRPz//////xXNBAAAAAAAhYf1//////857/X//////2bkDgAAAAAApTYBAAAAAACYNvH//////2GcDQAAAAAA5Db3//////8vQfH//////92vCgAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AAAAAAAAAAAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "less/i64",
+  "op": "less",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "lxby//////8wofL//////+zV/v//////FiX9///////uSPP//////5Zf+P//////Ma0JAAAAAAATgAoAAAAAAOmI8v//////hvz2//////9V0f////////fP////////"
+   },
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "GCYEAAAAAAAQRPz//////xXNBAAAAAAAhYf1//////857/X//////2bkDgAAAAAApTYBAAAAAACYNvH//////2GcDQAAAAAA5Db3//////8vQfH//////92vCgAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "bool",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "AQEBAAEBAAABAQAB"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "neg/i64",
+  "op": "neg",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "aMv8//////+x6vf//////8oQCwAAAAAAz3INAAAAAADnWAMAAAAAAOjA+v//////UfQFAAAAAAAiHQ8AAAAAAKJdAgAAAAAAOun0///////eNw8AAAAAAKp8AQAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "mDQDAAAAAABPFQgAAAAAADbv9P//////MY3y//////8Zp/z//////xg/BQAAAAAArwv6///////e4vD//////16i/f//////xhYLAAAAAAAiyPD//////1aD/v//////"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "cumsum/i64",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "aMv8//////+x6vf//////8oQCwAAAAAAz3INAAAAAADnWAMAAAAAAOjA+v//////UfQFAAAAAAAiHQ8AAAAAAKJdAgAAAAAAOun0///////eNw8AAAAAAKp8AQAAAAAA"
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "i64",
+    "shape": [
+     3,
+     4
+    ],
+    "b64": "aMv8//////8ZtvT//////+PG////////sjkNAAAAAADnWAMAAAAAAM8Z/v//////IA4EAAAAAABCKxMAAAAAAKJdAgAAAAAA3Eb3//////+6fgYAAAAAAGT7BwAAAAAA"
+   }
+  ],
+  "atol": 0.0,
+  "rtol": 0.0
+ },
+ {
+  "name": "sqrt/f64",
+  "op": "sqrt",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "iuEpnXAiwz8dvNwmZ6XRP6ccEpbGPsc/Xaum6WXS0T+crQNrqELTPzEw5RM9p8E/ptnzUFpdzz9vs/2pBny1P8G/3Tvgx8A/Gj/vb9tIrj8KF2GzzK28P0/h9YoUs8I/HNbbrBNUyD8a7iFnr8u/P2R0G32KSNA/zwMurakD0j9GtGBGcXPBP3nSCmLLp9A/pm3lzcL5oD9T0AuNT6rKPw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "DLgXB6u+2D+tZB1Qi83gPxJCo+UHRts/ZHxQ5uni4D93NfJA/o3hPyMJXbmJxNc/oaNxyESu3z8f5OfVYIrSP9HpJ91ELNc/k/y0hGchzz8Otq+ay2vVP7dDWrg/dtg/7Cr9Ydvm2z9ldYjRF47WP/YUWH4cJOA/5h/HvDD64D9jYRa+kaHXP3OVuh8OU+A/G89K/pxOxz/GSSYwCzbdPw=="
+   }
+  ],
+  "atol": 1e-14,
+  "rtol": 1e-13
+ },
+ {
+  "name": "tanh/f64",
+  "op": "tanh",
+  "args": {},
+  "inputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "iuEpnXAiw78dvNwmZ6XRP6ccEpbGPsc/Xaum6WXS0b+crQNrqELTvzEw5RM9p8E/ptnzUFpdzz9vs/2pBny1v8G/3Tvgx8C/Gj/vb9tIrj8KF2GzzK28P0/h9YoUs8I/HNbbrBNUyL8a7iFnr8u/P2R0G32KSNA/zwMurakD0r9GtGBGcXPBv3nSCmLLp9C/pm3lzcL5oD9T0AuNT6rKPw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "b+AjY0b+wr+6NiZxTjbRP+RfwIA1/sY/nKKjJwRg0b83rVYOArPSv6J2DDfNisE/4Y/ZSmvAzj8EOkdUJm+1v1NHj8Nur8C/zq4lB9Q/rj/sOf1dPY+8P9I2uQxQkcI/gVusAiYKyL8hHMddFqK/P+Xjz6y54c8/7zxC0JyN0b9lLyun91fBv17cEpcTStC/0iQ5Uyv4oD8FiYjSPknKPw=="
+   }
+  ],
+  "atol": 1e-14,
+  "rtol": 1e-13
+ },
+ {
+  "name": "mean/f64",
+  "op": "mean",
+  "args": {
+   "axis": 0,
+   "keepDims": false
+  },
+  "inputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "iuEpnXAiw78dvNwmZ6XRP6ccEpbGPsc/Xaum6WXS0b+crQNrqELTvzEw5RM9p8E/ptnzUFpdzz9vs/2pBny1v8G/3Tvgx8C/Gj/vb9tIrj8KF2GzzK28P0/h9YoUs8I/HNbbrBNUyL8a7iFnr8u/P2R0G32KSNA/zwMurakD0r9GtGBGcXPBv3nSCmLLp9C/pm3lzcL5oD9T0AuNT6rKPw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     5
+    ],
+    "b64": "ci3wiaArp7+6n9D48vnAPw8c75dzkba/A2IQ1DEksL+pLTeNSkisPw=="
+   }
+  ],
+  "atol": 1e-14,
+  "rtol": 1e-13
+ },
+ {
+  "name": "cumsum/f64",
+  "op": "cumsum",
+  "args": {
+   "axis": 1
+  },
+  "inputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "iuEpnXAiw78dvNwmZ6XRP6ccEpbGPsc/Xaum6WXS0b+crQNrqELTvzEw5RM9p8E/ptnzUFpdzz9vs/2pBny1v8G/3Tvgx8C/Gj/vb9tIrj8KF2GzzK28P0/h9YoUs8I/HNbbrBNUyL8a7iFnr8u/P2R0G32KSNA/zwMurakD0r9GtGBGcXPBv3nSCmLLp9C/pm3lzcL5oD9T0AuNT6rKPw=="
+   }
+  ],
+  "outputs": [
+   {
+    "dtype": "f64",
+    "shape": [
+     4,
+     5
+    ],
+    "b64": "iuEpnXAiw7+wlo+wXSjAP6zZUCOSs9M/8OSimsMSnj9Nf1kxfGHRvzEw5RM9p8E/7IRsskuC2D8QGO0HSiPTP19w/NOzfsU/JkD4r+oQzT8KF2GzzK28P2o2U3L9hNA/cC2Vb85rsT/FjVvrvpvIP0Y7yfJpltw/zwMurakD0r/yXV5QYr3avzaYNNmWsuW/XEFWrPqi5L+OmiaSzfDbvw=="
+   }
+  ],
+  "atol": 1e-13,
+  "rtol": 1e-12
  }
 ]
