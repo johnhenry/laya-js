@@ -90,7 +90,21 @@ skipped** — no Python reference exists, so there's no fixture-parity tier
 
 ## Verified so far
 
-- `npm run typecheck` clean; `node --test test/*.test.ts` 15/15 pass.
+- **A real bug was found and fixed here, from actual play, not from the test
+  suite.** The lookahead's "coast" phase originally simulated NOFLAP forever
+  after the tested action, and since nothing stops gravity, that path
+  eventually hits the ground regardless of what the tested action was —
+  `NOFLAP` came back "unsafe" almost every tick, so the shield flapped
+  constantly and shot the bird into the ceiling within the first ~20 ticks,
+  before a single pipe ever scrolled into view. The 15 pure-logic tests all
+  passed the whole time; none of them exercised a long enough play sequence
+  to notice. Fixed by making the coast reactive (flap only when actually
+  close to the ground) instead of blindly never-flap-again — see the
+  comment on `#willCollideWithin` in `core/game.ts`. Two tests needed
+  sharper scenarios to still be meaningful after the fix, and one new test
+  was added for the "mild fall recovers in time" case the bug had made
+  impossible to distinguish from "unavoidable death."
+- `npm run typecheck` clean; `node --test test/*.test.ts` 16/16 pass.
 - A real headless run against `aac6fef/laya-multilingual-mlx` on the **CPU**
   reference backend (`--backend cpu --headless --episodes 1 --steps 5`)
   completed end to end: agent loaded, `predict()` accepted the compact

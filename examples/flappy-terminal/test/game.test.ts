@@ -67,13 +67,24 @@ test("a pipe with the bird inside the gap does not kill", () => {
   assert.ok(g.alive);
 });
 
-test("moves() flags NOFLAP unsafe when the bird is falling fast near the ground", () => {
+test("moves() flags NOFLAP unsafe when it collides on the very next tick, even though the lookahead's reactive coast could otherwise recover from a milder fall", () => {
   const g = new FlappyGame({ seed: 1, height: 20 });
-  g.birdY = g.height - 2;
+  // Right at the edge of the ground with real downward speed: NOFLAP crosses the ground boundary
+  // on tick 0 itself, before the lookahead's reactive coast (which only corrects from tick 1
+  // onward) ever gets a chance to flap. A milder fall one or two rows higher recovers fine --
+  // that's the fix (see core/game.ts's #willCollideWithin comment), not tested here.
+  g.birdY = g.height - 1.1;
   g.birdVy = 0.5;
   const m = g.moves();
   assert.equal(m.find((x) => x.action === "NOFLAP")!.safe, false);
   assert.equal(m.find((x) => x.action === "FLAP")!.safe, true);
+});
+
+test("moves() reports NOFLAP safe from a mild fall well above the ground (the lookahead's reactive coast recovers in time)", () => {
+  const g = new FlappyGame({ seed: 1, height: 20 });
+  g.birdY = g.height - 2;
+  g.birdVy = 0.5;
+  assert.equal(g.moves().find((x) => x.action === "NOFLAP")!.safe, true);
 });
 
 test("moves() flags FLAP unsafe when the bird is already at the ceiling", () => {
@@ -96,8 +107,8 @@ test("moves() can find both actions unsafe (no throw) -- Flappy Bird has no tota
 
 test("guard restricts execution to the safe set and reports intervention", async () => {
   const g = new FlappyGame({ seed: 1, height: 20 });
-  g.birdY = g.height - 2;
-  g.birdVy = 0.5; // NOFLAP unsafe, FLAP safe (see the "falling fast" test above)
+  g.birdY = g.height - 1.1;
+  g.birdVy = 0.5; // NOFLAP unsafe, FLAP safe (see the "collides on the very next tick" test above)
   const p = buildPrompt(g);
   assert.deepEqual(p.safe.map((m) => m.action).sort(), ["FLAP"]);
   const probabilities: Record<Action, number> = { FLAP: 0.1, NOFLAP: 0.9 };

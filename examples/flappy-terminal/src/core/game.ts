@@ -66,6 +66,8 @@ export interface FlappyOptions {
 
 /** How many ticks ahead `moves()` simulates to classify an action `safe`. */
 const SAFETY_HORIZON_TICKS = 20;
+/** How close to the ground (in rows) the lookahead's reactive coast starts flapping to arrest a fall. */
+const REACT_MARGIN = 4;
 
 function collidesAt(
   birdY: number,
@@ -164,13 +166,27 @@ export class FlappyGame {
     }
   }
 
-  /** Simulate `action` now, then coast (no further flaps) for `horizon` ticks; true if that path ever collides. */
+  /**
+   * Simulate `action` now, then a reactive coast for `horizon` ticks: true
+   * if that path ever collides.
+   *
+   * The coast (every tick after the first) flaps only when close to the
+   * ground and otherwise doesn't -- NOT a blind "never flap again" coast.
+   * A pure never-flap-again coast would (almost) always eventually hit the
+   * ground regardless of what `action` was, since nothing stops gravity,
+   * which made `safe` degenerate to "false for NOFLAP, basically always"
+   * and caused the shield to flap on nearly every tick, overshooting into
+   * the ceiling. The reactive coast models "assuming reasonable corrective
+   * play continues", the same spirit as Snake's planner assuming the
+   * player keeps following the safe cycle rather than assuming they stop
+   * steering entirely.
+   */
   #willCollideWithin(action: Action, horizon: number): boolean {
     let y = this.birdY;
     let vy = this.birdVy;
     let pipes = this.pipes.map((p) => ({ x: p.x, gapY: p.gapY }));
     for (let t = 0; t < horizon; t++) {
-      const a = t === 0 ? action : "NOFLAP";
+      const a = t === 0 ? action : y >= this.height - REACT_MARGIN ? "FLAP" : "NOFLAP";
       vy = a === "FLAP" ? this.flapImpulse : vy + this.gravity;
       y += vy;
       pipes = pipes.map((p) => ({ x: p.x - this.pipeSpeed, gapY: p.gapY }));
