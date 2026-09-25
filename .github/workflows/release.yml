@@ -1,23 +1,24 @@
 name: Release
 
-# Skeleton mirroring math-plus's Changesets-driven release.yml, with three
+# Skeleton mirroring math-plus's Changesets-driven release.yml, with two
 # deliberate deviations:
 #
-#   1. Trigger: workflow_dispatch ONLY (no push-to-main, no release event).
-#      The first publish (2026-09-25, all 14 public packages) was run this
-#      way, as a human decision made in the Actions UI per AGENTS.md
-#      "Releases". Still TODO: switch to the family standard
-#      (`on: release: types: [published]` + `push: tags: ["v*"]` +
-#      workflow_dispatch) or math-plus's push-to-main Changesets flow --
-#      left as workflow_dispatch-only for now so each subsequent release
-#      stays a deliberate action while the flow is still new.
-#   2. A macOS job publishes the native platform package
+#   1. A macOS job publishes the native platform package
 #      @johnhenry/backend-mlx-darwin-arm64 BEFORE the Changesets publish.
 #      It is outside npm workspaces (EBADPLATFORM), so `changeset publish`
 #      never sees it; its version is bumped by hand together with
 #      @johnhenry/backend-mlx (test/manifest-drift.test.ts enforces equality).
-#   3. `dry_run` input (default true): every publish step runs with
-#      --dry-run unless it is explicitly turned off.
+#   2. `dry_run` input (default true): manual (workflow_dispatch) runs are a
+#      dry run unless explicitly turned off. On `push` there is no
+#      `inputs.dry_run` context, so it evaluates falsy and the run is real --
+#      matching math-plus's push-to-main Changesets flow exactly. The native
+#      job's `npm view` idempotency guard is what makes every push (not just
+#      the one that actually has new versions) safe to run for real.
+#
+# Trigger switched to the family standard on 2026-09-25 (was
+# workflow_dispatch-only from the first publish through then; see git log
+# for that history) now that the first publish is done and the flow is
+# proven.
 #
 # Auth: npm trusted publishing (OIDC). Every package on npm trusts this
 # repo's release.yml, so no NPM_TOKEN secret exists or is needed; publishes
@@ -28,6 +29,8 @@ name: Release
 # failed jobs" is always safe.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
