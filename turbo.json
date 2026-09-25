@@ -1,0 +1,53 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "cache": true
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": true
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": true
+    },
+    "test:bun": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": true
+    },
+    "test:deno": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": true
+    },
+    "verify": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": true
+    },
+    "demo:build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "cache": true
+    },
+    "build:native": {
+      "cache": false
+    },
+    "build:mlxc": {
+      "cache": false
+    },
+    "bench": {
+      "cache": false
+    },
+    "prepack": {
+      "dependsOn": ["build"],
+      "cache": false
+    }
+  }
+}

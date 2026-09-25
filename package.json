@@ -15,11 +15,11 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
     "test:manifest": "node --test test/*.test.ts",
-    "test": "npm run test:manifest && npm run test --workspaces --if-present",
-    "test:bun": "npm run test:bun --workspaces --if-present",
+    "test": "npm run test:manifest && turbo run test",
+    "test:bun": "turbo run test:bun",
     "sync:jsr": "node scripts/sync-jsr-configs.mjs",
     "build:mlxc": "npm run build:mlxc -w @johnhenry/backend-mlx",
     "fixtures": "cd ../laya-mlx && uv run python scripts/dump_js_fixtures.py --out ../laya-js/packages/laya-fixtures/data",
@@ -32,6 +32,7 @@
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
     "@types/node": "^24.13.3",
+    "turbo": "^2.6.1",
     "typescript": "^5.7.0"
   },
   "optionalDependencies": {
@@ -40,5 +41,6 @@
   "engines": {
     "node": ">=24.0.0",
     "bun": ">=1.2.0"
-  }
+  },
+  "packageManager": "npm@10.0.0"
 }
