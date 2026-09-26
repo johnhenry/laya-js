@@ -105,6 +105,8 @@ p { margin: 0; }
 .pill.ok::before { background: var(--accent); }
 .pill.warn::before { background: var(--amber); }
 .pill.bad::before { background: var(--red); }
+.pill.sm { padding: 1px 8px 1px 6px; font-size: 0.72rem; max-width: none; }
+#server-url { width: 220px; flex: none; }
 .icon-btn {
   width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--line); background: transparent;
   color: var(--text); cursor: pointer; display: grid; place-items: center;

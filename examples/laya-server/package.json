@@ -1,0 +1,38 @@
+{
+  "name": "@johnhenry/example-laya-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local HTTP server proxying MLX, ONNX (@receptron/laya), and Jev (TypeSafe) predictions for web-playground's compare mode -- keeps native modules and TYPESAFE_API_KEY out of the browser",
+  "type": "module",
+  "bin": {
+    "laya-server-js": "./src/server.ts"
+  },
+  "scripts": {
+    "start": "node --conditions=source src/server.ts",
+    "start:bun": "bun --conditions=source src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck && node --conditions=source --test test/*.test.ts",
+    "test:bun": "bun --conditions=source test test/"
+  },
+  "dependencies": {
+    "@johnhenry/laya": "^0.3.1",
+    "@johnhenry/laya-core": "^0.1.1"
+  },
+  "peerDependencies": {
+    "@johnhenry/backend-mlx": "^0.2.0 || ^0.3.0 || ^0.4.0 || ^0.5.0"
+  },
+  "peerDependenciesMeta": {
+    "@johnhenry/backend-mlx": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "@receptron/laya": "^0.1.2",
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.2.0"
+  }
+}

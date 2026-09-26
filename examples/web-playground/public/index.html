@@ -43,7 +43,6 @@
           <div class="row">
             <button id="load" class="btn primary" type="button">Load model</button>
             <label class="check small"><input id="f32" type="checkbox" /> f32 (slower, exact)</label>
-            <label class="check small"><input id="compare" type="checkbox" /> Compare webgpu vs cpu</label>
           </div>
           <div id="progress-wrap" class="progress-wrap" hidden>
             <progress id="progress" max="1" value="0" aria-describedby="progress-text"></progress>
@@ -53,6 +52,20 @@
             <progress id="cpu-progress" max="1" value="0" aria-describedby="cpu-progress-text"></progress>
             <p id="cpu-progress-text" class="small muted mono" aria-live="polite"></p>
           </div>
+          <fieldset class="compare-backends">
+            <legend class="small muted">Compare against</legend>
+            <div class="row">
+              <label class="check small"><input id="compare-cpu" type="checkbox" /> CPU (in-browser)</label>
+              <label class="check small"><input id="compare-mlx" type="checkbox" disabled /> MLX <span id="pill-mlx" class="pill sm">checking…</span></label>
+              <label class="check small"><input id="compare-onnx" type="checkbox" disabled /> ONNX <span id="pill-onnx" class="pill sm">checking…</span></label>
+              <label class="check small"><input id="compare-jev" type="checkbox" disabled /> Jev <span id="pill-jev" class="pill sm">checking…</span></label>
+            </div>
+            <div class="row small muted">
+              <label for="server-url">Backend server (<a href="../laya-server/README.md">laya-server</a>)</label>
+              <input id="server-url" type="text" class="mono" />
+              <button id="server-check" class="btn ghost small" type="button">Check</button>
+            </div>
+          </fieldset>
         </section>
 
         <section class="panel" aria-labelledby="state-h">

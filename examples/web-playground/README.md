@@ -28,11 +28,22 @@ adapter has `shader-f16`).
   and yes/no questions have optional true/false meanings. You can also
   "Edit as JSON", which is sent verbatim so the agent's Python-compatible
   validation messages appear.
-- **Compare mode**: run the same state/questions on both the WebGPU backend
-  and `@johnhenry/laya`'s pure-TS CPU reference backend, side by side, with
-  per-column latency, answers and raw response, and the faster column
-  marked. The CPU agent (a second checkpoint download) loads lazily, only
-  while "Compare" is checked, and is disposed when unchecked.
+- **Compare mode**: run the same state/questions on the WebGPU backend plus
+  any of: `@johnhenry/laya`'s pure-TS CPU reference backend (in this tab);
+  native **MLX**; **ONNX** via
+  [`@receptron/laya`](https://github.com/receptron/laya), an independent
+  export of the same upstream model; or **Jev**, TypeSafe's hosted
+  typed-decision API -- side by side, with per-column latency, answers and
+  raw response, and the fastest column marked. The CPU agent (a second
+  checkpoint download) loads lazily, only while "CPU" is checked, and is
+  disposed when unchecked. MLX/ONNX/Jev all run through
+  [`laya-server`](../laya-server) -- a separate local process, since none of
+  the three can run in a browser tab (native FFI, `onnxruntime-node`, and a
+  `TYPESAFE_API_KEY` that must never reach client JS, respectively) -- with
+  a "Backend server" URL field and a live `/health`-driven pill per backend
+  that disables its checkbox until the server reports it available. Jev's
+  answers have no equivalent to Laya's act probability; that stat reads
+  "N/A" for Jev rather than a misleading `0.0000`.
 - **Batch mode**: run one `predict()` call per line of text sequentially,
   each feeding the queue below. Enabled only when the state is exactly one
   text field, since "one value per line" doesn't generalize to more fields.
@@ -122,6 +133,17 @@ into the bundle), a structural check that every new DOM id referenced from
 pure logic. If you're the first to click through them, treat that as the
 real verification and update this section.
 
+The multi-backend compare mode's remote path (`src/lib/remoteBackend.ts`)
+got one further real check beyond the above: with a real
+[`laya-server`](../laya-server) running locally, a Node script imported
+`checkHealth`/`createRemoteAgent` directly (the same functions the browser
+bundle calls) and ran a real MLX prediction through them end to end --
+`checkHealth` correctly reported `mlx`/`onnx` available and `jev`
+unavailable (no `TYPESAFE_API_KEY` in this sandbox), and the MLX prediction
+matched the same server's own direct-`curl` result exactly. This confirms
+the wrapper's request/response handling is correct; it is **not** a
+substitute for clicking the actual checkboxes and pills in a browser.
+
 ## Limits
 
 - The Cache API is per origin. Locally, the playground (port 5173) and
@@ -131,4 +153,7 @@ real verification and update this section.
 - A downloaded file is buffered into a Blob before it is cached (see
   hf-cache's limitations), so the browser briefly needs about the checkpoint
   size in memory.
-- The native MLX backend is not available in browsers.
+- The native MLX backend is not available in browsers -- run
+  [`laya-server`](../laya-server) locally and use compare mode's MLX
+  checkbox instead. Same reasoning for ONNX and Jev (a native runtime and a
+  server-side-only API key, respectively).

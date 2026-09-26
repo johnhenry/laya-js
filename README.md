@@ -157,7 +157,7 @@ npx @johnhenry/laya-cli predict --state "I was billed twice. Please refund the d
 | [`@johnhenry/pyjson`](./packages/pyjson) | Byte-identical CPython `json.dumps`, `repr(float)`, `round()` |
 
 Private: [`laya-fixtures`](./packages/laya-fixtures) (golden data from
-Python) and eleven [examples](./examples): a terminal Snake driven by Laya
+Python) and twelve [examples](./examples): a terminal Snake driven by Laya
 (Node/Bun) and the same game in the browser on WebGPU
 ([live](https://johnhenry.github.io/laya-js/snake/)); a terminal Flappy Bird
 and its browser sibling
@@ -170,9 +170,14 @@ and its browser sibling
 shield) and its browser sibling
 ([live](https://johnhenry.github.io/laya-js/dino/)) — Flappy Bird,
 Checkers, Tetris and Dino Run are in the same architecture as Snake but
-JS-original, no Python reference; and a web playground
-([live](https://johnhenry.github.io/laya-js/playground/)). The six browser
-examples are deployed to GitHub Pages by
+JS-original, no Python reference; a web playground
+([live](https://johnhenry.github.io/laya-js/playground/)); and
+[`laya-server`](./examples/laya-server), a local-only Node process (not
+deployed anywhere) that proxies native MLX, ONNX
+([`@receptron/laya`](https://github.com/receptron/laya)) and Jev
+(TypeSafe's hosted API) predictions for the playground's compare mode,
+since none of the three can run in a browser tab. The six browser examples
+are deployed to GitHub Pages by
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
 `main`; `node scripts/build-pages.mjs` builds the same site into `_site/`.
 

@@ -2,13 +2,13 @@
  * Laya Playground: pick a checkpoint, download it once (Cache API), build a
  * state + typed questions, and run them on WebGPU in the browser.
  */
-import type { Questions } from "@johnhenry/laya";
 import * as layaPresets from "@johnhenry/laya-presets";
 import { detectWebGpu, type GpuCapability } from "./lib/gpu.ts";
 import { loadBrowserAgent, type BrowserAgent } from "./lib/loader.ts";
 import { CHECKPOINTS, formatBytes } from "./lib/models.ts";
 import { fromDrafts, newDraft, str, toDrafts, type QDraft, type QType } from "./lib/questions.ts";
 import { computePriorityValue, queueToCsv, queueToJson, stateSummary, type AnswerLike, type QueueEntry, type RunOutcome } from "./lib/queue.ts";
+import { checkHealth, createRemoteAgent, type HealthReport, type RemoteBackendName } from "./lib/remoteBackend.ts";
 import { batchEligible, jsonToStateFields, newStateField, stateFieldsToJson, type Json, type SFDraft, type SFType } from "./lib/state-fields.ts";
 
 interface Preset {
@@ -382,7 +382,52 @@ let cpuLoadedRepo: string | undefined;
 let cpuLoading = false;
 
 function compareEnabled(): boolean {
-  return $<HTMLInputElement>("compare").checked;
+  return $<HTMLInputElement>("compare-cpu").checked;
+}
+
+// Compare mode, remote backends: mlx/onnx/jev all run through a local
+// laya-server (see ../../laya-server) -- MLX is native FFI, ONNX runs on
+// onnxruntime-node, and Jev needs a TYPESAFE_API_KEY that must never reach
+// the browser. `health` is refreshed by `refreshServerHealth()` and gates
+// which checkboxes are enabled; nothing here loads a model into this tab.
+let health: HealthReport | undefined;
+
+function serverUrl(): string {
+  return $<HTMLInputElement>("server-url").value.trim() || "http://localhost:5199";
+}
+
+function remoteBackendEnabled(name: RemoteBackendName): boolean {
+  return $<HTMLInputElement>(`compare-${name}`).checked && !!health?.[name]?.available;
+}
+
+async function refreshServerHealth(): Promise<void> {
+  const pills = { mlx: $("pill-mlx"), onnx: $("pill-onnx"), jev: $("pill-jev") } as const;
+  for (const name of Object.keys(pills) as RemoteBackendName[]) {
+    pills[name].className = "pill sm";
+    pills[name].textContent = "checking…";
+  }
+  try {
+    health = await checkHealth(serverUrl());
+    for (const name of Object.keys(pills) as RemoteBackendName[]) {
+      const a = health[name];
+      pills[name].className = `pill sm ${a.available ? "ok" : "bad"}`;
+      pills[name].textContent = a.available ? "ready" : (a.reason ?? "unavailable");
+      pills[name].title = a.reason ?? "";
+      const box = $<HTMLInputElement>(`compare-${name}`);
+      box.disabled = !a.available;
+      if (!a.available) box.checked = false;
+    }
+  } catch (e) {
+    health = undefined;
+    for (const name of Object.keys(pills) as RemoteBackendName[]) {
+      pills[name].className = "pill sm bad";
+      pills[name].textContent = "server unreachable";
+      pills[name].title = (e as Error).message;
+      const box = $<HTMLInputElement>(`compare-${name}`);
+      box.disabled = true;
+      box.checked = false;
+    }
+  }
 }
 
 function selectedRepo(): string {
@@ -585,7 +630,9 @@ function renderAnswer(id: string, a: AnswerLike, q: { instructions?: unknown }):
     "div",
     { class: "meta" },
     h("span", {}, "confidence ", h("b", {}, a.confidence.toFixed(4))),
-    h("span", {}, "act probability ", h("b", {}, a.action.act_probability.toFixed(4))),
+    // Jev (and possibly other remote backends) has no RL-agent "should I act"
+    // concept at all -- laya-server maps that to NaN rather than a misleading 0.
+    h("span", {}, "act probability ", h("b", {}, Number.isNaN(a.action.act_probability) ? "N/A" : a.action.act_probability.toFixed(4))),
   );
   let body: Node[];
   if (a.type === "choice") {
@@ -631,10 +678,15 @@ function renderResultColumn(outcome: RunOutcome, questions: Record<string, unkno
   return h("div", { class: `result-column${fastest ? " fastest" : ""}` }, h("p", { class: "col-head" }, outcome.label), ...inner);
 }
 
-async function runOn(a: BrowserAgent, label: string, state: Json, questions: Record<string, unknown>): Promise<RunOutcome> {
+/** What both `BrowserAgent.predict` and a remote (server-proxied) agent's `predict` have in common -- all `runOn` needs. */
+interface PredictLike {
+  predict(state: Json, questions: Record<string, unknown>): Promise<{ answers: Record<string, AnswerLike>; usage?: { input_tokens?: number } }>;
+}
+
+async function runOn(a: PredictLike, label: string, state: Json, questions: Record<string, unknown>): Promise<RunOutcome> {
   try {
     const t0 = performance.now();
-    const result = await a.predict(state, questions as Questions); // validated by the agent (Python messages)
+    const result = await a.predict(state, questions); // validated by the agent (Python messages) or laya-server
     return { label, ms: performance.now() - t0, result };
   } catch (e) {
     console.error(e);
@@ -642,16 +694,20 @@ async function runOn(a: BrowserAgent, label: string, state: Json, questions: Rec
   }
 }
 
+const REMOTE_LABELS: Record<RemoteBackendName, string> = { mlx: "MLX (server)", onnx: "ONNX (server)", jev: "Jev (server)" };
+
 /** Runs one state through the loaded backend(s), renders it into the results columns, and queues it. */
 async function runOnceAndDisplay(state: Json, questions: Record<string, unknown>): Promise<RunOutcome[]> {
   const compare = compareEnabled() && !!cpuAgent;
-  // Sequential, not Promise.all: running two backends concurrently on the
-  // same tab would contend for CPU/GPU resources and make the latency
-  // comparison meaningless (the whole point of this mode).
+  const remoteBackends = (["mlx", "onnx", "jev"] as const).filter(remoteBackendEnabled);
+  // Sequential, not Promise.all: running several backends concurrently on the
+  // same tab (or hammering a paid API) would contend for resources and make
+  // the latency comparison meaningless (the whole point of this mode).
   const webgpuOutcome = await runOn(agent!, engineLabel, state, questions);
   (window as unknown as { __lastResult: unknown }).__lastResult = webgpuOutcome.result;
   const outcomes = [webgpuOutcome];
   if (compare) outcomes.push(await runOn(cpuAgent!, "CPU reference", state, questions));
+  for (const name of remoteBackends) outcomes.push(await runOn(createRemoteAgent(serverUrl(), name), REMOTE_LABELS[name], state, questions));
 
   const columns = $("results-columns");
   columns.className = `results-columns${outcomes.length > 1 ? " compare" : ""}`;
@@ -913,13 +969,18 @@ async function main(): Promise<void> {
     }
   });
   $("load").addEventListener("click", loadModel);
-  $<HTMLInputElement>("compare").addEventListener("change", () => {
+  $<HTMLInputElement>("compare-cpu").addEventListener("change", () => {
     if (compareEnabled()) {
       if (loadedRepo) void loadCpuAgent();
     } else {
       disposeCpuAgent();
     }
   });
+  $<HTMLInputElement>("server-url").addEventListener("change", () => {
+    store.set("serverUrl", serverUrl());
+    void refreshServerHealth();
+  });
+  $("server-check").addEventListener("click", () => void refreshServerHealth());
   $<HTMLInputElement>("batch").addEventListener("change", () => {
     $("batch-wrap").hidden = !batchMode();
     $("state-fields").hidden = batchMode() || stateJsonMode;
@@ -974,6 +1035,8 @@ async function main(): Promise<void> {
     if (!gpu.f16) $<HTMLInputElement>("f32").checked = true;
   }
   updateLoadButton();
+  $<HTMLInputElement>("server-url").value = store.get("serverUrl") ?? "http://localhost:5199";
+  void refreshServerHealth();
 }
 
 void main();
