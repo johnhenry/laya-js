@@ -50,6 +50,22 @@ offsets it, but wall-clock cost per piece is still substantially higher on
 every backend. This is inherent to real per-step control, not a
 regression to fix.
 
+**Every question's criteria carry real, grounded information, not bare
+labels.** A first pass of this redesign asked "rotation: 0°/90°/180°/270°"
+and "direction: none/left/right" as plain labels with no outcome
+information at all -- a real step backward from the rest of the family
+(Snake's own `move` criteria say "Blocked. Collision." / "Safe. Eat food
+now."), since the model had no way to know what any specific choice would
+actually do. `buildStepPrompt` now reports, per rotation, whether it
+*actually fits at the current column* (checked exactly the way rotation
+resolution itself works — no wall-kick), and per direction, *how many
+columns are actually free* that way (`maxFreeDistance`, the same primitive
+the live shift uses to clamp, so the hint and the real outcome can never
+diverge). The state text also reports the real per-column height profile
+(`columnHeights`), not just one scalar stack height — real board shape,
+not just "how tall," though still no raw grid dump (matching the family's
+existing "derived signals, not raw state" convention, just richer ones).
+
 ## The engine
 
 7 standard tetrominoes (I/O/T/S/Z/J/L). `pieces.ts` only stores
@@ -141,15 +157,18 @@ same-row-resting shelf — `sweepColumns` fixes this), the per-step engine's
 rotate-before-shift ordering (an illegal rotation is rejected using the
 *current* column, no wall-kick, even if the shift alone would have made
 room), the lock-time shield's guard/override/empty-safe-set behavior
-against the new per-step decision shape, and a full-game smoke-play test
-(a simple lowest-resulting-height heuristic, using the still-available
-global `legalPlacements`, not the shield's local view) across 6 seeds.
-**26 cases, 0 skipped** — no Python reference exists, so there's no
+against the new per-step decision shape, `buildStepPrompt`'s grounded
+per-option hints (rotation fit/blocked matches real collision, direction
+free-column counts match `maxFreeDistance`, the state text's column-height
+profile matches the real board), and a full-game smoke-play test (a simple
+lowest-resulting-height heuristic, using the still-available global
+`legalPlacements`, not the shield's local view) across 6 seeds.
+**29 cases, 0 skipped** — no Python reference exists, so there's no
 fixture-parity tier.
 
 ## Verified so far
 
-- `npm run typecheck` clean; `node --test test/*.test.ts` 26/26 pass.
+- `npm run typecheck` clean; `node --test test/*.test.ts` 29/29 pass.
 - A real headless run against `aac6fef/laya-multilingual-mlx` on **MLX**
   (`--backend mlx --headless --episodes 1 --steps 2`) completed end to end:
   agent loaded in 1.0 s, 2 pieces locked over 40 real gravity-step
@@ -164,6 +183,13 @@ fixture-parity tier.
   piece; now doing 10-20x more calls per piece would make that far worse)
   — WebGPU is untested in this specific sandbox pass but was verified for
   the prior per-piece design and shares the same `predict()` call shape.
+- The grounded-per-option-hints follow-up (rotation fit/blocked, direction
+  free-column counts, column-height profile) was re-verified the same way
+  after landing: a real MLX run (`--steps 3`) locked 3 pieces over 58 steps
+  with 0 interventions and no crashes, and the exact prompt text/criteria
+  were printed and eyeballed against hand-checked fixtures (a blocked
+  vertical rotation reports "blocked here", a piece 4 columns from the left
+  wall reports "up to 4 columns free") before being written up as tests.
 - **Not yet done**: an interactive terminal session (this was built and
   checked in a sandbox without an attached TTY). If you're the first to run
   it interactively, treat that as the real verification and update this

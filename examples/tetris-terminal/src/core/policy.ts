@@ -21,7 +21,7 @@
  */
 import type { Questions, State } from "@johnhenry/laya-core";
 import { resolveRotation, shapeOf, type Board, type PieceKind, type RotationLabel } from "./pieces.ts";
-import { collides, optionsAtRow, stackHeight, type Placement, type PlacementInfo, type TetrisGame } from "./game.ts";
+import { collides, columnHeights, maxFreeDistance, optionsAtRow, stackHeight, type Placement, type PlacementInfo, type TetrisGame } from "./game.ts";
 
 export const DEFAULT_MODEL = "aac6fef/laya-multilingual-mlx";
 
@@ -91,19 +91,51 @@ export interface StepDecision {
   output_tokens: number;
 }
 
+/**
+ * Rotation criteria carry real, grounded information -- whether that
+ * rotation actually fits at the CURRENT column, checked exactly the way
+ * `decisionFromStep` itself resolves rotation (no wall-kick) -- rather
+ * than bare degree labels the model would otherwise have to guess at.
+ */
+function rotationCriteria(board: Board, kind: PieceKind, position: StepPosition): Record<string, string> {
+  return Object.fromEntries(
+    ROTATION_LABELS.map((label) => {
+      const resolved = resolveRotation(kind, label);
+      const fits = shapeFits(board, kind, resolved, position.row, position.col);
+      return [label, `${ROTATION_DEGREES[label]} -- ${fits ? "fits at this column" : "blocked here (wall or stack)"}`];
+    }),
+  );
+}
+
+/**
+ * Direction criteria carry how far the piece could actually slide that way
+ * from here (using its CURRENT rotation's shape -- the only shape known
+ * for certain before the model's own rotation choice resolves), instead of
+ * a bare "left"/"right" the model has no way to judge the consequences of.
+ */
+function directionCriteria(board: Board, kind: PieceKind, position: StepPosition): Record<string, string> {
+  const shape = shapeOf(kind, position.rotation);
+  const free = (step: -1 | 1) => maxFreeDistance(board, shape, position.row, position.col, step);
+  const describe = (dir: "left" | "right", n: number) => (n > 0 ? `move ${dir}, up to ${n} column${n === 1 ? "" : "s"} free` : `move ${dir} -- blocked immediately`);
+  return { none: "stay in this column", left: describe("left", free(-1)), right: describe("right", free(1)) };
+}
+
 /** Planner features -> the exact state text and questions sent to the agent for one step. */
 export function buildStepPrompt(game: TetrisGame, position: StepPosition, isLockChance: boolean, prompt: PromptStyle = "compact"): StepPrompt {
   const kind = game.active;
+  const heights = columnHeights(game.board).join(",");
   let state: string;
   if (prompt === "compact") {
     state =
-      `Piece ${kind}, row ${position.row} of ${game.board.length}, rotation ${position.rotation}, column ${position.col}. Stack height ${stackHeight(game.board)}.` +
+      `Piece ${kind}, row ${position.row} of ${game.board.length}, rotation ${position.rotation}, column ${position.col}. ` +
+      `Column heights (0-${game.board[0]!.length - 1}, 0=empty): ${heights}. Stack height ${stackHeight(game.board)}.` +
       (isLockChance ? " It cannot move down further -- this is the last chance to adjust before it locks." : " Choose how it moves this step.");
   } else if (prompt === "detailed") {
     const next3 = game.queue.slice(0, 3).join(", ");
     state =
       `Tetris. Active piece ${kind} (next up: ${next3}), row ${position.row} of ${game.board.length}, rotation ${position.rotation}, column ${position.col}. ` +
-      `Stack height ${stackHeight(game.board)}. Level ${game.level}, ${game.linesCleared} lines cleared, score ${game.score}.` +
+      `Column heights (0-${game.board[0]!.length - 1}, 0=empty): ${heights}. Stack height ${stackHeight(game.board)}. ` +
+      `Level ${game.level}, ${game.linesCleared} lines cleared, score ${game.score}.` +
       (isLockChance
         ? " It cannot descend further -- this is the last chance to rotate or shift it sideways before it locks in place."
         : " Choose the rotation, horizontal direction and distance for this step.");
@@ -111,11 +143,11 @@ export function buildStepPrompt(game: TetrisGame, position: StepPosition, isLock
     throw new RangeError("prompt must be compact or detailed");
   }
   const questions: StepQuestions = {
-    rotation: { type: "choice", instructions: "Which rotation should the piece be in?", criteria: Object.fromEntries(ROTATION_LABELS.map((r) => [r, ROTATION_DEGREES[r]])) },
-    direction: { type: "choice", instructions: "Which horizontal direction should it move this step, if any?", criteria: { none: "stay in this column", left: "move left", right: "move right" } },
+    rotation: { type: "choice", instructions: "Which rotation should the piece be in?", criteria: rotationCriteria(game.board, kind, position) },
+    direction: { type: "choice", instructions: "Which horizontal direction should it move this step, if any?", criteria: directionCriteria(game.board, kind, position) },
     distance: {
       type: "choice",
-      instructions: "How many columns to move in that direction this step (0 if none)? Clamped to whatever is actually free.",
+      instructions: "How many columns to move in that direction this step (0 if none)? Clamped to whatever the chosen direction actually leaves free.",
       criteria: Object.fromEntries(Array.from({ length: MAX_DISTANCE + 1 }, (_, n) => [String(n), String(n)])),
     },
   };
@@ -196,17 +228,12 @@ export function decisionFromStep(output: PredictLike, p: StepPrompt, board: Boar
   const chosenRotation = resolveRotation(kind, argmaxKey(rotationProbs) as RotationLabel);
   const rotation = shapeFits(board, kind, chosenRotation, position.row, position.col) ? chosenRotation : position.rotation;
 
-  // Apply the lateral shift, clamped to whatever's actually free.
+  // Apply the lateral shift, clamped to whatever's actually free -- the same
+  // maxFreeDistance the prompt itself reported to the model for this direction.
   const direction = argmaxKey(directionProbs) as Direction;
   const distance = Number(argmaxKey(distanceProbs));
   const step = direction === "left" ? -1 : direction === "right" ? 1 : 0;
-  let col = position.col;
-  if (step !== 0) {
-    for (let i = 0; i < distance; i++) {
-      if (!shapeFits(board, kind, rotation, position.row, col + step)) break;
-      col += step;
-    }
-  }
+  const col = step === 0 ? position.col : position.col + step * Math.min(distance, maxFreeDistance(board, shapeOf(kind, rotation), position.row, position.col, step));
 
   const canDescend = shapeFits(board, kind, rotation, position.row + 1, col);
   const resolved: StepPosition = { row: position.row, rotation, col };

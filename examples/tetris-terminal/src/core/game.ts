@@ -125,6 +125,36 @@ export function stackHeight(board: Board): number {
 }
 
 /**
+ * Per-column height measured from the ceiling (0 = that column is empty) --
+ * the board-shape profile `stackHeight`'s single overall number doesn't
+ * carry, used to give the per-step prompt real terrain to reason about
+ * instead of just one scalar.
+ */
+export function columnHeights(board: Board): number[] {
+  const heights = new Array<number>(BOARD_WIDTH).fill(0);
+  for (let c = 0; c < BOARD_WIDTH; c++) {
+    for (let r = 0; r < BOARD_HEIGHT; r++) {
+      if (board[r]![c]) {
+        heights[c] = BOARD_HEIGHT - r;
+        break;
+      }
+    }
+  }
+  return heights;
+}
+
+/**
+ * How many columns `shape` can move from `col` toward `step` (`-1` left,
+ * `1` right) before the next one would collide -- the live shift's own
+ * clamp, and the prompt's "how far is actually free" hint, share this.
+ */
+export function maxFreeDistance(board: Board, shape: readonly ShapeCell[], row: number, col: number, step: -1 | 1): number {
+  let n = 0;
+  while (!collides(board, shape, row, col + step * (n + 1))) n++;
+  return n;
+}
+
+/**
  * Every column reachable from `fromCol` at `row` for `shape`, by walking
  * outward one column at a time and stopping at the first collision each
  * way (wall, stack, or out of bounds) -- clamped lateral movement, shared

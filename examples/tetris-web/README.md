@@ -23,6 +23,13 @@ follows the terminal layout.
   (roughly 10-20x more `predict()` calls per piece than the old per-piece
   design; each call's questions are much smaller, which partially offsets
   it, but expect play to feel slower per piece overall).
+- **Every question carries a real, grounded hint, not a bare label** —
+  shared core, so this is identical to the terminal demo: each rotation
+  option reports whether it actually fits at the piece's current column,
+  each direction option reports how many columns are actually free that
+  way, and the state text reports the real per-column height profile, not
+  just one stack-height number. See `../tetris-terminal/README.md`'s "The
+  engine" section for why this was added.
 - **Side panel**: active piece and next-5 preview, the executed placement
   (with a `SHIELD` tag when the shield overrode the model), topping-out
   risk, line-clear likelihood, inference ms, live steps/s and pieces/s

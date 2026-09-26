@@ -282,6 +282,39 @@ test("different seeds produce different bag sequences", () => {
   assert.notDeepEqual(a, b);
 });
 
+// ---------------------------------------------------------------- prompt content (grounded per-option hints, not bare labels)
+test("buildStepPrompt's state text reports the real per-column height profile, not just one scalar", () => {
+  const game = new TetrisGame(1);
+  const board = emptyBoard();
+  for (let r = 15; r < BOARD_HEIGHT; r++) for (let c = 0; c < 3; c++) board[r]![c] = "T";
+  game.board = board;
+  game.active = "T";
+  const p = buildStepPrompt(game, { row: 5, rotation: "0", col: 4 }, false);
+  assert.match(p.state, /Column heights \(0-9, 0=empty\): 5,5,5,0,0,0,0,0,0,0/);
+});
+
+test("rotation criteria report whether each rotation actually fits at the CURRENT column, not a bare degree label", () => {
+  const game = new TetrisGame(1);
+  const board = emptyBoard();
+  board[6]![0] = "T"; // blocks a vertical I anchored at col 0 (would occupy rows 5-8)
+  game.board = board;
+  game.active = "I";
+  const p = buildStepPrompt(game, { row: 5, rotation: "0", col: 0 }, false);
+  assert.match(p.questions.rotation.criteria["0"]!, /fits at this column/); // horizontal, unaffected
+  assert.match(p.questions.rotation.criteria.R!, /blocked here/); // vertical -- collides with the block
+  assert.match(p.questions.rotation.criteria.L!, /blocked here/); // resolves to the same shape as R
+});
+
+test("direction criteria report the real number of columns free that way, matching maxFreeDistance/the live shift's own clamp", () => {
+  const game = new TetrisGame(1);
+  const board = emptyBoard();
+  game.board = board;
+  game.active = "T"; // "0" rotation: cols anchor+0..anchor+2 (width 3)
+  const p = buildStepPrompt(game, { row: 5, rotation: "0", col: 4 }, false);
+  assert.match(p.questions.direction.criteria.left!, /up to 4 columns free/); // anchor can reach col 0
+  assert.match(p.questions.direction.criteria.right!, /up to 3 columns free/); // anchor can reach col 7 (width 3, board width 10)
+});
+
 // ---------------------------------------------------------------- per-step decisions and the lock-time shield
 test("rotation is checked against the CURRENT column before any shift -- an illegal rotation is rejected even if the shift alone would have made room (no wall-kick, a deliberate simplification)", () => {
   const game = new TetrisGame(1);
