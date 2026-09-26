@@ -894,6 +894,23 @@ async function main(): Promise<void> {
     applyTheme(theme);
   });
 
+  // Every panel's collapse state persists per section id (the <h2>'s id), so a
+  // reload keeps sections the user tucked away out of the way.
+  document.querySelectorAll<HTMLButtonElement>(".collapse-btn").forEach((btn) => {
+    const panel = btn.closest<HTMLElement>(".panel")!;
+    const key = `collapsed:${panel.querySelector("h2")!.id}`;
+    const setCollapsed = (collapsed: boolean) => {
+      panel.classList.toggle("collapsed", collapsed);
+      btn.setAttribute("aria-expanded", String(!collapsed));
+    };
+    setCollapsed(store.get(key) === "1");
+    btn.addEventListener("click", () => {
+      const collapsed = !panel.classList.contains("collapsed");
+      setCollapsed(collapsed);
+      store.set(key, collapsed ? "1" : "0");
+    });
+  });
+
   const presets = [...BUILTIN, ...packagePresets()];
   const sel = $<HTMLSelectElement>("preset");
   sel.replaceChildren(h("option", { value: "" }, "Choose…"), ...presets.map((p, i) => h("option", { value: String(i) }, p.name)));

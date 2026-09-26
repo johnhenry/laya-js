@@ -131,9 +131,15 @@ p { margin: 0; }
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; min-width: 0;
 }
-.results { position: sticky; top: 80px; }
-@media (max-width: 900px) { .results { position: static; } }
 .panel-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.panel.collapsed { gap: 0; }
+.panel.collapsed > *:not(.panel-head) { display: none; }
+.collapse-btn {
+  margin-left: auto; width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; flex: none;
+}
+.collapse-btn svg { width: 14px; height: 14px; fill: currentColor; transition: transform 0.15s; }
+.panel.collapsed .collapse-btn svg { transform: rotate(-90deg); }
 .step {
   display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px;
   background: var(--accent-soft); color: var(--accent); font: 700 12px/1 var(--mono);

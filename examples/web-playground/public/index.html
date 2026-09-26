@@ -35,6 +35,7 @@
           <div class="panel-head">
             <h2 id="model-h"><span class="step">1</span> Model</h2>
             <span id="model-state" class="muted small">Not loaded</span>
+            <button class="collapse-btn" type="button" aria-expanded="true" aria-label="Collapse Model section"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg></button>
           </div>
           <fieldset class="checkpoints">
             <legend class="sr-only">Checkpoint</legend>
@@ -74,6 +75,7 @@
             <label class="small muted" for="preset">Preset</label>
             <select id="preset"></select>
             <button id="state-json-toggle" class="btn ghost small" type="button" aria-pressed="false">Edit as JSON</button>
+            <button class="collapse-btn" type="button" aria-expanded="true" aria-label="Collapse State section"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg></button>
           </div>
           <div id="state-fields" class="state-fields"></div>
           <div id="state-json-wrap" hidden>
@@ -101,6 +103,7 @@
           <div class="panel-head">
             <h2 id="q-h"><span class="step">3</span> Questions</h2>
             <button id="json-toggle" class="btn ghost small" type="button" aria-pressed="false">Edit as JSON</button>
+            <button class="collapse-btn" type="button" aria-expanded="true" aria-label="Collapse Questions section"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg></button>
           </div>
           <div id="questions" class="questions"></div>
           <div id="questions-json-wrap" hidden>
@@ -118,12 +121,13 @@
       </div>
 
       <div class="col">
-        <section class="panel results" aria-labelledby="r-h">
+        <section class="panel" aria-labelledby="r-h">
           <div class="panel-head">
             <h2 id="r-h"><span class="step">4</span> Results</h2>
             <button id="run" class="btn primary" type="button" disabled>
               Run <kbd>⌘↵</kbd>
             </button>
+            <button class="collapse-btn" type="button" aria-expanded="true" aria-label="Collapse Results section"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg></button>
           </div>
           <details id="raw-request-wrap" class="raw" hidden>
             <summary>Raw request</summary>
@@ -139,6 +143,7 @@
             <h2 id="queue-h"><span class="step">5</span> Queue</h2>
             <label class="small muted" for="priority-question">Priority</label>
             <select id="priority-question"><option value="">None</option></select>
+            <button class="collapse-btn" type="button" aria-expanded="true" aria-label="Collapse Queue section"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg></button>
           </div>
           <div class="row">
             <button id="export-json" class="btn ghost small" type="button" disabled>Export JSON</button>

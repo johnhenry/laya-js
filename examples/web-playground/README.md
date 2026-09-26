@@ -61,6 +61,12 @@ adapter has `shader-f16`).
   probability. Also shown: per-run latency, input tokens, question count and
   the engine. The raw request and response are both collapsible.
   Cmd/Ctrl+Enter runs.
+- **Collapsible sections**: every panel (Model, State, Questions, Results,
+  Queue) has a chevron that tucks it away; collapsed state persists per
+  section across reloads. The whole page scrolls as one column -- Results
+  used to stay pinned in place with `position: sticky` while the rest of the
+  page scrolled past it, which read as broken rather than convenient, so
+  that's gone.
 - Accessible (labels, `role=meter` bars, `aria-live` results, focus rings,
   reduced motion) and responsive (one column below 900 px), with light, dark
   and system themes.
