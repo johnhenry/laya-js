@@ -164,7 +164,8 @@ and its browser sibling
 ([live](https://johnhenry.github.io/laya-js/flappy/)); a terminal Checkers
 (Laya, a scripted bot, or a human on either side) and its browser sibling
 ([live](https://johnhenry.github.io/laya-js/checkers/)); a terminal Tetris
-(one Laya decision per piece, not per tick) and its browser sibling
+(one Laya decision per gravity step -- rotation, direction, distance --
+with one last chance before locking) and its browser sibling
 ([live](https://johnhenry.github.io/laya-js/tetris/)); a terminal Chrome
 "no internet" dino runner (jump/duck/run, guarded by a reactive lookahead
 shield) and its browser sibling

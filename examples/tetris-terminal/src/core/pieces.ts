@@ -68,17 +68,34 @@ export function shapeOf(kind: PieceKind, rotation: RotationLabel): readonly Shap
 }
 
 /**
+ * Any of the 4 absolute labels resolves to a real shape, even for pieces
+ * that don't have a geometrically distinct one at that label (O has only
+ * "0"; I/S/Z only "0"/"R"). Works because each kind's distinct-rotation
+ * count (1, 2, or 4) always evenly divides 4: `ROTATION_ORDER.slice(0, n)`
+ * is exactly `DISTINCT_ROTATIONS[kind]` for all 7 standard kinds, so
+ * indexing modulo that count always lands on a label `SHAPES` actually has.
+ * This is what lets the per-step decision model freely choose "0"/"R"/"2"/"L"
+ * (0/90/180/270 degrees) regardless of which piece is active.
+ */
+export function resolveRotation(kind: PieceKind, label: RotationLabel): RotationLabel {
+  const period = DISTINCT_ROTATIONS[kind].length;
+  return ROTATION_ORDER[ROTATION_ORDER.indexOf(label) % period]!;
+}
+
+/**
  * Whether `kind` at `rotation` stays within the board's columns when placed
- * with its bounding box starting at `col` -- used by the terminal/web UIs
- * to decide whether it's safe to preview a piece in a DIFFERENT rotation
- * than the one it will actually land in (e.g. showing the default "0"
- * orientation briefly before snapping to the model's chosen rotation).
- * `legalPlacements` never needs this itself: it only ever evaluates a
- * rotation at columns already known to fit it.
+ * with its bounding box starting at `col`.
  */
 export function fitsAtColumn(kind: PieceKind, rotation: RotationLabel, col: number): boolean {
   const cols = shapeOf(kind, rotation).map(([, c]) => c);
   return col + Math.min(...cols) >= 0 && col + Math.max(...cols) < BOARD_WIDTH;
+}
+
+/** The centered spawn column for `kind`'s default ("0") orientation -- where a new piece actually enters play. */
+export function spawnColFor(kind: PieceKind): number {
+  const cols = shapeOf(kind, "0").map(([, c]) => c);
+  const width = Math.max(...cols) - Math.min(...cols) + 1;
+  return Math.floor((BOARD_WIDTH - width) / 2) - Math.min(...cols);
 }
 
 export function emptyBoard(): Board {

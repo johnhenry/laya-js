@@ -65,11 +65,12 @@
           </div>
           <dl class="stats mono">
             <dt>INFERENCE</dt><dd id="inference">—</dd>
-            <dt>DECISIONS</dt><dd id="rate">—</dd>
+            <dt>STEPS/S</dt><dd id="rate">—</dd>
+            <dt>PIECES/S</dt><dd id="piece-rate">—</dd>
             <dt>INPUT TOKENS</dt><dd id="tokens">—</dd>
             <dt>NETWORK</dt><dd id="network" class="green">LOCAL</dd>
           </dl>
-          <p id="guard-label" class="muted">Laya + safety-margin shield</p>
+          <p id="guard-label" class="muted">Laya + lock-time shield</p>
           <p class="amber mono">Shield interventions <span id="interventions">0000</span></p>
           <p class="muted small mono">Deaths <span id="deaths">0</span> · Pieces <span id="pieces">0</span></p>
         </section>
@@ -81,7 +82,7 @@
         <label class="ctl"><input id="max" type="checkbox" /> Max speed</label>
         <label class="ctl" for="pace">Pace <input id="pace" type="range" min="1" max="10" step="1" value="3" /> <span id="pace-v" class="mono">3/s</span></label>
         <label class="ctl"><input id="unassisted" type="checkbox" /> Shield off</label>
-        <span class="muted small hint">Hold <kbd>↓</kbd> to speed up the current piece's fall</span>
+        <span class="muted small hint">Pace is gravity-steps/s now, not pieces/s -- hold <kbd>↓</kbd> to speed up each step</span>
       </footer>
     </div>
     <script type="module" src="./main.js"></script>

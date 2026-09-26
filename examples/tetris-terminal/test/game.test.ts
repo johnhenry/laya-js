@@ -1,7 +1,9 @@
 /**
  * Pure-logic tests for the Tetris core: piece shapes, legal-placement
- * generation and bounds, line clears, the safety-margin shield, and the
- * 7-bag randomizer. No Python reference (see rng.ts) -- no parity tier.
+ * generation and bounds, line clears, the safety shield (now scoped to
+ * the lock decision, local to the current row), rotation resolution,
+ * spawn legality, and the 7-bag randomizer. No Python reference (see
+ * rng.ts) -- no parity tier.
  */
 import assert from "node:assert/strict";
 import {
@@ -9,25 +11,49 @@ import {
   BOARD_WIDTH,
   DISTINCT_ROTATIONS,
   PIECE_KINDS,
+  SPAWN_ROW,
   TetrisGame,
   TetrisRng,
   applyPlacement,
-  buildPrompt,
-  decisionFrom,
+  buildStepPrompt,
+  canSpawn,
+  decisionFromStep,
   emptyBoard,
   fitsAtColumn,
   legalPlacements,
+  optionsAtRow,
   placementKey,
+  resolveRotation,
   shapeOf,
+  spawnColFor,
   stackHeight,
+  sweepColumns,
   type PieceKind,
   type Placement,
   type PredictLike,
+  type RotationLabel,
+  type StepPosition,
 } from "../src/core/index.ts";
 import { makeTest } from "./harness.ts";
 // @ts-ignore -- bun types are not installed
 const bun = (globalThis as { Bun?: unknown }).Bun ? await import("bun:test") : null;
 const test = makeTest(bun);
+
+function oneHot(keys: string[], winner: string): Record<string, number> {
+  return Object.fromEntries(keys.map((k) => [k, k === winner ? 0.9 : 0.1 / Math.max(1, keys.length - 1)]));
+}
+
+/** A stubbed model answer for one gravity-step decision (isLockChance adds risk/clears). */
+function stubStep(choice: { rotation: RotationLabel; direction: "none" | "left" | "right"; distance: number; risk?: number; clears?: number }): PredictLike {
+  const answers: PredictLike["answers"] = {
+    rotation: { probabilities: oneHot(["0", "R", "2", "L"], choice.rotation) },
+    direction: { probabilities: oneHot(["none", "left", "right"], choice.direction) },
+    distance: { probabilities: oneHot(Array.from({ length: 10 }, (_, n) => String(n)), String(choice.distance)) },
+  };
+  if (choice.risk !== undefined) answers.risk = { noul: choice.risk };
+  if (choice.clears !== undefined) answers.clears = { noul: choice.clears };
+  return { answers, usage: { input_tokens: 1 } };
+}
 
 // ---------------------------------------------------------------- shapes
 test("every distinct rotation has exactly 4 cells", () => {
@@ -55,7 +81,32 @@ test("no two distinct rotations of the same piece produce the same cell-set (reg
   }
 });
 
-// ---------------------------------------------------------------- legalPlacements bounds
+test("resolveRotation always resolves to a member of DISTINCT_ROTATIONS, and geometrically-equivalent labels map onto each other", () => {
+  for (const kind of PIECE_KINDS) {
+    for (const label of ["0", "R", "2", "L"] as RotationLabel[]) {
+      assert.ok(DISTINCT_ROTATIONS[kind].includes(resolveRotation(kind, label)), `${kind} ${label}`);
+    }
+  }
+  // O: 1-fold symmetry -- every label resolves to "0".
+  assert.equal(resolveRotation("O", "R"), "0");
+  assert.equal(resolveRotation("O", "2"), "0");
+  assert.equal(resolveRotation("O", "L"), "0");
+  // I/S/Z: 2-fold symmetry -- 180 degrees maps back to 0, 270 maps back to 90.
+  assert.equal(resolveRotation("I", "2"), "0");
+  assert.equal(resolveRotation("I", "L"), "R");
+  assert.equal(resolveRotation("S", "2"), "0");
+  assert.equal(resolveRotation("Z", "L"), "R");
+  // T/J/L: all 4 distinct -- identity.
+  assert.equal(resolveRotation("T", "L"), "L");
+});
+
+test("spawnColFor centers each kind's default orientation on the board", () => {
+  assert.equal(spawnColFor("I"), 3); // occupies cols 3-6, matching real Tetris' own centered I spawn
+  assert.equal(spawnColFor("O"), 4); // occupies cols 4-5
+  for (const kind of PIECE_KINDS) assert.ok(fitsAtColumn(kind, "0", spawnColFor(kind)), `${kind}'s spawn column must fit on the board`);
+});
+
+// ---------------------------------------------------------------- legalPlacements bounds (still a standalone, tested utility -- gameplay no longer calls it)
 test("I-piece: 7 horizontal columns (0..6), 10 vertical columns (0..9) on an empty board", () => {
   const board = emptyBoard();
   const placements = legalPlacements(board, "I");
@@ -101,7 +152,7 @@ test("T/J/L board-edge bounds hold for every one of their 4 rotations", () => {
   }
 });
 
-test("fitsAtColumn agrees with the board bounds a wider/narrower rotation would actually need (regression: the drop-animation's rotation preview overflowed the board at edge columns)", () => {
+test("fitsAtColumn agrees with the board bounds a wider/narrower rotation would actually need", () => {
   assert.equal(fitsAtColumn("I", "0", 9), false); // horizontal I is 4 wide, can't start at the last column
   assert.equal(fitsAtColumn("I", "0", 6), true); // its rightmost valid horizontal start
   assert.equal(fitsAtColumn("I", "R", 9), true); // vertical I is 1 wide, fits anywhere
@@ -131,60 +182,84 @@ test("a non-clearing placement leaves the board exactly as locked", () => {
   assert.equal(stackHeight(after), BOARD_HEIGHT - placement!.restRow);
 });
 
-// ---------------------------------------------------------------- safety margin (the shield's "safe" tier)
-test("moves() finds every placement unsafe when the stack is already critically tall, without the game being over", () => {
-  const game = new TetrisGame(1);
+// ---------------------------------------------------------------- optionsAtRow (the lock-time shield's local evaluation set)
+test("optionsAtRow finds every option unsafe when the stack is already critically tall, without the game being over", () => {
   const board = emptyBoard();
   // Solid floor at row 3, rows 0-2 open. Column 9 stays empty throughout so no row is ever
-  // completely full (a fully-filled row would instantly clear in real play -- filling every
-  // column here would be an invalid, unreachable fixture, not a "tall stack").
+  // completely full (a fully-filled row would instantly clear in real play).
   for (let r = 3; r < BOARD_HEIGHT; r++) for (let c = 0; c < BOARD_WIDTH - 1; c++) board[r]![c] = "T";
-  game.board = board;
-  game.active = "O";
-  const moves = game.moves();
-  assert.ok(moves.length > 0); // plenty of room to physically place
-  assert.ok(moves.every((m) => !m.safe)); // but every one breaches the TOP_MARGIN
-  assert.equal(game.alive, true); // NOT game over -- see the policy.ts comment on this exact asymmetry
+  const [placement] = legalPlacements(board, "O"); // where a real drop from spawn would land
+  const options = optionsAtRow(board, "O", placement!.restRow, placement!.col);
+  assert.ok(options.length > 0); // plenty of room to physically rest
+  assert.ok(options.every((o) => !o.safe)); // but every one breaches TOP_MARGIN
+  assert.equal(canSpawn(board, "O"), true); // NOT game over -- see policy.ts's comment on this exact asymmetry
 });
 
-test("moves() finds placements safe on a mostly empty board, and safer ones that clear lines", () => {
-  const game = new TetrisGame(1);
+test("optionsAtRow finds every option safe on a mostly empty board", () => {
   const board = emptyBoard();
   for (let c = 0; c < BOARD_WIDTH - 1; c++) board[BOARD_HEIGHT - 1]![c] = "T"; // one row, one gap
-  game.board = board;
-  game.active = "O";
-  const moves = game.moves();
-  assert.ok(moves.every((m) => m.safe)); // an almost-empty board is nowhere near the margin
+  const [placement] = legalPlacements(board, "O");
+  const options = optionsAtRow(board, "O", placement!.restRow, placement!.col);
+  assert.ok(options.every((o) => o.safe)); // an almost-empty board is nowhere near the margin
+});
+
+test("optionsAtRow only includes columns actually reachable by sliding from the current column, not any resting spot on the same row (regression: a naive full-row scan would jump a wall to an unreachable shelf)", () => {
+  const board = emptyBoard();
+  // A full-height wall at column 4 splits the board; a floor a few rows down on both sides
+  // gives the left shelf (cols 0-3) and the right shelf (cols 5-9) the SAME resting row.
+  for (let r = 0; r < BOARD_HEIGHT; r++) board[r]![4] = "T";
+  const floorStart = BOARD_HEIGHT - 3;
+  for (let c = 0; c < BOARD_WIDTH; c++) if (c !== 4) for (let r = floorStart; r < BOARD_HEIGHT; r++) board[r]![c] = "T";
+  const restRow = floorStart - 2;
+  const fromLeft = optionsAtRow(board, "O", restRow, 0).map((o) => o.placement.col).sort((a, b) => a - b);
+  assert.deepEqual(fromLeft, [0, 1, 2]); // never jumps the wall to reach the right shelf (5-8)
+  // The right shelf genuinely is legal-and-resting at this same row -- just unreachable from col 0.
+  const fromRight = optionsAtRow(board, "O", restRow, 5).map((o) => o.placement.col).sort((a, b) => a - b);
+  assert.deepEqual(fromRight, [5, 6, 7, 8]);
+});
+
+test("sweepColumns always includes the starting column and stops at the first collision each way", () => {
+  const board = emptyBoard();
+  for (let r = 0; r < BOARD_HEIGHT; r++) board[r]![3] = "T"; // wall at col 3
+  const cols = sweepColumns(board, shapeOf("O", "0"), 0, 5);
+  assert.ok(cols.includes(5));
+  assert.ok(!cols.some((c) => c <= 2)); // O is 2 wide -- col 2 would occupy col 3 (the wall)
 });
 
 // ---------------------------------------------------------------- game over (block-out)
-test("legalPlacements is empty when the spawn row is fully occupied, for every piece kind", () => {
+test("legalPlacements is empty when the spawn row is fully occupied, for every piece kind (still true of this standalone utility)", () => {
   const board = emptyBoard();
   for (let c = 0; c < BOARD_WIDTH; c++) board[0]![c] = "T";
   for (const kind of PIECE_KINDS) assert.deepEqual(legalPlacements(board, kind), []);
+});
+
+test("canSpawn is false exactly when the piece's fixed default spawn configuration collides", () => {
+  const board = emptyBoard();
+  assert.equal(canSpawn(board, "O"), true);
+  for (const [dr, dc] of shapeOf("O", "0")) board[dr]![spawnColFor("O") + dc] = "T";
+  assert.equal(canSpawn(board, "O"), false);
 });
 
 test("a real, non-clearing placement can lead to genuine block-out (game over)", () => {
   const game = new TetrisGame(1);
   const board = emptyBoard();
   // Column 9 is a permanent well, left empty at every row, so no row is ever completely full
-  // (see the comment on the fixture above -- a 100%-full row is an invalid, unreachable state).
-  // Row 0: cols 0-3 and col 8 filled, cols 4-7 open (exactly one horizontal I fits), col 9 open.
+  // (a 100%-full row is an invalid, unreachable state). Row 0: cols 0-3 and col 8 filled, cols
+  // 4-7 open (exactly one horizontal I fits), col 9 open.
   for (const c of [0, 1, 2, 3, 8]) board[0]![c] = "T";
   for (let r = 1; r < BOARD_HEIGHT; r++) for (let c = 0; c < BOARD_WIDTH - 1; c++) board[r]![c] = "T"; // solid floor everywhere else, except the col-9 well
   game.board = board;
   game.active = "I";
   game.queue = ["O", "O", "O", "O", "O"];
-  // (A vertical I can also legally drop into the col-9 well -- that's a real, expected option
-  // and irrelevant to this test, which is specifically about the horizontal placement.)
   const horizontal = game.legalPlacements().filter((p) => p.rotation === "0");
   assert.equal(horizontal.length, 1); // only the 4-wide gap at cols 4-7 fits
   assert.equal(horizontal[0]!.col, 4);
   const cleared = game.applyPlacement(horizontal[0]!);
   assert.equal(cleared, 0); // col 9 stays open -- row 0 is NOT completed, so no rescuing clear
   assert.equal(game.active, "O");
-  // O needs 2 adjacent open columns; only col 9 is open anywhere on the board (col 8 is solid
-  // at every row), so it can never fit -- true block-out, not just "no safe option."
+  // Locking the I fills row 0's cols 4-7 too, so O's default spawn footprint (row 0-1, cols 4-5)
+  // now collides at row 0 -- real block-out via the literal spawn configuration, not just
+  // "no rotation/column fits anywhere" (col 9 alone could never fit an O regardless).
   assert.equal(game.alive, false);
 });
 
@@ -207,70 +282,88 @@ test("different seeds produce different bag sequences", () => {
   assert.notDeepEqual(a, b);
 });
 
-// ---------------------------------------------------------------- shield
-test("guard restricts execution to the safe set and reports intervention", () => {
+// ---------------------------------------------------------------- per-step decisions and the lock-time shield
+test("rotation is checked against the CURRENT column before any shift -- an illegal rotation is rejected even if the shift alone would have made room (no wall-kick, a deliberate simplification)", () => {
   const game = new TetrisGame(1);
   const board = emptyBoard();
-  for (let r = 3; r < BOARD_HEIGHT; r++) for (let c = 0; c < BOARD_WIDTH - 1; c++) board[r]![c] = "T"; // every O placement unsafe (see above; col 9 stays open so no row is ever full)
+  for (let r = 0; r < BOARD_HEIGHT; r++) board[r]![2] = "T"; // full-height wall at col 2
   game.board = board;
-  game.active = "O";
-  const p = buildPrompt(game);
-  assert.equal(p.safe.length, 0);
-  assert.ok(p.moves.length > 0);
-  const bestKey = placementKey(p.moves[3]!.placement); // arbitrary choice among the (all-unsafe) options
-  const probabilities = Object.fromEntries(p.moves.map((m) => [placementKey(m.placement), placementKey(m.placement) === bestKey ? 0.9 : 0.01]));
-  const stub: PredictLike = { answers: { move: { probabilities }, risk: { noul: 0.9 }, clears: { noul: 0 } }, usage: { input_tokens: 1 } };
-  const decision = decisionFrom(stub, p, true);
-  // Empty safe set: executes the raw proposed choice rather than throwing (Flappy Bird's precedent).
-  assert.equal(placementKey(decision.proposed), bestKey);
-  assert.equal(placementKey(decision.executed), bestKey);
-  assert.ok(!decision.intervened);
+  game.active = "I";
+  const position: StepPosition = { row: 5, rotation: "R", col: 0 }; // vertical I, clear of the wall
+  const p = buildStepPrompt(game, position, false);
+  // Model asks to rotate to horizontal (illegal here -- the wall at col 2 is inside cols 0-3) AND shift right by 1.
+  const stub = stubStep({ rotation: "0", direction: "right", distance: 1 });
+  const result = decisionFromStep(stub, p, board, true);
+  assert.equal(result.position.rotation, "R"); // rejected -- illegal at the CURRENT column (0)
+  assert.equal(result.position.col, 1); // the shift still applies, using the KEPT rotation's shape
+  assert.equal(result.locked, false);
 });
 
-test("guard overrides an unsafe top choice to the best safe alternative when one exists", async () => {
+test("guarded lock overrides an unsafe proposed choice to a safer local alternative reachable via rotate+shift", () => {
   const game = new TetrisGame(1);
   const board = emptyBoard();
-  // A 2-wide well at cols 8-9, floor at row 16 (safe zone), plus a much taller decoy region
-  // elsewhere that's still reachable but breaches the margin.
-  for (let r = 0; r < BOARD_HEIGHT; r++) {
-    for (let c = 0; c < BOARD_WIDTH; c++) {
-      if (c >= 8) continue; // cols 8-9 stay open all the way down
-      if (r >= 3) board[r]![c] = "T"; // cols 0-7 stacked up to row 3 (unsafe if built on)
-    }
-  }
+  for (let r = 7; r < BOARD_HEIGHT; r++) for (let c = 0; c < BOARD_WIDTH - 1; c++) board[r]![c] = "T"; // deep floor, col 9 a permanent well
+  for (let c = 0; c < BOARD_WIDTH; c++) if (c !== 6) board[4]![c] = "T"; // row 4 nearly full except col 6
   game.board = board;
-  game.active = "O";
-  const p = buildPrompt(game);
-  const safeKeys = new Set(p.safe.map((m) => placementKey(m.placement)));
-  assert.ok(safeKeys.size > 0 && safeKeys.size < p.moves.length); // a real, non-trivial split
-  const unsafeKey = placementKey(p.moves.find((m) => !m.safe)!.placement);
-  const [safeBest] = [...safeKeys];
-  const probabilities = Object.fromEntries(p.moves.map((m) => [placementKey(m.placement), placementKey(m.placement) === unsafeKey ? 0.9 : placementKey(m.placement) === safeBest ? 0.5 : 0.01]));
-  const stub: PredictLike = { answers: { move: { probabilities }, risk: { noul: 0.9 }, clears: { noul: 0 } }, usage: { input_tokens: 1 } };
-  const guarded = decisionFrom(stub, p, true);
-  assert.equal(placementKey(guarded.proposed), unsafeKey);
-  assert.ok(safeKeys.has(placementKey(guarded.executed)));
+  game.active = "I";
+  const position: StepPosition = { row: 3, rotation: "0", col: 6 }; // horizontal I, resting, unsafe
+  const p = buildStepPrompt(game, position, true);
+  // Model proposes staying put (no rotation change, no shift) -- unsafe (doesn't complete row 4).
+  const stub = stubStep({ rotation: "0", direction: "none", distance: 0, risk: 0.9, clears: 0 });
+  const guarded = decisionFromStep(stub, p, board, true);
+  assert.deepEqual(guarded.proposed, { kind: "I", rotation: "0", col: 6, restRow: 3 });
+  // Rotating to vertical at this SAME column completes row 4 -- the shield finds and executes it.
+  assert.deepEqual(guarded.executed, { kind: "I", rotation: "R", col: 6, restRow: 3 });
   assert.ok(guarded.intervened);
-  const raw = decisionFrom(stub, p, false);
-  assert.equal(placementKey(raw.executed), unsafeKey);
+  const raw = decisionFromStep(stub, p, board, false);
+  assert.deepEqual(raw.executed, raw.proposed);
   assert.ok(!raw.intervened);
 });
 
-test("invalid model probabilities execute no placement", async () => {
+test("guarded lock keeps the model's own proposed choice when no local option is safe (routine near the top of a real game, not rare-and-terminal)", () => {
   const game = new TetrisGame(1);
-  const p = buildPrompt(game);
-  const probabilities = Object.fromEntries(p.moves.map((m, i) => [placementKey(m.placement), i === 0 ? NaN : 0]));
-  const stub: PredictLike = { answers: { move: { probabilities }, risk: { noul: 1 }, clears: { noul: 0 } }, usage: { input_tokens: 1 } };
-  assert.throws(() => decisionFrom(stub, p, true), /invalid probability/);
+  const board = emptyBoard();
+  for (let r = 3; r < BOARD_HEIGHT; r++) for (let c = 0; c < BOARD_WIDTH - 1; c++) board[r]![c] = "T";
+  game.board = board;
+  game.active = "O";
+  const [placement] = legalPlacements(board, "O");
+  const position: StepPosition = { row: placement!.restRow, rotation: "0", col: placement!.col };
+  const p = buildStepPrompt(game, position, true);
+  const stub = stubStep({ rotation: "0", direction: "none", distance: 0, risk: 0.95, clears: 0 });
+  const guarded = decisionFromStep(stub, p, board, true);
+  assert.deepEqual(guarded.executed, guarded.proposed);
+  assert.ok(!guarded.intervened);
+});
+
+test("invalid model probabilities throw; no step executed", () => {
+  const game = new TetrisGame(1);
+  const position: StepPosition = { row: SPAWN_ROW, rotation: "0", col: spawnColFor(game.active) };
+  const p = buildStepPrompt(game, position, false);
+  const stub = stubStep({ rotation: "0", direction: "none", distance: 0 });
+  stub.answers.rotation!.probabilities!["0"] = NaN;
+  assert.throws(() => decisionFromStep(stub, p, game.board, true), /invalid probability/);
 });
 
 // ---------------------------------------------------------------- full-game smoke play
+/** `TOP_MARGIN` isn't exported (only `optionsAtRow`/`canSpawn` need it internally now) -- this
+ * reconstructs the old `moves()`'s global decoration directly from the still-available
+ * `legalPlacements`/`applyPlacement`/`stackHeight`, using the same `<= BOARD_HEIGHT - 4` margin,
+ * for a smoke test that (deliberately) picks among the FULL reachable set, not just one row's
+ * local options -- unlike the real per-step engine, this heuristic can freely choose ANY
+ * placement each piece, so it isn't a stand-in for the shield, just a cheap crash/sanity check. */
+function safeGlobalMoves(board: ReturnType<TetrisGame["snapshot"]>["board"], kind: PieceKind) {
+  return legalPlacements(board, kind).map((placement) => {
+    const { board: nextBoard, cleared } = applyPlacement(board, placement);
+    return { placement, clears: cleared, heightAfter: stackHeight(nextBoard), safe: stackHeight(nextBoard) <= BOARD_HEIGHT - 4 };
+  });
+}
+
 test("a simple lowest-height heuristic survives many pieces across several seeds without crashing", () => {
   for (let seed = 0; seed < 6; seed++) {
     const game = new TetrisGame(seed);
     let n = 0;
     while (game.alive && n < 300) {
-      const moves = game.moves();
+      const moves = safeGlobalMoves(game.board, game.active);
       const pool = moves.some((m) => m.safe) ? moves.filter((m) => m.safe) : moves;
       let best = pool[0]!;
       for (const m of pool) if (m.heightAfter < best.heightAfter) best = m;

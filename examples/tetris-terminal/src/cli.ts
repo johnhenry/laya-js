@@ -3,22 +3,22 @@
  * laya-tetris (JS): the live terminal Tetris demo driven by real Laya
  * predictions on MLX, WebGPU or CPU. Same shape as snake-terminal's/
  * flappy-terminal's cli.ts (`--episodes N --headless` benchmark mode
- * included), but decisions are per PIECE, not per tick -- see core/game.ts
- * for why. This game is JS-original -- see core/rng.ts -- so the flag
- * family is mirrored from Snake for consistency across the demos, not
- * because there's a laya-mlx tetris.py to match.
+ * included), but decisions are per gravity STEP, not per piece -- see
+ * core/policy.ts for why. This game is JS-original -- see core/rng.ts --
+ * so the flag family is mirrored from Snake for consistency across the
+ * demos, not because there's a laya-mlx tetris.py to match.
  */
 import { execFileSync } from "node:child_process";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { SPAWN_ROW, TetrisGame } from "./core/game.ts";
-import { fitsAtColumn, type RotationLabel } from "./core/pieces.ts";
-import { DEFAULT_MODEL, LayaPolicy, type Decision, type PromptStyle } from "./core/policy.ts";
+import { SPAWN_ROW, TetrisGame, type GameSnapshot } from "./core/game.ts";
+import { spawnColFor } from "./core/pieces.ts";
+import { DEFAULT_MODEL, LayaPolicy, type PromptStyle, type StepDecision, type StepPosition } from "./core/policy.ts";
 import { TetrisSession } from "./core/session.ts";
 import { Keyboard } from "./keyboard.ts";
 import { loadTetrisAgent, type BackendName } from "./load-agent.ts";
-import { compose, layoutSize } from "./ui.ts";
+import { compose, layoutSize, type FallingPiece } from "./ui.ts";
 
 const HELP = `laya-tetris — Tetris driven by real Laya predictions (MLX / WebGPU / CPU)
 
@@ -30,18 +30,25 @@ Usage: laya-tetris [options]
   --prompt <style>       compact | detailed (default compact)
   --optimize             Ask the agent for 16-token buckets + prefix cache (if supported)
   --seed <n>             Seed (default 7); round r uses seed + r - 1
-  --pace <n>             Paced pieces per second when spectating (default 3)
-  --max-speed            One piece per completed inference, no pacing
+  --pace <n>             Paced gravity-steps per second when spectating (default 3)
+  --max-speed            One step per completed inference, no pacing
   --duration <s>         Stop after this many seconds (excluding warmup)
-  --steps <n>            Stop after this many pieces (per episode with --episodes)
-  --unassisted           Execute raw Laya top-1; disable the safety-margin shield
-  --record <file.jsonl>  Write decisions and boards (laya-tetris-v1 JSONL)
+  --steps <n>            Stop after this many PIECES locked (per episode with --episodes)
+  --unassisted           Execute raw Laya top-1 at lock time; disable the safety shield
+  --record <file.jsonl>  Write per-step decisions and boards (laya-tetris-v2 JSONL)
   --headless             No terminal display
   --episodes <n>         Benchmark: n uncapped episodes (seeds seed..seed+n-1), prints pieces/s
   --no-alt-screen        Keep the final frame in scrollback
   --online               Allow downloading a missing checkpoint
 
-Keys: SPACE pause · ↓ hold to speed up the current piece's fall · R reset · Q quit`;
+Keys: SPACE pause · ↓ hold to speed up each step · R reset · Q quit
+
+Every downward move is a real decision now, not a cosmetic replay of one
+per-piece choice: at each gravity step the model picks a rotation, a
+horizontal direction and a distance; once the piece can no longer descend
+it gets exactly one more such decision (a bounded "lock delay") before it
+locks. This means many more, much smaller predict() calls per piece than
+before -- expect it to feel slower per piece, especially headless.`;
 
 function hardwareName(): string {
   if (process.platform === "darwin") {
@@ -128,8 +135,23 @@ async function main(argv: string[]): Promise<number> {
   const policy = new LayaPolicy(agent, { guarded: !a.unassisted, prompt: a.prompt as PromptStyle });
 
   // Warmup: compiles/JITs backend pipelines before the clock starts, like the other games'.
-  const warm = new TetrisGame(seed + 10000);
-  for (let i = 0; i < 6 && warm.alive; i++) warm.applyPlacement((await policy.decide(warm)).executed);
+  // A handful of steps is enough -- this only needs to touch every code path once, not play a full piece.
+  {
+    const warm = new TetrisGame(seed + 10000);
+    let position: StepPosition = { row: SPAWN_ROW, rotation: "0", col: spawnColFor(warm.active) };
+    let lockChancePending = false;
+    for (let i = 0; i < 6 && warm.alive; i++) {
+      const step = await policy.decideStep(warm, position, lockChancePending);
+      if (lockChancePending) {
+        warm.applyPlacement(step.executed!);
+        position = { row: SPAWN_ROW, rotation: "0", col: spawnColFor(warm.active) };
+        lockChancePending = false;
+      } else {
+        position = step.canDescend ? { ...step.position, row: step.position.row + 1 } : step.position;
+        lockChancePending = !step.canDescend;
+      }
+    }
+  }
 
   try {
     if (episodes !== undefined) return await benchmark(policy, seed, episodes, steps ?? 200, { hardware, engine, model, backend });
@@ -148,11 +170,11 @@ async function main(argv: string[]): Promise<number> {
       record.write(
         JSON.stringify({
           type: "metadata",
-          format: "laya-tetris-v1",
+          format: "laya-tetris-v2",
           created_utc: new Date().toISOString(),
           model: { name: model, hardware, engine, runtime: runtimeName(), prompt: a.prompt, network: a.online ? "online" : "offline" },
           settings: a,
-          note: "One real prediction per piece, not per tick. Board is shown before the announced placement.",
+          note: "One real prediction per gravity step, not per piece. Board is shown before the announced position/placement.",
         }) + "\n",
       );
     }
@@ -162,50 +184,23 @@ async function main(argv: string[]): Promise<number> {
     const noColor = !!process.env.NO_COLOR;
     if (interactive) out.write((altScreen ? "\x1b[?1049h" : "") + "\x1b[?25l\x1b[2J");
     const draw = (text: string) => out.write("\x1b[H" + text);
-    let displayed: { board: ReturnType<TetrisGame["snapshot"]>; decision: object } = { board: session.game.snapshot(), decision: {} };
+    let displayed: { board: GameSnapshot; step?: StepDecision } = { board: session.game.snapshot() };
     const inference: number[] = [];
     let calls = 0;
     let quit = false;
     const onSigint = () => (quit = true);
     process.on("SIGINT", onSigint);
 
-    // Animate the piece's descent instead of snapping straight to its resting row: the model
-    // decides the FINAL placement (rotation AND column) in one call (no per-tick predictions --
-    // see core/game.ts), but that's a decision-efficiency choice, not a reason the viewer has to
-    // see it teleport there fully formed. Two things are shown as distinct steps, not baked in
-    // from frame one: the rotation (spawns in the default "0" orientation, then snaps to the
-    // chosen one, if different) and the fall. Holding Down speeds both up, but never skips
-    // straight to instant.
-    const NORMAL_ROW_MS = 45;
-    const FAST_ROW_MS = 12;
-    const ROTATE_MS = 180;
-    const ROTATE_FAST_MS = 40;
-    async function animateDrop(board: ReturnType<TetrisGame["snapshot"]>, decision: Decision): Promise<void> {
-      const target = decision.executed;
-      const frames: { rotation: RotationLabel; row: number; normalMs: number; fastMs: number }[] = [];
-      // Only preview the default "0" orientation if it actually fits at this column -- e.g. an
-      // I-piece landing vertically near the right edge has no room to also show horizontally.
-      if (target.rotation !== "0" && fitsAtColumn(target.kind, "0", target.col)) {
-        frames.push({ rotation: "0", row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
-      }
-      frames.push({ rotation: target.rotation, row: SPAWN_ROW, normalMs: ROTATE_MS, fastMs: ROTATE_FAST_MS });
-      for (let row = SPAWN_ROW + 1; row <= target.restRow; row++) frames.push({ rotation: target.rotation, row, normalMs: NORMAL_ROW_MS, fastMs: FAST_ROW_MS });
-      for (const f of frames) {
-        const pressed = keys?.read().toLowerCase() ?? "";
-        if (pressed.includes("q") || pressed.includes("\x03")) {
-          quit = true;
-          return;
-        }
-        const fast = pressed.includes("\x1b[b") || pressed.includes("s");
-        draw(compose(board, decision, stats, { kind: target.kind, rotation: f.rotation, col: target.col, row: f.row }).ansi(!noColor));
-        await sleep(fast ? f.fastMs : f.normalMs);
-      }
+    const NORMAL_STEP_MS = () => 1000 / pace;
+    const FAST_STEP_MS = 12;
+
+    function overlayFor(board: GameSnapshot, step: StepDecision): FallingPiece {
+      return { kind: board.active, rotation: step.position.rotation, col: step.position.col, row: step.position.row };
     }
 
     session.restartClock();
     try {
       while (!quit) {
-        const now = performance.now();
         if ((duration && session.elapsedMs >= duration * 1000) || (steps && stats.pieces >= steps)) break;
         const pressed = keys?.read().toLowerCase() ?? "";
         if (pressed.includes("q") || pressed.includes("\x03")) break;
@@ -214,11 +209,11 @@ async function main(argv: string[]): Promise<number> {
         if (pressed.includes("-")) pace = Math.max(1, pace - 1);
         if (pressed.includes("r")) {
           session.reset();
-          displayed = { board: session.game.snapshot(), decision: {} };
+          displayed = { board: session.game.snapshot() };
         }
         if (stats.paused) {
           stats.elapsed = session.elapsedMs / 1000;
-          if (interactive) draw(compose(displayed.board, displayed.decision, stats).ansi(!noColor));
+          if (interactive) draw(compose(displayed.board, displayed.step ?? {}, stats, displayed.step ? overlayFor(displayed.board, displayed.step) : undefined).ansi(!noColor));
           await sleep(30);
           continue;
         }
@@ -230,27 +225,30 @@ async function main(argv: string[]): Promise<number> {
             continue;
           }
         }
-        const { board: shown, decision } = await session.decide();
+        const t0 = performance.now();
+        const result = await session.stepDecide();
+        const advance = session.stepAdvance(result);
         calls++;
-        inference.push(decision.inference_ms);
-        displayed = { board: shown, decision };
-        record?.write(JSON.stringify({ type: "piece", at: session.elapsedMs / 1000, game: shown, decision, stats: { ...stats } }) + "\n");
-        if (interactive && !a["max-speed"]) {
-          await animateDrop(shown, decision);
-        } else if (interactive) {
-          draw(compose(shown, decision, stats).ansi(!noColor));
+        inference.push(result.step.inference_ms);
+        displayed = { board: result.board, step: result.step };
+        record?.write(JSON.stringify({ type: "step", at: session.elapsedMs / 1000, game: result.board, position: result.position, is_lock_chance: result.isLockChance, step: result.step }) + "\n");
+        if (interactive) {
+          const fast = pressed.includes("\x1b[b") || pressed.includes("s");
+          draw(compose(result.board, result.step, stats, overlayFor(result.board, result.step)).ansi(!noColor));
+          if (!a["max-speed"]) {
+            const remaining = (fast ? FAST_STEP_MS : NORMAL_STEP_MS()) - (performance.now() - t0);
+            if (remaining > 0) await sleep(remaining);
+          }
         }
-        if (!a["max-speed"]) {
-          const remaining = 1000 / pace - (performance.now() - now);
-          if (remaining > 0) await sleep(remaining);
-        }
-        const r = session.advance(decision);
-        if (r.roundEnd) {
-          record?.write(JSON.stringify({ type: "round_end", at: session.elapsedMs / 1000, game: r.roundEnd }) + "\n");
-          if (r.stop) break;
-          if (interactive) {
-            draw(compose(r.roundEnd, {}, stats).ansi(!noColor));
-            await sleep(1200);
+        if (advance.locked) {
+          record?.write(JSON.stringify({ type: "piece", at: session.elapsedMs / 1000, game: session.game.snapshot(), step: result.step, stats: { ...stats } }) + "\n");
+          if (advance.roundEnd) {
+            record?.write(JSON.stringify({ type: "round_end", at: session.elapsedMs / 1000, game: advance.roundEnd }) + "\n");
+            if (advance.stop) break;
+            if (interactive) {
+              draw(compose(advance.roundEnd, {}, stats).ansi(!noColor));
+              await sleep(1200);
+            }
           }
         }
       }
@@ -264,6 +262,7 @@ async function main(argv: string[]): Promise<number> {
       pieces: stats.pieces,
       inference_calls: calls,
       seconds,
+      steps_per_second: seconds ? calls / seconds : 0,
       pieces_per_second: seconds ? stats.pieces / seconds : 0,
       score: session.game.score,
       lines: session.game.linesCleared,
@@ -290,16 +289,17 @@ function runtimeName(): string {
   return bun ? `bun ${bun.version}` : `node ${process.versions.node}`;
 }
 
-/** `--episodes N --headless`: uncapped episodes, same protocol as the other games' benchmarks. */
+/** `--episodes N --headless`: uncapped episodes, same protocol as the other games' benchmarks. Now a per-step loop against a bare `TetrisGame`, no rendering, no `TetrisSession`. */
 async function benchmark(
   policy: LayaPolicy,
   seed0: number,
   episodes: number,
-  steps: number,
+  maxPieces: number,
   meta: { hardware: string; engine: string; model: string; backend: string },
 ): Promise<number> {
   const results = [];
   let totalPieces = 0;
+  let totalSteps = 0;
   let totalSeconds = 0;
   let deaths = 0;
   let interventions = 0;
@@ -307,22 +307,37 @@ async function benchmark(
   for (let e = 0; e < episodes; e++) {
     const seed = seed0 + e;
     const game = new TetrisGame(seed);
+    let position: StepPosition = { row: SPAWN_ROW, rotation: "0", col: spawnColFor(game.active) };
+    let lockChancePending = false;
     const inference: number[] = [];
     let episodeInterventions = 0;
+    let pieces = 0;
+    let stepCount = 0;
     const started = performance.now();
-    for (let i = 0; i < steps; i++) {
-      const decision = await policy.decide(game);
-      episodeInterventions += decision.intervened ? 1 : 0;
-      inference.push(decision.inference_ms);
-      game.applyPlacement(decision.executed);
-      if (!game.alive) break;
+    while (game.alive && pieces < maxPieces) {
+      const isLockChance = lockChancePending;
+      const step = await policy.decideStep(game, position, isLockChance);
+      inference.push(step.inference_ms);
+      stepCount++;
+      if (isLockChance) {
+        episodeInterventions += step.intervened ? 1 : 0;
+        game.applyPlacement(step.executed!);
+        pieces++;
+        lockChancePending = false;
+        position = { row: SPAWN_ROW, rotation: "0", col: spawnColFor(game.active) };
+      } else {
+        position = step.canDescend ? { ...step.position, row: step.position.row + 1 } : step.position;
+        lockChancePending = !step.canDescend;
+      }
     }
     const seconds = (performance.now() - started) / 1000;
     const r = {
       seed,
-      pieces: inference.length,
+      pieces,
+      steps: stepCount,
       seconds,
-      pieces_per_second: inference.length / seconds,
+      pieces_per_second: pieces / seconds,
+      steps_per_second: stepCount / seconds,
       score: game.score,
       lines: game.linesCleared,
       level: game.level,
@@ -338,13 +353,14 @@ async function benchmark(
     };
     results.push(r);
     totalPieces += r.pieces;
+    totalSteps += r.steps;
     totalSeconds += seconds;
     deaths += game.alive ? 0 : 1;
     interventions += episodeInterventions;
     allInference.push(...inference);
     console.error(
-      `${policy.guarded ? "shield" : "top-1"} seed=${seed} pieces=${r.pieces} score=${r.score} lines=${r.lines} alive=${r.alive} ` +
-        `actual=${r.pieces_per_second.toFixed(1)}/s p50=${r.inference_ms.p50.toFixed(1)}ms interventions=${episodeInterventions}`,
+      `${policy.guarded ? "shield" : "top-1"} seed=${seed} pieces=${r.pieces} steps=${r.steps} score=${r.score} lines=${r.lines} alive=${r.alive} ` +
+        `actual=${r.pieces_per_second.toFixed(1)} pieces/s (${r.steps_per_second.toFixed(1)} steps/s) p50=${r.inference_ms.p50.toFixed(1)}ms interventions=${episodeInterventions}`,
     );
   }
   const summary = {
@@ -357,8 +373,10 @@ async function benchmark(
     guarded: policy.guarded,
     episodes,
     pieces: totalPieces,
+    steps: totalSteps,
     seconds: totalSeconds,
     pieces_per_second: totalPieces / totalSeconds,
+    steps_per_second: totalSteps / totalSeconds,
     deaths,
     interventions,
     inference_ms: {

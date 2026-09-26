@@ -12,64 +12,85 @@ consumer.
 and [`checkers-terminal`](../checkers-terminal) — there is no Python
 reference implementation to port from or match.
 
-## Decisions are per PIECE, not per tick
+## Decisions are per gravity STEP, with one last chance before locking
 
-A real gravity-tick loop (rotate/shift/soft-drop as separate ticked
-decisions) would need 5-15 `predict()` calls just to relocate one piece, for
-a game where only the final resting cell set matters. Instead: a piece
-spawns, `core/game.ts`'s `legalPlacements` enumerates every reachable
-`(rotation, column)` via a drop-simulation, one `predict()` call picks
-among them, and the whole rotate+shift+hard-drop+lock+clear sequence
-resolves as a single pure `applyPlacement()` transformation — no
-animated-movement concept at all, the same way `checkers-terminal` computes
-a hop's resulting board directly rather than simulating a slide. This is
-exactly why Checkers itself moved to per-turn decisions instead of
-per-tick, applied one level further: Tetris's placement space (9-34
-reachable placements depending on piece and board state) is naturally
-enumerable as `choice` criteria, just like Checkers' legal-hop set.
+Earlier versions of this demo made one decision per PIECE (enumerate every
+reachable final placement, one `choice` picks among them) and only
+*animated* the fall afterward, cosmetically. This version makes the
+decision real, matching the granularity of actually playing Tetris: **every
+time the active piece moves down a row is a step**, and at each step the
+model picks one of 4 rotations (0°/90°/180°/270°), one of 3 horizontal
+directions (none/left/right) and a distance (0-9 columns, clamped to
+whatever's actually free) — three small, independent `choice` questions,
+not a lookup into a placement table. When the piece can no longer descend,
+it gets **exactly one more** such decision (now also asking the `risk`/
+`clears` signals) before that position locks — a bounded "lock delay" /
+"extended placement" in [Tetris Wiki](https://tetris.wiki/Lock_delay) /
+[Hard Drop wiki](https://harddrop.com/wiki/Lock_delay) terminology. This is
+a deliberately bounded reading of that lineage, not a claim of exact
+Game Boy/NES parity (those had no formal lock delay at all, per the same
+sources) or full Guideline "Infinity" behavior (unbounded resets, which
+would risk an adversarial model stalling forever) — one extra decision,
+never a repeating cascade of them.
 
-**The decision is instant; the fall (and the rotation) doesn't have to look
-it.** Once the model picks a placement, `cli.ts` shows it in two stages,
-neither baked in from the first frame: if the chosen rotation isn't the
-piece's default "0" orientation, it briefly appears in "0" first, then
-snaps to the chosen rotation (skipped when the default orientation
-wouldn't even fit at that column, e.g. an I-piece landing vertically at
-the board's right edge — `core/pieces.ts`'s `fitsAtColumn` checks this);
-then it descends from the spawn row to its resting row (`~45 ms`/row).
-Neither step is new game logic: the rotation preview is just showing an
-alternate, already-known shape at the same position, and the fall's
-straight-down path is already guaranteed clear by the drop-simulation that
-found the placement, so nothing needs re-checking. Holding **↓** speeds up
-both — but there's no hard-drop/instant-rotate key, so neither is ever
-truly instant.
+**Every frame is a real decision, not an interpolated one.** `cli.ts` calls
+`session.stepDecide()`/`stepAdvance()` once per row and draws immediately;
+there's no more pre-baked frame list to play back, and no more "preview the
+default rotation before snapping" — every rotation shown was actually
+chosen. Holding **↓** still speeds up the pacing between steps, but each
+step now costs real inference time, so the felt cadence is `max(0, target
+- elapsed)`, not a flat sleep stacked on top of real latency.
+
+**This costs roughly 10-20x more `predict()` calls per piece** (bounded by
+how many rows it descends, plus one — so a piece that lands high, near a
+tall stack, is actually *cheaper* than one that falls the full board).
+Each call's prompt is much smaller now (3-5 fixed small questions vs. a
+`choice` over up to ~34 placement criteria before), which partially
+offsets it, but wall-clock cost per piece is still substantially higher on
+every backend. This is inherent to real per-step control, not a
+regression to fix.
 
 ## The engine
 
-7 standard tetrominoes (I/O/T/S/Z/J/L), with only geometrically **distinct**
-rotations generated in the first place (O has 1, I/S/Z have 2, T/J/L have
-4) — built into the shape table itself, not enumerated-then-deduplicated.
-`legalPlacements(board, kind)` is the complete legal set (no extra
-"mandatory" layer the way Checkers has mandatory capture).
+7 standard tetrominoes (I/O/T/S/Z/J/L). `pieces.ts` only stores
+geometrically **distinct** rotation shapes (O has 1, I/S/Z have 2, T/J/L
+have 4); `resolveRotation(kind, label)` lets the model freely choose any of
+the 4 absolute labels regardless of piece — it maps onto the correct
+(possibly repeated) shape because each kind's distinct-rotation count
+always evenly divides 4. `spawnColFor(kind)` centers a piece's default
+orientation on the board (e.g. I spawns at columns 3-6), the fixed spot a
+piece actually enters play at — a genuinely new concept this version
+needed, since the old per-piece design tried every column and never needed
+just one.
 
-The `safe` tier — the one genuinely novel design decision in this
-package, since `safe` can't just equal `legal` here (that would make the
-shield a no-op): a placement is safe only if the stack height, measured
+**Game over (block-out)** is now `canSpawn(board, kind)`: does the piece's
+literal default spawn configuration collide, right now. This replaced the
+old, more permissive "does *any* rotation/column combination fit on row 0
+somewhere" check — a real, deliberate behavior change, and a more
+realistic one: a piece actually enters play in one fixed orientation and
+column, not by trying every hypothetical placement, so that's the
+configuration whose collision is a genuine block-out.
+
+**The shield only ever guards the final lock decision**, and its
+evaluation set (`optionsAtRow`) is **local**: everything reachable via
+rotate+shift *alone* from the piece's current position (via
+`sweepColumns`, which walks outward and stops at the first collision each
+way — this is what keeps the local set from including geometrically
+disconnected shelves the piece could never actually have slid to), not a
+global re-search from spawn. `safe` still means the stack height, measured
 **after** line-clear resolution, stays within a 4-row margin of the
-ceiling. A placement that looks tall pre-clear but completes 1-4 full rows
-can legitimately duck back under the margin and count as safe, while a
-"boring" non-clearing placement that stacks just as high may not — the
-same structural shape as Snake's "would trap the snake" rule and Flappy
-Bird's "would collide within the lookahead," just computed from a
-lock+clear simulation instead of a physics simulation.
+ceiling — but it's a real, weaker guarantee than before: the shield can fix
+a bad final orientation/column, not rescue a trajectory that already
+steered too high. That's the honest cost of real per-step control, not a
+bug.
 
-**Empty-safe-set handling follows Flappy Bird's precedent, not Checkers'.**
-In Checkers, `legal` empty *is* the loss condition. In Tetris, `legalPlacements`
-empty only happens when the piece can't even spawn (the real game-over
-check — block-out); `safe` can be empty while `legal` is nonempty and the
-game is very much still going (every reachable placement might breach the
-margin while cells are open elsewhere). That's "in real trouble," not
-"already lost," so the shield executes the model's raw choice instead of
-throwing — see the comment in `core/policy.ts`.
+**Empty-safe-set handling still follows Flappy Bird's precedent, not
+Checkers'** — and is *routine* here, not rare: near the top of a real game,
+it's normal for every locally-reachable option to breach the margin while
+the game is very much still going (block-out is a separate, narrower
+condition — see above). The shield trusts the model's own proposed choice
+rather than substituting a different, unshielded one it didn't ask for —
+see the comment in `core/policy.ts`.
 
 Piece order: a standard **7-bag** randomizer (a shuffled permutation of all
 7 kinds per bag, so no piece is ever absent for more than ~12 spawns),
@@ -86,72 +107,86 @@ npm start -w @johnhenry/example-tetris-terminal                 # node, backend 
 npm run start:bun -w @johnhenry/example-tetris-terminal         # same under Bun
 npm run dev -w @johnhenry/example-tetris-terminal                # --max-speed
 npm start -w @johnhenry/example-tetris-terminal -- --backend webgpu --max-speed
-npm run bench -w @johnhenry/example-tetris-terminal              # 4 headless episodes, 200 pieces each, seeds 101-104
+npm run bench -w @johnhenry/example-tetris-terminal              # 4 headless episodes, up to 200 pieces each, seeds 101-104
 # directly:
-node --conditions=source src/cli.ts --backend cpu --headless --episodes 1 --steps 3
+node --conditions=source src/cli.ts --backend mlx --headless --episodes 1 --steps 3
 ```
 
-Keys: **Space** pause, **↓** hold to speed up the current piece's fall
-(a soft drop, never instant), **R** next seed, **Q** or Ctrl-C quit.
+Keys: **Space** pause, **↓** hold to speed up the current step's pacing
+(never instant), **R** next seed, **Q** or Ctrl-C quit.
 
 Options: `--model <id|dir>`, `--backend auto|mlx|webgpu|cpu`,
 `--dtype f16|f32`, `--prompt compact|detailed`, `--optimize`, `--seed`,
-`--pace` (pieces/s when spectating, default 3), `--max-speed`, `--duration`,
-`--steps`, `--unassisted`, `--record run.jsonl`, `--headless`,
-`--episodes N`, `--no-alt-screen`, `--online`. Full list: `--help`.
+`--pace` (gravity-steps/s when spectating, default 3 — **not** pieces/s;
+a piece now takes many steps), `--max-speed`, `--duration`,
+`--steps` (pieces locked, per episode with `--episodes`), `--unassisted`,
+`--record run.jsonl` (`laya-tetris-v2`), `--headless`, `--episodes N`,
+`--no-alt-screen`, `--online`. Full list: `--help`.
 
 ## Tests (`npm test` / `npm run test:bun`)
 
 `test/game.test.ts`: piece-shape correctness (every rotation is exactly 4
-cells, no two rotations of the same piece share a cell-set), placement
-bounds at both board edges for every kind (I horizontal/vertical, T/J/L
-across all 4 rotations, O's single rotation), a 4-line "Tetris" clear
-verified against the **post**-clear board, a constructed
-safe-empty-but-not-game-over scenario, a real (non-clearing) block-out
-reached via an actual `applyPlacement()` call — not just a directly
-constructed pathological board — 7-bag determinism and completeness over
-1,000+ bags, the shield's guard/override/empty-safe-set behavior,
-`fitsAtColumn`'s board-bounds checks used by the drop animation's rotation
-preview (a real bug — an out-of-bounds preview overflowing into the side
-panel — caught by testing the renderer manually, then given permanent
-coverage here), and a full-game smoke-play test (a simple
-lowest-resulting-height heuristic) across 6 seeds. **20 cases, 0 skipped**
-— no Python reference exists, so there's no fixture-parity tier.
+cells, no two rotations of the same piece share a cell-set), `resolveRotation`'s
+invariant (always resolves to a real shape, geometrically-equivalent labels
+map onto each other), `spawnColFor` centering, placement bounds at both
+board edges for every kind, a 4-line "Tetris" clear verified against the
+**post**-clear board, `canSpawn`'s exact block-out condition, a real
+(non-clearing) block-out reached via an actual `applyPlacement()` call —
+not just a directly constructed pathological board — 7-bag determinism and
+completeness over 1,000+ bags, `optionsAtRow`'s local safe/unsafe
+decoration on a critically tall vs. a mostly-empty board, a regression test
+for a real bug caught during design review (a naive full-row scan would
+have let the shield "jump" a wall to a geometrically disconnected but
+same-row-resting shelf — `sweepColumns` fixes this), the per-step engine's
+rotate-before-shift ordering (an illegal rotation is rejected using the
+*current* column, no wall-kick, even if the shift alone would have made
+room), the lock-time shield's guard/override/empty-safe-set behavior
+against the new per-step decision shape, and a full-game smoke-play test
+(a simple lowest-resulting-height heuristic, using the still-available
+global `legalPlacements`, not the shield's local view) across 6 seeds.
+**26 cases, 0 skipped** — no Python reference exists, so there's no
+fixture-parity tier.
 
 ## Verified so far
 
-- `npm run typecheck` clean; `node --test test/*.test.ts` 20/20 pass.
-- A real headless run against `aac6fef/laya-multilingual-mlx` on **WebGPU**
-  (`--backend webgpu --headless --episodes 1 --steps 3`) completed end to
-  end: agent loaded in 1.5 s, `predict()` accepted the compact prompt's
-  `choice`+`noul` questions over the enumerated placement set, and the
-  shield ran against real output — 3 pieces, 0 interventions, inference
-  p50 591 ms. The CPU reference backend was tried first but abandoned for
-  this smoke test: Tetris's prompt is far larger than Snake's/Flappy
-  Bird's/Checkers' (up to ~34 `choice` criteria vs. single digits), and a
-  `--steps 3` CPU run was still running after several minutes with no
-  sign of finishing, so it was killed rather than left blocking — a real,
-  worth-noting cost of this game's larger placement-enumeration prompt
-  that the other three don't have. CPU is presumably still correct, just
-  meaningfully slower here than for the other games; someone with more
-  patience (or a machine without a WebGPU-limited CPU-reference-only path)
-  should confirm it directly and update this note.
+- `npm run typecheck` clean; `node --test test/*.test.ts` 26/26 pass.
+- A real headless run against `aac6fef/laya-multilingual-mlx` on **MLX**
+  (`--backend mlx --headless --episodes 1 --steps 2`) completed end to end:
+  agent loaded in 1.0 s, 2 pieces locked over 40 real gravity-step
+  `predict()` calls (20 steps/piece — each a real rotation/direction/
+  distance decision, not an interpolated frame), inference p50 43 ms,
+  0 interventions. A longer run (`--episodes 2 --steps 60`, no cap hit)
+  reached real block-out (`alive: false`, via the new `canSpawn` check) on
+  both episodes after 15 and 20 pieces respectively, with no crashes;
+  `--unassisted` (shield off) was also exercised for 8 pieces/139 steps.
+  Per this session's own guidance, **the CPU backend was not spot-checked**
+  here (already known much slower for this game even at one call per
+  piece; now doing 10-20x more calls per piece would make that far worse)
+  — WebGPU is untested in this specific sandbox pass but was verified for
+  the prior per-piece design and shares the same `predict()` call shape.
 - **Not yet done**: an interactive terminal session (this was built and
-  checked in a sandbox without an attached TTY), and a real MLX timing
-  run. If you're the first to run it interactively or on MLX, treat that
-  as the real verification and update this section with real numbers,
-  mirroring
-  `snake-terminal/README.md`'s "Measured" table.
+  checked in a sandbox without an attached TTY). If you're the first to run
+  it interactively, treat that as the real verification and update this
+  section with real numbers, mirroring `snake-terminal/README.md`'s
+  "Measured" table.
 
 ## Limits
 
-- No wall kicks (a rotation either fits or it doesn't — there's no SRS
-  kick-table attempt to nudge a rotation into a tighter space), and no
-  hold-piece mechanic. Both are real simplifications from tournament
-  Tetris, chosen to keep the placement-enumeration model clean.
-- No `export` (MP4/GIF) subcommand. `--record` writes `laya-tetris-v1`
-  JSONL, analogous to the other games' `--record`, with no existing
-  consumer tool yet.
+- No wall kicks (a rotation either fits or it doesn't, checked against the
+  piece's *current* column before any shift — there's no SRS kick-table
+  attempt to nudge a rotation into a tighter space), and no hold-piece
+  mechanic. Both are real simplifications from tournament Tetris, chosen to
+  keep the per-step model clean.
+- The shield is now a real, weaker guarantee than the old per-piece one: it
+  can fix a bad final orientation/column at lock time, not rescue a
+  trajectory that already steered too high (see "The engine" above).
+- Real per-step control costs roughly 10-20x more `predict()` calls per
+  piece than the old per-piece design — expect noticeably slower play,
+  especially headless benchmarks (see above).
+- No `export` (MP4/GIF) subcommand. `--record` writes `laya-tetris-v2`
+  JSONL (bumped from `v1` — a new `"step"` record per gravity-step decision,
+  `"piece"` now a per-piece summary written once it locks), analogous to
+  the other games' `--record`, with no existing consumer tool yet.
 - The 4-row safety margin and 7-bag lookahead depth (5) were chosen to
   produce a playable, reasonably-forgiving game, not tuned against any
   reference — a starting point, not a tournament-accurate constant.

@@ -9,7 +9,7 @@
 import type { GameSnapshot } from "./core/game.ts";
 import type { PieceKind, RotationLabel } from "./core/pieces.ts";
 import { shapeOf } from "./core/pieces.ts";
-import type { Decision } from "./core/policy.ts";
+import type { StepDecision } from "./core/policy.ts";
 import type { SessionStats } from "./core/session.ts";
 
 export const BG = "#0a0e16";
@@ -126,7 +126,7 @@ export interface FallingPiece {
   row: number;
 }
 
-export function compose(game: GameSnapshot, decision: Partial<Decision>, stats: UiStats, falling?: FallingPiece): Canvas {
+export function compose(game: GameSnapshot, decision: Partial<StepDecision>, stats: UiStats, falling?: FallingPiece): Canvas {
   const [width, height] = layoutSize();
   const c = new Canvas(width, height);
   const left = 3;
@@ -189,16 +189,18 @@ export function compose(game: GameSnapshot, decision: Partial<Decision>, stats: 
 
   c.put(19, right, "INFERENCE", MUTED);
   c.put(19, right + 18, `${fixed(decision.inference_ms ?? 0, 1, 5)} ms`, FG);
-  c.put(20, right, "DECISIONS", MUTED);
-  c.put(20, right + 18, `${fixed(stats.pieces_per_second ?? 0, 1, 5)} /s`, FG);
-  c.put(21, right, "OUTPUT TOKENS", MUTED);
-  c.put(21, right + 18, String(decision.output_tokens ?? 0), FG);
-  c.put(22, right, "NETWORK", MUTED);
-  c.put(22, right + 18, "OFFLINE", PIECE_COLORS.S);
-  c.put(23, right, "ENGINE", MUTED);
-  c.put(23, right + 18, stats.engine ?? "FP16", MUTED);
-  c.put(25, right, stats.guarded ?? true ? "Laya + safety-margin shield" : "Laya · shield OFF", MUTED);
-  c.put(26, right, `Shield interventions  ${String(stats.interventions ?? 0).padStart(4, "0")}`, AMBER);
+  c.put(20, right, "STEPS/S", MUTED);
+  c.put(20, right + 18, `${fixed(stats.steps_per_second ?? 0, 1, 5)} /s`, FG);
+  c.put(21, right, "PIECES/S", MUTED);
+  c.put(21, right + 18, `${fixed(stats.pieces_per_second ?? 0, 1, 5)} /s`, FG);
+  c.put(22, right, "OUTPUT TOKENS", MUTED);
+  c.put(22, right + 18, String(decision.output_tokens ?? 0), FG);
+  c.put(23, right, "NETWORK", MUTED);
+  c.put(23, right + 18, "OFFLINE", PIECE_COLORS.S);
+  c.put(24, right, "ENGINE", MUTED);
+  c.put(24, right + 18, stats.engine ?? "FP16", MUTED);
+  c.put(26, right, stats.guarded ?? true ? "Laya + lock-time shield" : "Laya · shield OFF", MUTED);
+  c.put(27, right, `Shield interventions  ${String(stats.interventions ?? 0).padStart(4, "0")}`, AMBER);
   c.put(height - 3, left, "─".repeat(width - 6), DIM);
   c.put(height - 2, left, "SPACE pause   R reset   Q quit", MUTED);
   const elapsed = Math.trunc(stats.elapsed ?? 0);

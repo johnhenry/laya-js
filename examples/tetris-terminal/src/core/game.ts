@@ -1,20 +1,25 @@
 /**
  * Deterministic Tetris rules. `legalPlacements` enumerates every reachable
  * (rotation, column) placement of the active piece via a drop-simulation
- * (this IS the complete legal set -- there's no extra "mandatory" layer
- * the way Checkers has mandatory capture). `moves()` additionally tags
- * each placement `safe`: does the stack height, measured AFTER line-clear
- * resolution, stay within `TOP_MARGIN` of the ceiling. This is a real,
- * sometimes-binding constraint (not vacuously identical to `legal`, unlike
- * a naive "safe = legal" would be) -- the same structural shape as Snake's
- * "would trap the snake" rule and Flappy Bird's "would collide within the
- * lookahead" rule, just computed from a lock+clear simulation instead of a
- * multi-tick physics simulation.
+ * from spawn -- a standalone utility (hints, tooling, tests); gameplay no
+ * longer calls it (see below).
  *
- * Decisions are made once per PIECE, not once per tick: rotate+shift+
- * hard-drop+lock+clear is a single pure `applyPlacement` transformation,
- * with no animated-movement concept, the same way Checkers computes a
- * hop's resulting board directly rather than simulating a slide.
+ * Decisions are made once per gravity STEP, not once per piece: at each
+ * step the model picks a rotation, a horizontal direction and a distance
+ * (see policy.ts), applied via `sweepColumns` (lateral movement, clamped to
+ * whatever's actually free -- no wall kicks). When the piece can no longer
+ * descend, it gets exactly one more such decision (a bounded "lock delay" /
+ * "extended placement", see policy.ts) before `applyPlacement` locks it and
+ * clears full rows.
+ *
+ * `optionsAtRow` is the shield's evaluation set at that final lock decision:
+ * everything reachable via rotate+shift ALONE from the piece's current
+ * position, not a full drop-simulation from spawn -- local to "what could
+ * this step still reach," not global re-planning of the whole descent.
+ * `sweepColumns` (walk outward from the current column, stop at the first
+ * collision each way) is what keeps this local set from including
+ * geometrically disconnected shelves the piece could never actually have
+ * slid to.
  */
 import {
   BOARD_HEIGHT,
@@ -22,6 +27,7 @@ import {
   DISTINCT_ROTATIONS,
   emptyBoard,
   shapeOf,
+  spawnColFor,
   type Board,
   type Cell,
   type PieceKind,
@@ -69,7 +75,8 @@ export interface GameSnapshot {
   seed: number;
 }
 
-function collides(board: Board, shape: readonly ShapeCell[], row: number, col: number): boolean {
+/** Whether `shape` anchored at `(row, col)` collides with a wall, the stack, or the board's bounds. */
+export function collides(board: Board, shape: readonly ShapeCell[], row: number, col: number): boolean {
   for (const [dr, dc] of shape) {
     const r = row + dr;
     const c = col + dc;
@@ -97,12 +104,64 @@ export function legalPlacements(board: Board, kind: PieceKind): Placement[] {
   return results;
 }
 
+/**
+ * Whether `kind` can enter play at all: does its default ("0") orientation,
+ * at its fixed centered spawn column, collide right now. This is the new
+ * block-out check -- narrower and more realistic than the old
+ * "does ANY rotation/column combination fit on row 0 somewhere" test, since
+ * the piece actually enters play in one specific orientation and column,
+ * not by trying every hypothetical placement.
+ */
+export function canSpawn(board: Board, kind: PieceKind): boolean {
+  return !collides(board, shapeOf(kind, "0"), SPAWN_ROW, spawnColFor(kind));
+}
+
 /** The stack height measured from the ceiling (0 = empty board). */
 export function stackHeight(board: Board): number {
   for (let r = 0; r < BOARD_HEIGHT; r++) {
     if (board[r]!.some((c) => c !== null)) return BOARD_HEIGHT - r;
   }
   return 0;
+}
+
+/**
+ * Every column reachable from `fromCol` at `row` for `shape`, by walking
+ * outward one column at a time and stopping at the first collision each
+ * way (wall, stack, or out of bounds) -- clamped lateral movement, shared
+ * by a live step's shift and by `optionsAtRow`'s reachability check.
+ * `fromCol` is assumed legal already (true of any current position) and is
+ * always included in the result.
+ */
+export function sweepColumns(board: Board, shape: readonly ShapeCell[], row: number, fromCol: number): number[] {
+  const cols = [fromCol];
+  for (let c = fromCol - 1; !collides(board, shape, row, c); c--) cols.push(c);
+  for (let c = fromCol + 1; !collides(board, shape, row, c); c++) cols.push(c);
+  return cols.sort((a, b) => a - b);
+}
+
+/**
+ * The lock-time shield's evaluation set: every (rotation, column) reachable
+ * from the piece's CURRENT `(row, col)` via rotate-in-place-then-shift
+ * alone (no wall kicks -- a rotation illegal at `col` is simply skipped),
+ * restricted to options that are themselves resting at `row` (this is the
+ * final lock decision; only options that couldn't descend further belong
+ * here). Always includes the current position itself (`sweepColumns`
+ * guarantees it), so this set is never empty.
+ */
+export function optionsAtRow(board: Board, kind: PieceKind, row: number, col: number): PlacementInfo[] {
+  const results: PlacementInfo[] = [];
+  for (const rotation of DISTINCT_ROTATIONS[kind]) {
+    const shape = shapeOf(kind, rotation);
+    if (collides(board, shape, row, col)) continue; // illegal in place at this column -- no wall-kick attempt
+    for (const c of sweepColumns(board, shape, row, col)) {
+      if (!collides(board, shape, row + 1, c)) continue; // could still descend from here -- not a lock option
+      const placement: Placement = { kind, rotation, col: c, restRow: row };
+      const { board: nextBoard, cleared } = applyPlacement(board, placement);
+      const heightAfter = stackHeight(nextBoard);
+      results.push({ placement, legal: true, safe: heightAfter <= BOARD_HEIGHT - TOP_MARGIN, clears: cleared, heightAfter });
+    }
+  }
+  return results;
 }
 
 /** Lock `placement` into `board`, then clear full rows. Pure -- returns a new board. */
@@ -133,7 +192,7 @@ export class TetrisGame {
     this.board = emptyBoard();
     this.active = this.#draw();
     while (this.queue.length < QUEUE_LOOKAHEAD) this.queue.push(this.#draw());
-    this.alive = legalPlacements(this.board, this.active).length > 0;
+    this.alive = canSpawn(this.board, this.active);
   }
 
   #draw(): PieceKind {
@@ -145,26 +204,19 @@ export class TetrisGame {
     return Math.floor(this.linesCleared / 10) + 1;
   }
 
+  /** Every reachable placement of the active piece -- a standalone utility (hints, tooling, tests), not used to decide play. */
   legalPlacements(): Placement[] {
     return this.alive ? legalPlacements(this.board, this.active) : [];
   }
 
-  moves(): PlacementInfo[] {
-    return this.legalPlacements().map((placement) => {
-      const { board: nextBoard, cleared } = applyPlacement(this.board, placement);
-      const heightAfter = stackHeight(nextBoard);
-      return { placement, legal: true, safe: heightAfter <= BOARD_HEIGHT - TOP_MARGIN, clears: cleared, heightAfter };
-    });
-  }
-
   /**
    * Apply a placement: lock, clear, draw the next piece, then check game
-   * over. Game over here means block-out (the new piece's spawn cells
-   * collide) -- `legalPlacements()` returning empty and game-over are the
-   * SAME event, mirroring Checkers' "no legal moves = loss". This is a
-   * different condition from `moves()` finding no SAFE placement, which
-   * does NOT mean game over (see policy.ts's decisionFrom) -- don't
-   * confuse the two empty-set cases.
+   * over. Game over here means block-out -- the new piece's fixed default
+   * spawn configuration collides (`canSpawn`), the same event a real game
+   * of Tetris calls block-out, mirroring Checkers' "no legal moves = loss".
+   * This is unrelated to the per-step shield finding no SAFE lock option,
+   * which is routine near the top of a real game, not game over (see
+   * policy.ts) -- don't confuse the two.
    */
   applyPlacement(placement: Placement): number {
     if (!this.alive) throw new Error("Cannot apply a placement to a finished game");
@@ -174,7 +226,7 @@ export class TetrisGame {
     this.linesCleared += cleared;
     this.active = this.queue.shift()!;
     this.queue.push(this.#draw());
-    this.alive = legalPlacements(this.board, this.active).length > 0;
+    this.alive = canSpawn(this.board, this.active);
     return cleared;
   }
 
