@@ -275,6 +275,20 @@ export function runConformance<T extends Tensor>(make: () => Backend<T> | Promis
     /** Composed optional ops skip cases outside the composition's domain. */
     const applicable = (b: Backend<T>, c: OpCase) =>
       !(c.nativeOnly && (NUMERICS_OPS as readonly string[]).includes(c.op) && !hasNative(b, c.op as NumericsOp));
+    /**
+     * A case pinned to its own dtype (any non-float input or output, or a `cast` target) runs only on a backend
+     * that `supports()` that dtype. Float dtypes (f32/f16/bf16) follow the run dtype, which `runAll` checks.
+     * Without this, every backend had to support all 13 dtypes to pass, contradicting the contract
+     * ("check `supports(dtype)`"): backends that permanently lack a dtype (f64 on WebGPU) or that sit on an
+     * engine that does not have it yet would fail cases they correctly decline.
+     */
+    const FOLLOWS_RUN = new Set<DType>(["f32", "f16", "bf16"]);
+    const caseSupported = (b: Backend<T>, c: OpCase) => {
+      const fixed = [...c.inputs, ...c.outputs].flatMap((e) => (e && !FOLLOWS_RUN.has(e.dtype) ? [e.dtype] : []));
+      const target = c.op === "cast" ? (c.args as { dtype?: DType }).dtype : undefined;
+      if (target && !FOLLOWS_RUN.has(target)) fixed.push(target);
+      return fixed.every((d) => b.supports(d));
+    };
     const runAll = async (dtype: DType) => {
       const b = await get();
       if (!b.supports(dtype)) return;
@@ -282,6 +296,7 @@ export function runConformance<T extends Tensor>(make: () => Backend<T> | Promis
       for (const c of await cases) {
         if (dtype !== "f32" && c.f32Only) continue;
         if (!applicable(b, c)) continue;
+        if (!caseSupported(b, c)) continue;
         await run(c, dtype).catch((e: Error) => failures.push(e.message));
       }
       if (failures.length) throw new Error(`${failures.length} failing:\n` + failures.join("\n"));
