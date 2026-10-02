@@ -15,7 +15,7 @@
     "test:bun": "bun --conditions=source test test/"
   },
   "dependencies": {
-    "@johnhenry/laya": "^0.3.1",
+    "@johnhenry/laya": "^1.0.0",
     "@johnhenry/laya-core": "^0.1.1"
   },
   "peerDependencies": {

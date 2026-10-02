@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [f4ce79e]
+  - @johnhenry/backend-webgpu@0.6.0
+  - @johnhenry/laya@1.0.0
+  - @johnhenry/laya-router@0.1.5
+
 ## 0.3.1
 
 ### Patch Changes

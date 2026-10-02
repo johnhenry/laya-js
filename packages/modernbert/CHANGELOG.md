@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [d6beb3b]
+- Updated dependencies [18ce3b4]
+  - @johnhenry/tensor-backend@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
