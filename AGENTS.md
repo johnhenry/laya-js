@@ -11,10 +11,12 @@ Conventions mirror `~/Projects/@johnhenry/math-plus/AGENTS.md`; read it once.
 
 `CLAUDE.md` in this directory is a symlink to this file.
 
-## MANDATORY: Use td for Task Management
+## Track work as GitHub Issues in this repo
 
-Run `td usage --new-session` at conversation start (or after `/clear`) to
-see current work, and `td usage -q` for subsequent reads.
+Read open issues at the start of work (`gh issue list -R johnhenry/laya-js`),
+record new work and anything left unfinished as an issue here, and link PRs
+with `Closes #N`. Work spanning more than one `@johnhenry` repo is claimed
+first in https://github.com/johnhenry/hive-mind/issues/33 (DEC-0013).
 
 ## Workspace structure and build order
 
