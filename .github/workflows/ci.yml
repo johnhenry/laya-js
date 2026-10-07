@@ -166,3 +166,6 @@ jobs:
           if (got.some((v, i) => Math.abs(v - want[i]) > 1e-3)) { console.error("MISMATCH", got, want); process.exit(1); }
           JS
           node smoke.mjs
+
+  workflow-lint:
+    uses: johnhenry/workflows/.github/workflows/workflow-lint.yml@v1
