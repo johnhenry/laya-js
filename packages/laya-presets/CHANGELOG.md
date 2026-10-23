@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- c1e6fa4: Add `guardState`, `moderationState`, `routerState` and `triageState`, which build the one-key state (`prompt`, `post`, `request`, `message`) that the matching question sets refer to.
+
 ## 0.1.1
 
 ### Patch Changes
