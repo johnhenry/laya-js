@@ -34,6 +34,10 @@ const result = await agent.predict(state, emailQuestions());
   `{ subject, body, from?, ...extra }`. Null or undefined values in `extra`
   are dropped.
 
+- `guardState(text)`, `moderationState(text)`, `routerState(text)` and
+  `triageState(text)` build the one-key state the matching question set
+  names: `{ prompt }`, `{ post }`, `{ request }` and `{ message }`.
+
 ## Tests
 
 - `cleanEmailBody` against the Python table in `@johnhenry/laya-fixtures`.
